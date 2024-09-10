@@ -1,4 +1,5 @@
 import sqlite3
+
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.image import Image
@@ -59,7 +60,7 @@ class NewGamePopup(Popup):
 
             # Выделяем новый портрет рамочкой
             with instance.canvas.before:
-                Color(0, 0, 0, 1)  # Черная рамка
+                Color(255, 246, 0, 1)  # Черная рамка
                 self.rect = RoundedRectangle(pos=(instance.x - 5, instance.y - 5),
                                              size=(instance.width + 10, instance.height + 10))
 

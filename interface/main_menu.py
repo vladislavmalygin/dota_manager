@@ -1,5 +1,4 @@
 import sqlite3
-import time
 
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
@@ -42,7 +41,7 @@ class MainMenu(FloatLayout):
 
     def new_game(self, instance):
         # Генерируем уникальное имя базы данных на основе времени
-        db_name = f'game_database_{int(time.time())}.db'
+        db_name = 'new_game_database.db'
 
         # Создаем новую базу данных для новой игры
         conn = sqlite3.connect(db_name)
