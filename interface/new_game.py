@@ -75,7 +75,7 @@ class NewGamePopup(Popup):
         print(f"Создан персонаж: {name} {surname}, Никнейм: {nickname}")
 
         # Сохранение в базу данных SQLite
-        conn = sqlite3.connect('game_database.db')
+        conn = sqlite3.connect('new_game_database.db')
         cursor = conn.cursor()
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS characters (

@@ -1,12 +1,13 @@
+import sqlite3
+import time
+
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle
-
 from new_game import NewGamePopup
-
 
 class MainMenu(FloatLayout):
     def __init__(self, **kwargs):
@@ -40,6 +41,29 @@ class MainMenu(FloatLayout):
         self.rect.size = self.size
 
     def new_game(self, instance):
+        # Генерируем уникальное имя базы данных на основе времени
+        db_name = f'game_database_{int(time.time())}.db'
+
+        # Создаем новую базу данных для новой игры
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+
+        # Создаем необходимые таблицы
+        cursor.execute('''CREATE TABLE IF NOT EXISTS characters (
+                            id INTEGER PRIMARY KEY,
+                            name TEXT,
+                            surname TEXT,
+                            nickname TEXT,
+                            portrait TEXT)''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS game_state (
+                            id INTEGER PRIMARY KEY,
+                            character_id INTEGER,
+                            state TEXT)''')
+
+        conn.commit()
+        conn.close()
+
         NewGamePopup().open()
 
     def continue_game(self, instance):
@@ -52,12 +76,15 @@ class MainMenu(FloatLayout):
         print("Открываем настройки!")
 
     def exit_game(self, instance):
+        if hasattr(self, 'conn'):
+            self.conn.close()  # Закрываем соединение с базой данных при выходе
         App.get_running_app().stop()
 
 
 class Dota_Manager(App):
     def build(self):
         return MainMenu()
+
 
 if __name__ == '__main__':
     Dota_Manager().run()
