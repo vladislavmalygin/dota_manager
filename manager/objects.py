@@ -1,6 +1,5 @@
 import sqlite3
 
-
 class Team:
     def __init__(self, id, name, country, fame, owner_character, logo_id, achievements, budget):
         self.id = id
@@ -16,70 +15,17 @@ class Team:
         conn = sqlite3.connect('game_database.db')
         cursor = conn.cursor()
 
-        if self.id is None:  # Если id нет, значит это новая команда
+        if self.id is None:  # Новый объект команды
             cursor.execute('''
             INSERT INTO Teams (name, country, fame, owner_character, logo_id, achievements, budget)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-            self.name, self.country, self.fame, self.owner_character, self.logo_id, self.achievements, self.budget))
+            ''', (self.name, self.country, self.fame, self.owner_character, self.logo_id, self.achievements, self.budget))
             self.id = cursor.lastrowid  # Получаем последний вставленный id
         else:  # Обновление существующей команды
             cursor.execute('''
             UPDATE Teams SET name=?, country=?, fame=?, owner_character=?, logo_id=?, achievements=?, budget=?
             WHERE id=?
-            ''', (
-            self.name, self.country, self.fame, self.owner_character, self.logo_id, self.achievements, self.budget,
-            self.id))
-
-        conn.commit()
-        conn.close()
-
-class Player:
-    def __init__(self, id, team_id, name, surname, nickname, country, fame, character,
-                 micro_skills, macro_skills, soft_skills, skill_cap, wage, expected_wage, achievements, languages):
-        self.id = id
-        self.team_id = team_id
-        self.name = name
-        self.surname = surname
-        self.nickname = nickname
-        self.country = country
-        self.fame = fame
-        self.character = character
-        self.micro_skills = micro_skills
-        self.macro_skills = macro_skills
-        self.soft_skills = soft_skills
-        self.skill_cap = skill_cap
-        self.wage = wage
-        self.expected_wage = expected_wage
-        self.achievements = achievements
-        self.languages = languages
-
-    def save_to_db(self):
-        conn = sqlite3.connect('game_database.db')
-        cursor = conn.cursor()
-
-        if self.id is None:  # Если id нет, значит это новый игрок
-            cursor.execute('''
-            INSERT INTO Players (team_id, name, surname, nickname, country, fame, character,
-                                 micro_skills, macro_skills, soft_skills, skill_cap,
-                                 wage, expected_wage, achievements, languages)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (self.team_id, self.name, self.surname, self.nickname, self.country,
-                  self.fame, self.character, self.micro_skills,
-                  self.macro_skills, self.soft_skills, self.skill_cap,
-                  self.wage, self.expected_wage, self.achievements, self.languages))
-            self.id = cursor.lastrowid  # Получаем последний вставленный id
-        else:  # Обновление существующего игрока
-            cursor.execute('''
-            UPDATE Players SET team_id=?, name=?, surname=?, nickname=?, country=?, fame=?, character=?,
-                              micro_skills=?, macro_skills=?, soft_skills=?, skill_cap=?,
-                              wage=?, expected_wage=?, achievements=?, languages=?
-            WHERE id=?
-            ''', (self.team_id, self.name, self.surname, self.nickname, self.country,
-                  self.fame, self.character, self.micro_skills,
-                  self.macro_skills, self.soft_skills, self.skill_cap,
-                  self.wage, self.expected_wage, self.achievements, self.languages,
-                  self.id))
+            ''', (self.name, self.country, self.fame, self.owner_character, self.logo_id, self.achievements, self.budget, self.id))
 
         conn.commit()
         conn.close()
@@ -98,7 +44,7 @@ class Manager:
         conn = sqlite3.connect('game_database.db')
         cursor = conn.cursor()
 
-        if self.id is None:  # Если id нет, значит это новый менеджер
+        if self.id is None:  # Новый менеджер
             cursor.execute('''
             INSERT INTO Managers (team_id, name, surname, nickname, fame)
             VALUES (?, ?, ?, ?, ?)
@@ -124,7 +70,7 @@ class GameSave:
         conn = sqlite3.connect('game_database.db')
         cursor = conn.cursor()
 
-        if self.id is None:  # Если id нет, значит это новая игра
+        if self.id is None:  # Новая игра
             cursor.execute('''
             INSERT INTO GameSaves (team_id, save_data)
             VALUES (?, ?)
@@ -145,7 +91,7 @@ class Logo:
         self.id = id
 
     def save_to_db(self):
-        # Реализация сохранения логотипа в базу данных, если необходимо
+        # Реализация сохранения логотипа в базу данных (если необходимо)
         pass
 
 
@@ -160,7 +106,7 @@ class Sponsor:
         conn = sqlite3.connect('game_database.db')
         cursor = conn.cursor()
 
-        if self.id is None:  # Если id нет, значит это новый спонсор
+        if self.id is None:  # Новый спонсор
             cursor.execute('''
             INSERT INTO Sponsors (money, fame, expected_results)
             VALUES (?, ?, ?)

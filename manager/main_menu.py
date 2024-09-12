@@ -5,8 +5,6 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.graphics import Color, Rectangle
 
-import sqlite3
-
 from new_game import NewGamePopup
 
 class MainMenu(FloatLayout):
@@ -59,27 +57,7 @@ class MainMenu(FloatLayout):
         self.rect_title.size = instance.size
 
     def new_game(self, instance):
-        db_name = 'new_game_database.db'
 
-        # Создаем новую базу данных для новой игры
-        conn = sqlite3.connect(db_name)
-        cursor = conn.cursor()
-
-        # Создаем необходимые таблицы
-        cursor.execute('''CREATE TABLE IF NOT EXISTS characters (
-                            id INTEGER PRIMARY KEY,
-                            name TEXT,
-                            surname TEXT,
-                            nickname TEXT,
-                            portrait TEXT)''')
-
-        cursor.execute('''CREATE TABLE IF NOT EXISTS game_state (
-                            id INTEGER PRIMARY KEY,
-                            character_id INTEGER,
-                            state TEXT)''')
-
-        conn.commit()
-        conn.close()
 
         NewGamePopup().open()
 

@@ -1,4 +1,5 @@
 import sqlite3
+import shutil
 
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -75,8 +76,14 @@ class NewGamePopup(Popup):
 
         print(f"Создан персонаж: {name} {surname}, Никнейм: {nickname}")
 
-        # Сохранение в базу данных SQLite
-        conn = sqlite3.connect('new_game_database.db')
+        # Создание имени файла для новой базы данных
+        new_db_name = f"{name}_{surname}.db"
+
+        # Копирование базы данных
+        shutil.copy('new_game_database.db', new_db_name)
+
+        # Сохранение персонажа в новую базу данных
+        conn = sqlite3.connect(new_db_name)
         cursor = conn.cursor()
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS characters (
@@ -91,6 +98,7 @@ class NewGamePopup(Popup):
 
         conn.commit()
         conn.close()
+
         # Закрыть попап после создания персонажа
         self.dismiss()
 
