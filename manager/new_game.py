@@ -14,7 +14,7 @@ class NewGamePopup(Popup):
     def __init__(self, **kwargs):
         super(NewGamePopup, self).__init__(**kwargs)
         self.title = "Создание нового персонажа"
-        self.size_hint = (0.8, 0.8)
+        self.size_hint = (1, 1)
 
         layout = BoxLayout(orientation='vertical', padding=10)
 
