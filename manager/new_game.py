@@ -12,6 +12,8 @@ from team_choice import TeamChoicePopup
 
 
 class NewGamePopup(Popup):
+    nickname = 'nickname'
+    new_db_name = 'new_db_name'
     def __init__(self, **kwargs):
         super(NewGamePopup, self).__init__(**kwargs)
         self.title = "Создание нового персонажа"
@@ -50,6 +52,7 @@ class NewGamePopup(Popup):
 
         self.content = layout
 
+
     def select_portrait(self, instance, touch):
         if instance.collide_point(touch.x, touch.y):
             # Удаляем выделение с предыдущего портрета
@@ -68,7 +71,9 @@ class NewGamePopup(Popup):
     def create_character(self, instance):
         name = self.name_input.text
         surname = self.surname_input.text
+        global nickname
         nickname = self.nickname_input.text
+
 
         if not name or not surname or not nickname or not self.selected_portrait:
             print("Пожалуйста, заполните все поля и выберите портрет.")
@@ -76,11 +81,13 @@ class NewGamePopup(Popup):
 
         print(f"Создан персонаж: {name} {surname}, Никнейм: {nickname}")
 
+
         # Создание имени файла для новой базы данных
+        global new_db_name
         new_db_name = f"{name}_{surname}.db"
 
         # Копирование базы данных
-        shutil.copy('new_game_database.db', new_db_name)
+        shutil.copy('start_database.db', new_db_name)
 
         # Сохранение персонажа в новую базу данных
         conn = sqlite3.connect(new_db_name)
@@ -102,5 +109,12 @@ class NewGamePopup(Popup):
         # Закрыть попап после создания персонажа
         self.dismiss()
 
+
         # Открыть новое окно с выбором создания команды или выбора существующей
         TeamChoicePopup().open()
+
+    def get_db_name(self):
+        return new_db_name
+
+    def get_nickname(self):
+        return nickname

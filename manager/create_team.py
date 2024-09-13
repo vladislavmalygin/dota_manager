@@ -6,29 +6,6 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
-# Создаем базу данных и таблицу, если они не существуют
-def init_db():
-    conn = sqlite3.connect('new_game_database.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS teams (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            logo TEXT,
-            country TEXT,
-            owner TEXT,
-            manager TEXT,
-            carry TEXT,
-            mid TEXT,
-            offlane TEXT,
-            partial_support TEXT,
-            full_support TEXT,
-            budget INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
         super(CreateTeamPopup, self).__init__(**kwargs)
@@ -84,26 +61,25 @@ class CreateTeamPopup(Popup):
         logo_path = self.logo_display.source if self.logo_display.source else "Нет логотипа"
 
         # Здесь можно указать имя менеджера, который создаёт команду
-        manager_name = "Менеджер"  # Замените на имя вашего менеджера
+        from new_game import NewGamePopup
+        manager_nickname = NewGamePopup.get_nickname(self)
 
         if not team_name or not country:
             print("Пожалуйста, заполните все поля.")
             return
 
+        from new_game import NewGamePopup
+        new_db_name = NewGamePopup.get_db_name(self)
         # Сохранение в базу данных
-        conn = sqlite3.connect('new_game_database.db')
+        conn = sqlite3.connect(new_db_name)
         cursor = conn.cursor()
 
         cursor.execute('''
             INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (team_name, logo_path, country, manager_name, manager_name, '', '', '', '', '', 100000))
+        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000))
 
         conn.commit()
         conn.close()
 
         print(f"Создана команда: {team_name}, Страна: {country}, Логотип: {logo_path}, Бюджет: 100000")
-
-
-# Инициализация базы данных при запуске приложения
-init_db()

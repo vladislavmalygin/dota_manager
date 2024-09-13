@@ -57,8 +57,6 @@ class MainMenu(FloatLayout):
         self.rect_title.size = instance.size
 
     def new_game(self, instance):
-
-
         NewGamePopup().open()
 
     def continue_game(self, instance):
