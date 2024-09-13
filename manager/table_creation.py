@@ -1,7 +1,7 @@
 import sqlite3
 
 def create_tables():
-    conn = sqlite3.connect('game_database.db')
+    conn = sqlite3.connect('start_database.db')
     cursor = conn.cursor()
 
     # Создание таблицы для команд
@@ -58,6 +58,32 @@ def create_tables():
         expected_results TEXT
     )
     ''')
+    # Создание таблицы игроков
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS Players (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER,
+        name TEXT NOT NULL,
+        surname TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        country TEXT NOT NULL,
+        fame INTEGER CHECK(fame BETWEEN 10 AND 100),
+        character TEXT,
+        micro_skills INTEGER CHECK(micro_skills BETWEEN 10 AND 100),
+        macro_skills INTEGER CHECK(macro_skills BETWEEN 10 AND 100),
+        soft_skills INTEGER CHECK(soft_skills BETWEEN 10 AND 100),
+        skill_cap INTEGER CHECK(skill_cap BETWEEN 30 AND 300),
+        wage INTEGER,
+        expected_wage INTEGER,
+        achievements TEXT,
+        languages TEXT,
+        role TEXT CHECK(role IN ('carry', 'mid', 'offlane', 'partial_support', 'full_support')),
+        FOREIGN KEY (team_id) REFERENCES Teams(id) ON DELETE SET NULL
+    );
+    ''')
+
+
+
 
     conn.commit()
     conn.close()
