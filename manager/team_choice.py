@@ -3,7 +3,7 @@ from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 
 from create_team import CreateTeamPopup
-
+from select_team import SelectTeamPopup
 
 class TeamChoicePopup(Popup):
     def __init__(self, **kwargs):
@@ -25,9 +25,7 @@ class TeamChoicePopup(Popup):
         CreateTeamPopup().open()
 
     def choose_existing(self, instance):
-        print("Выбор существующей команды...")
-        # Логика выбора существующей команды
-
+        SelectTeamPopup().open()
 
 
 
