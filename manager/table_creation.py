@@ -81,10 +81,6 @@ def create_tables():
         FOREIGN KEY (team_id) REFERENCES Teams(id) ON DELETE SET NULL
     );
     ''')
-
-
-
-
     conn.commit()
     conn.close()
 
