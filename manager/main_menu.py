@@ -59,6 +59,7 @@ class MainMenu(FloatLayout):
     def new_game(self, instance):
         NewGamePopup().open()
 
+
     def continue_game(self, instance):
         print("Продолжаем игру!")
 

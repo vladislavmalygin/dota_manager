@@ -8,6 +8,8 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 
+from core import DotaManagerApp
+
 
 class SelectTeamPopup(Popup):
     def __init__(self, **kwargs):
@@ -122,5 +124,9 @@ class SelectTeamPopup(Popup):
 
             print(f"Выбрана команда: {name}, Страна: {country}, Бюджет: {budget}")
             self.dismiss()
+            DotaManagerApp().run()
+
         else:
             print("Пожалуйста, выберите команду.")
+
+

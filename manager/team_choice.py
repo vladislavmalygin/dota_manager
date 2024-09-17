@@ -23,9 +23,11 @@ class TeamChoicePopup(Popup):
 
     def create_team(self, instance):
         CreateTeamPopup().open()
+        self.dismiss()
 
     def choose_existing(self, instance):
         SelectTeamPopup().open()
+        self.dismiss()
 
 
 

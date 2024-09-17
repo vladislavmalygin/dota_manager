@@ -6,6 +6,9 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
+from core import DotaManagerApp
+
+
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
         super(CreateTeamPopup, self).__init__(**kwargs)
@@ -79,11 +82,13 @@ class CreateTeamPopup(Popup):
         cursor = conn.cursor()
 
         cursor.execute('''
-            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget, player)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000, 'yes'))
+            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000))
 
         conn.commit()
         conn.close()
 
         print(f"Создана команда: {team_name}, Страна: {country}, Логотип: {logo_path}, Бюджет: 100000")
+        self.dismiss()
+        DotaManagerApp().run()
