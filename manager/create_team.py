@@ -23,7 +23,7 @@ class CreateTeamPopup(Popup):
         layout.add_widget(self.country_input)
 
         # Создаем сетку для выбора логотипа
-        self.logo_display = Image(size_hint=(1, 0.5))
+        self.logo_display = Image(size_hint=(3, 3), pos_hint={'center_x': 0.75, 'center_y': 0.5})
         layout.add_widget(self.logo_display)
 
         logo_selection_layout = GridLayout(cols=3, size_hint_y=None)
@@ -35,6 +35,10 @@ class CreateTeamPopup(Popup):
             'images/logo5.png',
             'images/logo6.png',
             'images/logo8.png',
+            'images/logo1.png',
+            'images/logo2.png',
+            'images/logo3.png',
+            'images/logo4.png',
         ]
 
         for logo in self.logos:
