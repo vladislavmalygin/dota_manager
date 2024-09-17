@@ -79,9 +79,9 @@ class CreateTeamPopup(Popup):
         cursor = conn.cursor()
 
         cursor.execute('''
-            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000))
+            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget, player)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000, 'yes'))
 
         conn.commit()
         conn.close()
