@@ -37,12 +37,12 @@ class SelectTeamPopup(Popup):
         # Обновляем фон при изменении размера
         info_layout.bind(size=self._update_rect, pos=self._update_rect)
 
-        self.team_info_label = Label(size_hint_y=None, height=200)  # Увеличиваем высоту для информации
+        self.team_info_label = Label(size_hint_y=None, height=200)
         info_layout.add_widget(self.team_info_label)
 
         # Создаем отдельный BoxLayout для кнопки
         button_layout = BoxLayout(size_hint_y=None, height=44)
-        select_button = Button(text='Выбрать команду', size_hint_y=None, height=30)  # Уменьшаем кнопку
+        select_button = Button(text='Выбрать команду', size_hint_y=None, height=30)
         select_button.bind(on_press=self.select_team)
         button_layout.add_widget(select_button)
 
@@ -76,7 +76,7 @@ class SelectTeamPopup(Popup):
             team_id, name, logo, country, carry, mid, offlane, partial_support, full_support, budget = team
 
             # Формирование пути к изображению
-            logo_path = os.path.join('images', logo)  # Предполагается, что логотипы в формате .png
+            logo_path = os.path.join('images', logo)
 
             logo_button = Button(background_normal=logo_path, size_hint=(None, None), size=(100, 100))
             logo_button.bind(on_press=lambda instance, t=team: self.select_team_callback(t))

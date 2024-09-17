@@ -14,7 +14,7 @@ class MainMenu(FloatLayout):
         # Задать фон основного экрана
         with self.canvas.before:
             Color(1, 1, 1, 1)
-            self.rect = Rectangle(source='images/background.png', pos=self.pos, size=self.size)
+            self.rect = Rectangle(source='images/background2.png', pos=self.pos, size=self.size)
 
         self.bind(size=self._update_rect, pos=self._update_rect)
 

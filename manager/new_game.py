@@ -37,7 +37,7 @@ class NewGamePopup(Popup):
         self.portrait_selector = BoxLayout(size_hint_y=None, height=100, spacing=10)
         self.selected_portrait = None  # Для хранения выбранного портрета
 
-        portraits = ['images/portrait1.png', 'images/portrait2.png', 'images/portrait3.png']
+        portraits = ['images/portrait4.png', 'images/portrait5.png', 'images/portrait6.png']
         for portrait in portraits:
             img = Image(source=portrait, size_hint_x=None, width=100)
             img.bind(on_touch_down=lambda instance, touch: self.select_portrait(instance, touch))
