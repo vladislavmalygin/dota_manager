@@ -34,7 +34,7 @@ class CreateTeamPopup(Popup):
             'images/logo7.png',
             'images/logo5.png',
             'images/logo6.png',
-            'images/logo4.png',
+            'images/logo8.png',
         ]
 
         for logo in self.logos:

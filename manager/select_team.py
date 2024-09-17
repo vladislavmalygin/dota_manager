@@ -99,10 +99,27 @@ class SelectTeamPopup(Popup):
             self.team_info_label.text = info_text
 
     def select_team(self, instance):
+        from new_game import NewGamePopup
+        manager_nickname = NewGamePopup.get_nickname(self)
+        new_db_name = NewGamePopup.get_db_name(self)
         if self.selected_team:
             team_id, name, logo, country, carry, mid, offlane, partial_support, full_support, budget = self.selected_team
 
-            # Здесь можно сохранить информацию о менеджере и выбранной команде в базу данных или другую логику
+            # Подключение к базе данных
+            conn = sqlite3.connect(new_db_name)
+            cursor = conn.cursor()
+
+            # Обновление колонки manager для выбранной команды
+            cursor.execute("UPDATE teams SET manager = ? WHERE id = ?", (manager_nickname, team_id))
+
+            # Обновление колонки player для всех команд
+            cursor.execute("UPDATE teams SET player = 'no'")
+            cursor.execute("UPDATE teams SET player = 'yes' WHERE id = ?", (team_id,))
+
+            # Сохранение изменений и закрытие соединения
+            conn.commit()
+            conn.close()
+
             print(f"Выбрана команда: {name}, Страна: {country}, Бюджет: {budget}")
             self.dismiss()
         else:
