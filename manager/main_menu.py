@@ -1,3 +1,4 @@
+import pygame
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.boxlayout import BoxLayout
@@ -59,7 +60,6 @@ class MainMenu(FloatLayout):
     def new_game(self, instance):
         NewGamePopup().open()
 
-
     def continue_game(self, instance):
         print("Продолжаем игру!")
 
@@ -78,6 +78,11 @@ class MainMenu(FloatLayout):
 class Dota_Manager(App):
     def build(self):
         return MainMenu()
+
+    def on_start(self):
+        pygame.mixer.init()
+        pygame.mixer.music.load('music/music.mp3')  # Замените на путь к вашему музыкальному файлу
+        pygame.mixer.music.play(-1)  # -1 означает бесконечное воспроизведение
 
 if __name__ == '__main__':
     Dota_Manager().run()
