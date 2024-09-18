@@ -6,7 +6,8 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
-from core import DotaManagerApp
+from core import DotaApp
+from manager.core import DotaPopup
 
 
 class CreateTeamPopup(Popup):
@@ -91,4 +92,4 @@ class CreateTeamPopup(Popup):
 
         print(f"Создана команда: {team_name}, Страна: {country}, Логотип: {logo_path}, Бюджет: 100000")
         self.dismiss()
-        DotaManagerApp().run()
+        DotaApp.open_popup(self, instance)

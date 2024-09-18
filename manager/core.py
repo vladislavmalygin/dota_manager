@@ -2,8 +2,8 @@ from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
+from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
-from kivy.uix.image import Image
 
 # Создаем постоянный интерфейс
 class MainWindow(BoxLayout):
@@ -60,18 +60,30 @@ class MainWindow(BoxLayout):
         self.rect.size = self.size
 
     def on_next(self, instance):
-        # Логика для кнопки "Далее" будет здесь
         print('Переход к следующему шагу')
 
-    # Обработчик для нажатия кнопки
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')
 
-# Создаем приложение
-class DotaManagerApp(App):
+
+# Класс для всплывающего окна
+class DotaPopup(Popup):
+    def __init__(self, **kwargs):
+        super(DotaPopup, self).__init__(**kwargs)
+        self.title = ""  # Убираем заголовок
+        self.content = MainWindow()
+        self.size_hint = (1, 1)  # Занимает всё пространство
+        self.auto_dismiss = True
+
+class DotaApp(App):
     def build(self):
-        return MainWindow()
+        # Создаем кнопку для открытия всплывающего окна
+        button = Button(text="Открыть Dota Manager", on_press=self.open_popup)
+        return button
+
+    def open_popup(self, instance):
+        DotaPopup().open()
 
 # Запуск приложения
 if __name__ == '__main__':
-    DotaManagerApp().run()
+    DotaApp().run()
