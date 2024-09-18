@@ -7,9 +7,10 @@ from kivy.uix.button import Button
 from kivy.graphics import Color, Rectangle
 
 from new_game import NewGamePopup
+from settings import SettingsPopup
 
 class MainMenu(FloatLayout):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs):  # Исправлено init на __init__
         super(MainMenu, self).__init__(**kwargs)
 
         # Задать фон основного экрана
@@ -42,7 +43,7 @@ class MainMenu(FloatLayout):
             Button(text='Новая игра', background_color=button_color, size_hint_y=None, height=50, on_press=self.new_game),
             Button(text='Продолжить игру', background_color=button_color, size_hint_y=None, height=50, on_press=self.continue_game),
             Button(text='Загрузить игру', background_color=button_color, size_hint_y=None, height=50, on_press=self.load_game),
-            Button(text='Настройки', background_color=button_color, size_hint_y=None, height=50, on_press=self.settings),
+            Button(text='Настройки', background_color=button_color, size_hint_y=None, height=50, on_press=self.open_settings),
             Button(text='Выйти из игры', background_color=button_color, size_hint_y=None, height=50, on_press=self.exit_game)
         ]
 
@@ -66,8 +67,8 @@ class MainMenu(FloatLayout):
     def load_game(self, instance):
         print("Загружаем игру!")
 
-    def settings(self, instance):
-        print("Открываем настройки!")
+    def open_settings(self, instance):
+        SettingsPopup().open()  # Открываем окно настроек
 
     def exit_game(self, instance):
         if hasattr(self, 'conn'):

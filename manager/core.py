@@ -5,7 +5,8 @@ from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
 
-# Создаем постоянный интерфейс
+from settings import SettingsPopup
+
 class MainWindow(BoxLayout):
     def __init__(self, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
@@ -40,9 +41,20 @@ class MainWindow(BoxLayout):
         left_layout = BoxLayout(orientation='vertical', size_hint=(0.2, 2))
 
         # Заполняем левую часть кнопками с цветами
-        buttons = ['Входящие', 'Состав', 'Организация', 'Турниры', 'Трансферы', 'Настройки', 'Мой профиль', 'Главное меню']
-        for btn_text in buttons:
+        buttons = {
+            'Входящие': self.on_incoming,
+            'Состав': self.on_roster,
+            'Организация': self.on_organization,
+            'Турниры': self.on_tournaments,
+            'Трансферы': self.on_transfers,
+            'Настройки': self.on_settings,
+            'Мой профиль': self.on_profile,
+            'Главное меню': self.on_main_menu,
+        }
+
+        for btn_text, action in buttons.items():
             button = Button(text=btn_text, background_color=(0.4, 0.4, 0.8, 0.8))
+            button.bind(on_press=action)  # Привязываем отдельный обработчик к кнопке
             left_layout.add_widget(button)
 
         # Создаем основной область экрана для переменного контента
@@ -65,8 +77,31 @@ class MainWindow(BoxLayout):
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')
 
+    def on_incoming(self, instance):
+        print('Открытие входящих сообщений')
 
-# Класс для всплывающего окна
+    def on_roster(self, instance):
+        print('Показ состава команды')
+
+    def on_organization(self, instance):
+        print('Информация об организации')
+
+    def on_tournaments(self, instance):
+        print('Список турниров')
+
+    def on_transfers(self, instance):
+        print('Информация о трансферах')
+
+    def on_settings(self, instance):
+        SettingsPopup().open()
+
+    def on_profile(self, instance):
+        print('Мой профиль')
+
+    def on_main_menu(self, instance):
+        print('Возврат в главное меню')
+
+
 class DotaPopup(Popup):
     def __init__(self, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
@@ -74,6 +109,7 @@ class DotaPopup(Popup):
         self.content = MainWindow()
         self.size_hint = (1, 1)  # Занимает всё пространство
         self.auto_dismiss = True
+
 
 class DotaApp(App):
     def build(self):
@@ -83,6 +119,7 @@ class DotaApp(App):
 
     def open_popup(self, instance):
         DotaPopup().open()
+
 
 # Запуск приложения
 if __name__ == '__main__':
