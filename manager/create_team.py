@@ -1,4 +1,6 @@
 import sqlite3
+import os
+
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
@@ -7,8 +9,6 @@ from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
 from core import DotaApp
-from manager.core import DotaPopup
-
 
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
@@ -68,7 +68,6 @@ class CreateTeamPopup(Popup):
         country = self.country_input.text.strip()
         logo_path = self.logo_display.source if self.logo_display.source else "Нет логотипа"
 
-        # Здесь можно указать имя менеджера, который создаёт команду
         from new_game import NewGamePopup
         manager_nickname = NewGamePopup.get_nickname(self)
 
@@ -76,16 +75,17 @@ class CreateTeamPopup(Popup):
             print("Пожалуйста, заполните все поля.")
             return
 
-        from new_game import NewGamePopup
         new_db_name = NewGamePopup.get_db_name(self)
-        # Сохранение в базу данных
+
         conn = sqlite3.connect(new_db_name)
         cursor = conn.cursor()
+        logo_filename = os.path.basename(logo_path) if logo_path != "Нет логотипа" else None
 
+        # Вставка новой команды и получение её id
         cursor.execute('''
-            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (team_name, logo_path, country, 'rational', manager_nickname, '', '', '', '', '', 100000))
+            INSERT INTO teams (name, logo, country, owner, manager, carry, mid, offlane, partial_support, full_support, budget, player)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'yes')
+        ''', (team_name, logo_filename, country, 'rational', manager_nickname, '', '', '', '', '', 100000))
 
         conn.commit()
         conn.close()

@@ -1,5 +1,6 @@
 import sqlite3
 import shutil
+import os
 
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -85,7 +86,11 @@ class NewGamePopup(Popup):
 
         # Создание имени файла для новой базы данных
         global new_db_name
-        new_db_name = f"{name}_{surname}.db"
+        new_db_name = f"saves/{name}_{surname}.db"
+
+        # Убедитесь, что папка 'saves' существует, если нет - создайте её
+        if not os.path.exists('saves'):
+            os.makedirs('saves')
 
         # Копирование базы данных
         shutil.copy('start_database.db', new_db_name)

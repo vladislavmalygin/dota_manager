@@ -8,6 +8,8 @@ from kivy.graphics import Color, Rectangle
 
 from new_game import NewGamePopup
 from settings import SettingsPopup
+from load_game import LoadSavePopup
+from continue_game import ContinueLastSavePopup
 
 class MainMenu(FloatLayout):
     def __init__(self, **kwargs):  # Исправлено init на __init__
@@ -62,10 +64,10 @@ class MainMenu(FloatLayout):
         NewGamePopup().open()
 
     def continue_game(self, instance):
-        print("Продолжаем игру!")
+        ContinueLastSavePopup().open()
 
     def load_game(self, instance):
-        print("Загружаем игру!")
+        LoadSavePopup().open()
 
     def open_settings(self, instance):
         SettingsPopup().open()  # Открываем окно настроек
