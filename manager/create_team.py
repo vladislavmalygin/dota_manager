@@ -9,6 +9,7 @@ from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
 from core import DotaApp
+from core import MainWindow
 
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
@@ -76,6 +77,9 @@ class CreateTeamPopup(Popup):
             return
 
         new_db_name = NewGamePopup.get_db_name(self)
+        selected_save = new_db_name
+        main_window = MainWindow(selected_save=selected_save)
+        main_window.database_name
 
         conn = sqlite3.connect(new_db_name)
         cursor = conn.cursor()

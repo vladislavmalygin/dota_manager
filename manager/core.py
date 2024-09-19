@@ -1,3 +1,5 @@
+import os
+
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -5,11 +7,13 @@ from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
 
-from manager.settings import SettingsPopup
+from settings import SettingsPopup
 
 class MainWindow(BoxLayout):
-    def __init__(self, **kwargs):
+    def __init__(self, selected_save=None, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
+        self.selected_save = selected_save
+        self.database_name = self.get_db_name(selected_save) if selected_save else None
         self.orientation = 'vertical'
 
         # Установка фона с изображением
@@ -67,6 +71,12 @@ class MainWindow(BoxLayout):
 
         self.add_widget(main_layout)
 
+    def get_db_name(self, selected_save):
+        """Определите логику, как выбирать имя базы данных на основе `selected_save`."""
+        if selected_save:
+            return os.path.join('saves', selected_save)
+        return None
+
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
         self.rect.size = self.size
@@ -101,15 +111,13 @@ class MainWindow(BoxLayout):
     def on_main_menu(self, instance):
         print('Возврат в главное меню')
 
-
 class DotaPopup(Popup):
-    def __init__(self, **kwargs):
+    def __init__(self, selected_save=None, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
         self.title = ""  # Убираем заголовок
-        self.content = MainWindow()
+        self.content = MainWindow(selected_save=selected_save)  # Передаем selected_save
         self.size_hint = (1, 1)  # Занимает всё пространство
         self.auto_dismiss = True
-
 
 class DotaApp(App):
     def build(self):
@@ -118,8 +126,7 @@ class DotaApp(App):
         return button
 
     def open_popup(self, instance):
-        DotaPopup().open()
-
+        DotaPopup(selected_save='имя_сохранения').open()
 
 # Запуск приложения
 if __name__ == '__main__':

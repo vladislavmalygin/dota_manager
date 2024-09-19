@@ -7,6 +7,7 @@ from kivy.uix.image import Image
 from datetime import datetime
 
 from core import DotaApp
+from core import MainWindow
 
 
 class ContinueLastSavePopup(Popup):
@@ -24,6 +25,7 @@ class ContinueLastSavePopup(Popup):
             self.add_widget(layout)
             return
 
+        global latest_save
         latest_save = max(save_files, key=lambda f: os.path.getmtime(os.path.join('saves', f)))
 
         # Подключение к базе данных последнего сохранения
@@ -56,3 +58,8 @@ class ContinueLastSavePopup(Popup):
         print("Продолжение последней игры.")
         self.dismiss()
         DotaApp.open_popup(self, instance)
+
+    def continue_last_save(self):
+        selected_save = latest_save
+        main_window = MainWindow(selected_save=selected_save)
+        main_window.database_name  # Используем базу данных
