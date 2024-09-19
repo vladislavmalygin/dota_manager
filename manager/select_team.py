@@ -64,7 +64,7 @@ class SelectTeamPopup(Popup):
 
     def load_teams(self):
         # Получение списка команд из базы данных
-        from manager.new_game import NewGamePopup
+        from new_game import NewGamePopup
         new_db_name = NewGamePopup.get_db_name(self)
 
         conn = sqlite3.connect(new_db_name)
@@ -101,7 +101,7 @@ class SelectTeamPopup(Popup):
             self.team_info_label.text = info_text
 
     def select_team(self, instance):
-        from manager.new_game import NewGamePopup
+        from new_game import NewGamePopup
         manager_nickname = NewGamePopup.get_nickname(self)
         new_db_name = NewGamePopup.get_db_name(self)
         if self.selected_team:

@@ -120,7 +120,9 @@ class NewGamePopup(Popup):
         TeamChoicePopup().open()
 
     def get_db_name(self):
+        global new_db_name
         return new_db_name
 
     def get_nickname(self):
+        global nickname
         return nickname

@@ -68,7 +68,7 @@ class CreateTeamPopup(Popup):
         country = self.country_input.text.strip()
         logo_path = self.logo_display.source if self.logo_display.source else "Нет логотипа"
 
-        from manager.new_game import NewGamePopup
+        from new_game import NewGamePopup
         manager_nickname = NewGamePopup.get_nickname(self)
 
         if not team_name or not country:
