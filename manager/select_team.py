@@ -124,7 +124,7 @@ class SelectTeamPopup(Popup):
 
             print(f"Выбрана команда: {name}, Страна: {country}, Бюджет: {budget}")
             self.dismiss()
-            DotaApp.open_popup(self, instance)
+            DotaApp.open_popup(self, new_db_name)
 
         else:
             print("Пожалуйста, выберите команду.")

@@ -55,4 +55,4 @@ class ContinueLastSavePopup(Popup):
     def confirm_continue(self, instance):
         print("Продолжение последней игры.")
         self.dismiss()
-        DotaApp.open_popup(self, instance)
+        DotaApp.open_popup(self, new_db_name)

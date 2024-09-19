@@ -92,4 +92,4 @@ class CreateTeamPopup(Popup):
 
         print(f"Создана команда: {team_name}, Страна: {country}, Логотип: {logo_path}, Бюджет: 100000")
         self.dismiss()
-        DotaApp.open_popup(self, instance)
+        DotaApp.open_popup(self, new_db_name)
