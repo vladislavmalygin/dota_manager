@@ -78,7 +78,7 @@ class LoadSavePopup(Popup):
         if self.selected_save:
             print(f"Вы выбрали: {self.selected_save}")
             self.dismiss()
-            DotaApp.open_popup(self, {self.selected_save})
+            DotaApp.open_popup(self, instance)
         else:
             print("Сохранение не выбрано.")
 

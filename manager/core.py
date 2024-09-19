@@ -8,10 +8,9 @@ from kivy.graphics import Color, Rectangle
 from manager.settings import SettingsPopup
 
 class MainWindow(BoxLayout):
-    def __init__(self, db_name=None, **kwargs):
+    def __init__(self, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
         self.orientation = 'vertical'
-        self.db_name = db_name
 
         # Установка фона с изображением
         with self.canvas.before:
@@ -68,9 +67,6 @@ class MainWindow(BoxLayout):
 
         self.add_widget(main_layout)
 
-        if self.db_name:
-            print(f'Используется база данных: {self.db_name}')
-
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
         self.rect.size = self.size
@@ -107,10 +103,10 @@ class MainWindow(BoxLayout):
 
 
 class DotaPopup(Popup):
-    def __init__(self, db_name=None, **kwargs):
+    def __init__(self, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
         self.title = ""  # Убираем заголовок
-        self.content = MainWindow(db_name=db_name)
+        self.content = MainWindow()
         self.size_hint = (1, 1)  # Занимает всё пространство
         self.auto_dismiss = True
 
@@ -118,11 +114,11 @@ class DotaPopup(Popup):
 class DotaApp(App):
     def build(self):
         # Создаем кнопку для открытия всплывающего окна
-        button = Button(text="Открыть Dota Manager", on_press=lambda x: self.open_popup("my_database.db"))
+        button = Button(text="Открыть Dota Manager", on_press=self.open_popup)
         return button
 
-    def open_popup(self, db_name):
-        DotaPopup(db_name=db_name).open()
+    def open_popup(self, instance):
+        DotaPopup().open()
 
 
 # Запуск приложения
