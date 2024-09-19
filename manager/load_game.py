@@ -9,10 +9,11 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.image import Image
 
-from core import DotaApp
+from core import DotaPopup
+
 
 class LoadSavePopup(Popup):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs):  # Изменено на __init__
         super(LoadSavePopup, self).__init__(**kwargs)
         self.title = "Выберите сейв"
         self.size_hint = (0.8, 0.8)
@@ -58,6 +59,7 @@ class LoadSavePopup(Popup):
                     height=100
                 )
 
+                btn.save_file = save_file
                 btn.bind(on_press=self.select_save)
                 box.add_widget(btn)
 
@@ -72,16 +74,19 @@ class LoadSavePopup(Popup):
         self.add_widget(layout)
 
     def select_save(self, instance):
-        self.selected_save = instance.text
+        self.selected_save = instance
 
     def continue_with_save(self, instance):
         if self.selected_save:
-            print(f"Вы выбрали: {self.selected_save}")
+            db_name = f'saves/{self.selected_save.save_file}'
+            print(f"Вы выбрали: {db_name}")
             self.dismiss()
-            DotaApp.open_popup(self, instance)
+            DotaPopup(db_name).open_popup(db_name)
         else:
             print("Сохранение не выбрано.")
 
     def open_popup(self, instance):
         popup = LoadSavePopup()
         popup.open()
+
+

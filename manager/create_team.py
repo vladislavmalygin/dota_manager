@@ -8,7 +8,8 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.image import Image
 from kivy.uix.gridlayout import GridLayout
 
-from core import DotaApp
+from core import DotaPopup
+
 
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
@@ -92,4 +93,5 @@ class CreateTeamPopup(Popup):
 
         print(f"Создана команда: {team_name}, Страна: {country}, Логотип: {logo_path}, Бюджет: 100000")
         self.dismiss()
-        DotaApp.open_popup(self, instance)
+        db_name = new_db_name
+        DotaPopup(db_name).open_popup(db_name)

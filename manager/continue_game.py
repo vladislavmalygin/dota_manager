@@ -6,7 +6,7 @@ from kivy.uix.button import Button
 from kivy.uix.image import Image
 from datetime import datetime
 
-from core import DotaApp
+from core import DotaPopup
 
 
 class ContinueLastSavePopup(Popup):
@@ -23,7 +23,7 @@ class ContinueLastSavePopup(Popup):
             layout.add_widget(Button(text="Нет доступных сохранений", size_hint=(1, 0.9)))
             self.add_widget(layout)
             return
-
+        global latest_save
         latest_save = max(save_files, key=lambda f: os.path.getmtime(os.path.join('saves', f)))
 
         # Подключение к базе данных последнего сохранения
@@ -55,4 +55,5 @@ class ContinueLastSavePopup(Popup):
     def confirm_continue(self, instance):
         print("Продолжение последней игры.")
         self.dismiss()
-        DotaApp.open_popup(self, instance)
+        db_name = f'saves/{latest_save}'
+        DotaPopup(db_name).open_popup(db_name)

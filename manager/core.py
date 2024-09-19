@@ -1,4 +1,5 @@
-from kivy.app import App
+import sqlite3
+
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
@@ -7,10 +8,13 @@ from kivy.graphics import Color, Rectangle
 
 from manager.settings import SettingsPopup
 
+my_team_name = None
+
 class MainWindow(BoxLayout):
-    def __init__(self, **kwargs):
+    def __init__(self, db_name, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
         self.orientation = 'vertical'
+        self.db_name = db_name
 
         # Установка фона с изображением
         with self.canvas.before:
@@ -23,9 +27,10 @@ class MainWindow(BoxLayout):
         # Верхняя часть интерфейса
         top_layout = GridLayout(cols=5, size_hint_y=0.1)
 
+        team_name = self.get_team_name()
         # Добавляем кнопки в верхнюю часть с цветами
         top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
-        top_layout.add_widget(Button(text='Team Name', background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
+        top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Next Tournament', background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Дата: 1.01.2024', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
@@ -101,26 +106,32 @@ class MainWindow(BoxLayout):
     def on_main_menu(self, instance):
         print('Возврат в главное меню')
 
+    def get_team_name(self):
+        try:
+            # Подключение к базе данных
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+
+            # Выполнение запроса для получения имени команды
+            cursor.execute("SELECT name FROM teams WHERE player = 'yes'")
+            result = cursor.fetchone()
+
+            # Закрытие соединения
+            conn.close()
+
+            return result[0] if result else None
+
+        except sqlite3.Error as e:
+            print(f"Ошибка при работе с базой данных: {e}")
+            return None
 
 class DotaPopup(Popup):
-    def __init__(self, **kwargs):
+    def __init__(self, db_name, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
         self.title = ""  # Убираем заголовок
-        self.content = MainWindow()
+        self.content = MainWindow(db_name)
         self.size_hint = (1, 1)  # Занимает всё пространство
         self.auto_dismiss = True
 
-
-class DotaApp(App):
-    def build(self):
-        # Создаем кнопку для открытия всплывающего окна
-        button = Button(text="Открыть Dota Manager", on_press=self.open_popup)
-        return button
-
-    def open_popup(self, instance):
-        DotaPopup().open()
-
-
-# Запуск приложения
-if __name__ == '__main__':
-    DotaApp().run()
+    def open_popup(self, db_name):
+        DotaPopup(db_name).open()
