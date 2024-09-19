@@ -9,7 +9,6 @@ from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 
 from core import DotaApp
-from core import MainWindow
 
 
 class SelectTeamPopup(Popup):
@@ -124,11 +123,8 @@ class SelectTeamPopup(Popup):
             conn.close()
 
             print(f"Выбрана команда: {name}, Страна: {country}, Бюджет: {budget}")
-            selected_save = new_db_name
-            main_window = MainWindow(selected_save=selected_save)
-            main_window.database_name  # Используем базу данных
             self.dismiss()
-            DotaApp.open_popup(self, instance,)
+            DotaApp.open_popup(self, new_db_name)
 
         else:
             print("Пожалуйста, выберите команду.")

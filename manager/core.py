@@ -1,5 +1,3 @@
-import os
-
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -7,14 +5,13 @@ from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
 
-from settings import SettingsPopup
+from manager.settings import SettingsPopup
 
 class MainWindow(BoxLayout):
-    def __init__(self, selected_save=None, **kwargs):
+    def __init__(self, db_name=None, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
-        self.selected_save = selected_save
-        self.database_name = self.get_db_name(selected_save) if selected_save else None
         self.orientation = 'vertical'
+        self.db_name = db_name
 
         # Установка фона с изображением
         with self.canvas.before:
@@ -71,11 +68,8 @@ class MainWindow(BoxLayout):
 
         self.add_widget(main_layout)
 
-    def get_db_name(self, selected_save):
-        """Определите логику, как выбирать имя базы данных на основе `selected_save`."""
-        if selected_save:
-            return os.path.join('saves', selected_save)
-        return None
+        if self.db_name:
+            print(f'Используется база данных: {self.db_name}')
 
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
@@ -111,22 +105,25 @@ class MainWindow(BoxLayout):
     def on_main_menu(self, instance):
         print('Возврат в главное меню')
 
+
 class DotaPopup(Popup):
-    def __init__(self, selected_save=None, **kwargs):
+    def __init__(self, db_name=None, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
         self.title = ""  # Убираем заголовок
-        self.content = MainWindow(selected_save=selected_save)  # Передаем selected_save
+        self.content = MainWindow(db_name=db_name)
         self.size_hint = (1, 1)  # Занимает всё пространство
         self.auto_dismiss = True
+
 
 class DotaApp(App):
     def build(self):
         # Создаем кнопку для открытия всплывающего окна
-        button = Button(text="Открыть Dota Manager", on_press=self.open_popup)
+        button = Button(text="Открыть Dota Manager", on_press=lambda x: self.open_popup("my_database.db"))
         return button
 
-    def open_popup(self, instance):
-        DotaPopup(selected_save='имя_сохранения').open()
+    def open_popup(self, db_name):
+        DotaPopup(db_name=db_name).open()
+
 
 # Запуск приложения
 if __name__ == '__main__':

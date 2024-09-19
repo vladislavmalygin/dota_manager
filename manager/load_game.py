@@ -10,7 +10,6 @@ from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.image import Image
 
 from core import DotaApp
-from core import MainWindow
 
 class LoadSavePopup(Popup):
     def __init__(self, **kwargs):
@@ -79,15 +78,9 @@ class LoadSavePopup(Popup):
         if self.selected_save:
             print(f"Вы выбрали: {self.selected_save}")
             self.dismiss()
-            DotaApp.open_popup(self, instance)
+            DotaApp.open_popup(self, {self.selected_save})
         else:
             print("Сохранение не выбрано.")
-
-    def load(self):
-        # Логика загрузки сохранения
-        selected_save = {self.selected_save}
-        main_window = MainWindow(selected_save=selected_save)
-        main_window.database_name  # Используем базу данных
 
     def open_popup(self, instance):
         popup = LoadSavePopup()
