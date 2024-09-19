@@ -9,6 +9,7 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.image import Image
 
+from core import DotaApp
 
 class LoadSavePopup(Popup):
     def __init__(self, **kwargs):
@@ -77,6 +78,7 @@ class LoadSavePopup(Popup):
         if self.selected_save:
             print(f"Вы выбрали: {self.selected_save}")
             self.dismiss()
+            DotaApp.open_popup(self, instance)
         else:
             print("Сохранение не выбрано.")
 

@@ -6,6 +6,8 @@ from kivy.uix.button import Button
 from kivy.uix.image import Image
 from datetime import datetime
 
+from core import DotaApp
+
 
 class ContinueLastSavePopup(Popup):
     def __init__(self, **kwargs):
@@ -53,3 +55,4 @@ class ContinueLastSavePopup(Popup):
     def confirm_continue(self, instance):
         print("Продолжение последней игры.")
         self.dismiss()
+        DotaApp.open_popup(self, instance)
