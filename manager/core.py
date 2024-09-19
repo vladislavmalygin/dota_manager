@@ -5,7 +5,7 @@ from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
 
-from settings import SettingsPopup
+from manager.settings import SettingsPopup
 
 class MainWindow(BoxLayout):
     def __init__(self, **kwargs):
