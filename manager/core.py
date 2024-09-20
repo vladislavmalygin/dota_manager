@@ -9,6 +9,7 @@ from kivy.graphics import Color, Rectangle
 
 from settings import SettingsPopup
 from ingame_interface.inbox import show_message
+from ingame_interface.mixin import show_custom_popup
 
 class MainWindow(BoxLayout):
     def __init__(self, db_name, popup, **kwargs):
@@ -109,29 +110,29 @@ class MainWindow(BoxLayout):
         messages = [
             {'date': '2023-09-20', 'author': 'Владелец команды', 'text': 'Добро пожаловать!'},
             {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Рады приветстовать вас на посту менеджера'
-                                                                         f'команды {self.get_team_name()}! '},
+                                                                         f' команды {self.get_team_name()}! '},
             {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Впереди турнир {self.get_next_tournament()} '
                                                                          f'Желаем удачи! '},
         ]
         show_message(messages)
 
     def on_roster(self, instance):
-        print('Показ состава команды')
+        show_custom_popup()
 
     def on_organization(self, instance):
-        print('Информация об организации')
+        show_custom_popup()
 
     def on_tournaments(self, instance):
-        print('Список турниров')
+        show_custom_popup()
 
     def on_transfers(self, instance):
-        print('Информация о трансферах')
+        show_custom_popup()
 
     def on_settings(self, instance):
         SettingsPopup().open()
 
     def on_profile(self, instance):
-        print('Мой профиль')
+        show_custom_popup()
 
     def on_main_menu(self, instance):
         content = BoxLayout(orientation='vertical')
@@ -213,4 +214,3 @@ class DotaPopup(Popup):
 
     def open_popup(self, db_name):
         DotaPopup(db_name).open()
-

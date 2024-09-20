@@ -1,6 +1,3 @@
-from docutils.nodes import author
-
-
 class Message:
     def __init__(self, text: str, date: str, author: str = "Владелец команды", team_name :str = 'Команда'):
         self.text = text
