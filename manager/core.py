@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -10,6 +10,8 @@ from kivy.graphics import Color, Rectangle
 from settings import SettingsPopup
 from ingame_interface.inbox import show_message
 from ingame_interface.mixin import show_custom_popup
+from ingame_interface.squad import show_squad_popup
+
 
 class MainWindow(BoxLayout):
     def __init__(self, db_name, popup, **kwargs):
@@ -25,7 +27,10 @@ class MainWindow(BoxLayout):
         global day
         day = 20
 
+        global date_object
         date_object = date(year, month, day)
+        self.today_date_button = Button(text=f'{date_object}', background_color=(0.5, 0.5, 0.2, 1),
+                                        on_press=self.on_press)
 
         # Установка фона с изображением
         with self.canvas.before:
@@ -45,8 +50,7 @@ class MainWindow(BoxLayout):
         top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=tournament_name, background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
-        top_layout.add_widget(
-            Button(text=f'Дата: {date_object}', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
+        top_layout.add_widget(self.today_date_button)
         top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
 
         # Добавляем верхнюю часть в основной макет
@@ -101,7 +105,10 @@ class MainWindow(BoxLayout):
         self.rect_main_area.size = self.main_area.size
 
     def on_next(self, instance):
-        print('Переход к следующему шагу')
+        global date_object
+        date_object += timedelta(days=1)
+        self.today_date_button.text = f'{date_object}'
+
 
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')
@@ -117,7 +124,7 @@ class MainWindow(BoxLayout):
         show_message(messages)
 
     def on_roster(self, instance):
-        show_custom_popup()
+        show_squad_popup(self.db_name)
 
     def on_organization(self, instance):
         show_custom_popup()
