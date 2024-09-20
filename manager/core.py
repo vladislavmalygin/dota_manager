@@ -5,16 +5,23 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
+from datetime import date
 
-from manager.settings import SettingsPopup
+from settings import SettingsPopup
 
 my_team_name = None
 
 class MainWindow(BoxLayout):
-    def __init__(self, db_name, **kwargs):
+    def __init__(self, db_name, popup, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
         self.orientation = 'vertical'
         self.db_name = db_name
+        self.popup = popup
+        year = 2024
+        month = 9
+        day = 20
+
+        date_object = date(year, month, day)
 
         # Установка фона с изображением
         with self.canvas.before:
@@ -32,7 +39,7 @@ class MainWindow(BoxLayout):
         top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Next Tournament', background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
-        top_layout.add_widget(Button(text='Дата: 1.01.2024', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
+        top_layout.add_widget(Button(text=f'Дата: {date_object}', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
 
         # Добавляем верхнюю часть в основной макет
@@ -104,7 +111,29 @@ class MainWindow(BoxLayout):
         print('Мой профиль')
 
     def on_main_menu(self, instance):
-        print('Возврат в главное меню')
+        content = BoxLayout(orientation='vertical')
+
+        label = Button(text='Хотите ли вы выйти в главное меню?', size_hint_y=None, height=44)
+
+        yes_button = Button(text='Да', size_hint_y=None, height=44)
+        yes_button.bind(on_press=self.exit_to_main_menu)
+
+        no_button = Button(text='Нет', size_hint_y=None, height=44)
+        no_button.bind(on_press=self.close_popup)  # Привязываем обработчик к кнопке "Нет"
+
+        content.add_widget(label)
+        content.add_widget(yes_button)
+        content.add_widget(no_button)
+
+        self.popup_confirm = Popup(title='Подтверждение', content=content, size_hint=(0.6, 0.4))
+        self.popup_confirm.open()
+
+    def exit_to_main_menu(self, instance):
+        self.popup_confirm.dismiss()
+        self.popup.dismiss()
+
+    def close_popup(self, instance):
+        self.popup_confirm.dismiss()
 
     def get_team_name(self):
         try:
@@ -125,13 +154,15 @@ class MainWindow(BoxLayout):
             print(f"Ошибка при работе с базой данных: {e}")
             return None
 
+
+
 class DotaPopup(Popup):
     def __init__(self, db_name, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
         self.title = ""  # Убираем заголовок
-        self.content = MainWindow(db_name)
+        self.content = MainWindow(db_name,self)
         self.size_hint = (1, 1)  # Занимает всё пространство
-        self.auto_dismiss = True
+        self.auto_dismiss = False
 
     def open_popup(self, db_name):
         DotaPopup(db_name).open()
