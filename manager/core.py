@@ -17,8 +17,11 @@ class MainWindow(BoxLayout):
         self.orientation = 'vertical'
         self.db_name = db_name
         self.popup = popup
+        global year
         year = 2024
+        global month
         month = 9
+        global day
         day = 20
 
         date_object = date(year, month, day)
@@ -35,10 +38,11 @@ class MainWindow(BoxLayout):
         top_layout = GridLayout(cols=5, size_hint_y=0.1)
 
         team_name = self.get_team_name()
+        tournament_name = self.get_next_tournament()
         # Добавляем кнопки в верхнюю часть с цветами
         top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
-        top_layout.add_widget(Button(text='Next Tournament', background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
+        top_layout.add_widget(Button(text=tournament_name, background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=f'Дата: {date_object}', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
 
@@ -154,6 +158,30 @@ class MainWindow(BoxLayout):
             print(f"Ошибка при работе с базой данных: {e}")
             return None
 
+    def get_next_tournament(self):
+        # Создаем объект даты
+        date_object = date(year, month, day)
+
+        # Подключаемся к базе данных
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        # SQL-запрос для нахождения ближайшего турнира
+        query = '''
+            SELECT name FROM tournaments
+            WHERE start_date >= ?
+            ORDER BY start_date ASC
+            LIMIT 1
+        '''
+
+        cursor.execute(query, (date_object,))
+        result = cursor.fetchone()
+
+        conn.close()
+
+        if result:
+            return result[0]
+        return None
 
 
 class DotaPopup(Popup):
@@ -166,3 +194,6 @@ class DotaPopup(Popup):
 
     def open_popup(self, db_name):
         DotaPopup(db_name).open()
+
+    def get_db_name(self):
+        return self.db_name
