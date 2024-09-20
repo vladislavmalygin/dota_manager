@@ -11,12 +11,14 @@ from settings import SettingsPopup
 
 my_team_name = None
 
+
 class MainWindow(BoxLayout):
     def __init__(self, db_name, popup, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
         self.orientation = 'vertical'
         self.db_name = db_name
         self.popup = popup
+
         global year
         year = 2024
         global month
@@ -39,22 +41,23 @@ class MainWindow(BoxLayout):
 
         team_name = self.get_team_name()
         tournament_name = self.get_next_tournament()
+
         # Добавляем кнопки в верхнюю часть с цветами
         top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text=tournament_name, background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press))
-        top_layout.add_widget(Button(text=f'Дата: {date_object}', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
+        top_layout.add_widget(
+            Button(text=f'Дата: {date_object}', background_color=(0.5, 0.5, 0.2, 1), on_press=self.on_press))
         top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
 
         # Добавляем верхнюю часть в основной макет
         self.add_widget(top_layout)
 
-        # Основное содержание графического интерфейса
-        main_content = BoxLayout()
-        self.add_widget(main_content)
+        # Создаем основной макет для левой и правой части интерфейса
+        main_layout = BoxLayout(orientation='horizontal')
 
         # Левая часть
-        left_layout = BoxLayout(orientation='vertical', size_hint=(0.2, 2))
+        left_layout = BoxLayout(orientation='vertical', size_hint=(0.2, 1))
 
         # Заполняем левую часть кнопками с цветами
         buttons = {
@@ -76,8 +79,15 @@ class MainWindow(BoxLayout):
         # Создаем основной область экрана для переменного контента
         self.main_area = BoxLayout(size_hint_x=0.8)
 
+        # Создаем полупрозрачный белый фон для основной области контента
+        with self.main_area.canvas.before:
+            Color(0.4, 0.4, 0.4, 0.2)  # Полупрозрачный белый цвет фона
+            self.rect_main_area = Rectangle(pos=self.main_area.pos, size=self.main_area.size)
+
+        # Обновление размера прямоугольника основной области при изменении размера окна
+        self.main_area.bind(size=self._update_main_area_rect)
+
         # Добавляем левую часть и основную область к главному окну
-        main_layout = BoxLayout(orientation='horizontal')
         main_layout.add_widget(left_layout)
         main_layout.add_widget(self.main_area)
 
@@ -86,6 +96,10 @@ class MainWindow(BoxLayout):
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
         self.rect.size = self.size
+
+    def _update_main_area_rect(self, instance, value):
+        self.rect_main_area.pos = self.main_area.pos
+        self.rect_main_area.size = self.main_area.size
 
     def on_next(self, instance):
         print('Переход к следующему шагу')
@@ -194,6 +208,3 @@ class DotaPopup(Popup):
 
     def open_popup(self, db_name):
         DotaPopup(db_name).open()
-
-    def get_db_name(self):
-        return self.db_name
