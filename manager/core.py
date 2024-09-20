@@ -1,16 +1,14 @@
 import sqlite3
+from datetime import date
 
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
-from datetime import date
 
 from settings import SettingsPopup
-
-my_team_name = None
-
+from ingame_interface.inbox import show_message
 
 class MainWindow(BoxLayout):
     def __init__(self, db_name, popup, **kwargs):
@@ -108,7 +106,14 @@ class MainWindow(BoxLayout):
         print(f'Нажата кнопка: {instance.text}')
 
     def on_incoming(self, instance):
-        print('Открытие входящих сообщений')
+        messages = [
+            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': 'Добро пожаловать!'},
+            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Рады приветстовать вас на посту менеджера'
+                                                                         f'команды {self.get_team_name()}! '},
+            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Впереди турнир {self.get_next_tournament()} '
+                                                                         f'Желаем удачи! '},
+        ]
+        show_message(messages)
 
     def on_roster(self, instance):
         print('Показ состава команды')
@@ -208,3 +213,4 @@ class DotaPopup(Popup):
 
     def open_popup(self, db_name):
         DotaPopup(db_name).open()
+
