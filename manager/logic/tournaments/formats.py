@@ -5,7 +5,7 @@ from manager.logic.tournaments.invites import invites
 
 import random
 
-class WorldCupSystemTournament:
+class WorldCupSystemTournamentGroupStage:
     def __init__(self, database, tournament_id):
         self.database = database
         self.tournament_id = tournament_id
@@ -41,15 +41,14 @@ class WorldCupSystemTournament:
         matches_per_group = self.generate_matches()
 
         print(f"\nРезультаты тура {round_number}:")
-        for i, matches in enumerate(matches_per_group):
+        for i, (matches, group) in enumerate(zip(matches_per_group, self.groups)):
             group_name = f"Группа {i + 1}"
             print(f"\nМатчи в {group_name}:")
-            if len(matches) >= 2:  # Проверяем, достаточно ли матчей для тура
-                for _ in range(2):  # Проигрываем два матча в группе
-                    if not matches:  # Если нет матчей, выходим
-                        break
-                    match = matches.pop(0)
-                    team1, team2 = match
+            played_teams = set()  # Множество для отслеживания сыгравших команд
+
+            for match in matches:
+                team1, team2 = match
+                if team1 not in played_teams and team2 not in played_teams:  # Проверяем, играли ли команды в этом туре
                     winner = determine_winner(team1, team2)
                     winners.append(f"Победитель пары {team1} : {team2} - {winner}")
 
@@ -59,8 +58,15 @@ class WorldCupSystemTournament:
                     else:
                         self.tables[group_name][team2] += 3
 
+                    # Добавляем команды в множество сыгравших
+                    played_teams.add(team1)
+                    played_teams.add(team2)
+
                     # Печатаем результат матча
                     print(f"{team1} : {team2} - Победитель: {winner}")
+
+                if len(played_teams) >= len(group):  # Если все команды сыграли, выходим
+                    break
 
         # Печатаем таблицы после текущего тура
         print("\nТаблицы после текущего тура:")
@@ -92,8 +98,101 @@ class WorldCupSystemTournament:
         for round_number in range(1, 4):
             self.play_round(round_number)
 
+    def get_top_teams(self):
+        """Возвращает список команд, занявших первые два места в каждой группе."""
+        top_teams = {}
+        for group_name, table in self.tables.items():
+            sorted_teams = sorted(table.items(), key=lambda x: x[1], reverse=True)  # Сортируем команды по очкам
+            top_teams[group_name] = [team for team, points in sorted_teams[:2]]  # Берем первые две команды
+        return top_teams
+
+    def get_all_top_teams(self):
+        """Возвращает общий список команд, занявших первые два места во всех группах."""
+        top_teams_dict = self.get_top_teams()
+        all_top_teams = []
+
+        for teams in top_teams_dict.values():
+            all_top_teams.extend(teams)  # Добавляем команды в общий список
+
+        return all_top_teams
+
+    def print_top_teams(self):
+        top_teams = tournament.get_top_teams()
+        print(""
+              "Команды, занявшие первые два места в группах:")
+        for group, teams in top_teams.items():
+            print(f"{group}: {', '.join(teams)}")
 
 
-# Пример использования:
-tournament = WorldCupSystemTournament('test_database.db', 'tournament_id')
+class WorldCupSystemTournamentPlayoff:
+    def __init__(self, teams):
+        if len(teams) != 8:
+            raise ValueError("Должно быть ровно 8 команд для плей-офф.")
+        self.teams = teams
+
+    def generate_quarter_finals(self):
+        """Составляет пары четвертьфинала и печатает их."""
+        print("Пары четвертьфинала:")
+        random.shuffle(self.teams)  # Перемешиваем команды
+        self.quarter_finals_pairs = [(self.teams[i], self.teams[i + 1]) for i in range(0, 8, 2)]
+        for match in self.quarter_finals_pairs:
+            print(f"{match[0]} vs {match[1]}")
+
+    def determine_winner(self, team1, team2):
+        """Определяет победителя между двумя командами."""
+        return random.choice([team1, team2])  # Случайный выбор победителя
+
+    def play_quarter_finals(self):
+        """Симулирует результаты матчей четвертьфинала."""
+        print("\nРезультаты четвертьфинала:")
+        self.quarter_finals_winners = []
+        for match in self.quarter_finals_pairs:
+            winner = self.determine_winner(match[0], match[1])
+            self.quarter_finals_winners.append(winner)
+            print(f"Победитель: {winner}")
+
+    def generate_semi_finals(self):
+        """Составляет пары полуфинала и печатает их."""
+        if len(self.quarter_finals_winners) < 4:
+            raise ValueError("Недостаточно команд для формирования полуфинала.")
+
+        print("\nПары полуфинала:")
+        random.shuffle(self.quarter_finals_winners)
+        self.semi_finals_pairs = [(self.quarter_finals_winners[i], self.quarter_finals_winners[i + 1]) for i in range(0, 4, 2)]
+        for match in self.semi_finals_pairs:
+            print(f"{match[0]} vs {match[1]}")
+
+    def play_semi_finals(self):
+        """Симулирует результаты матчей полуфинала."""
+        print("\nРезультаты полуфинала:")
+        self.semi_finals_winners = []
+        for match in self.semi_finals_pairs:
+            winner = self.determine_winner(match[0], match[1])
+            self.semi_finals_winners.append(winner)
+            print(f"Победитель: {winner}")
+
+    def final_match(self):
+        """Печатает пару финала и результат."""
+        if len(self.semi_finals_winners) < 2:
+            raise ValueError("Недостаточно команд для проведения финала.")
+
+        print("\nФинал:")
+        final_match = (self.semi_finals_winners[0], self.semi_finals_winners[1])
+        print(f"{final_match[0]} vs {final_match[1]}")
+
+        winner = self.determine_winner(final_match[0], final_match[1])
+        print(f"Победитель финала: {winner}")
+        print(f"Поздравляем {winner} с победой в турнире!")
+
+
+
+
+tournament = WorldCupSystemTournamentGroupStage('test_database.db', 'tournament_id')
+teams = tournament.get_all_top_teams()
 tournament.print_tournament_info()
+playoff = WorldCupSystemTournamentPlayoff(teams)
+playoff.generate_quarter_finals()
+playoff.play_quarter_finals()
+playoff.generate_semi_finals()
+playoff.play_semi_finals()
+playoff.final_match()
