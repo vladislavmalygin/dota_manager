@@ -6,6 +6,7 @@ from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.image import Image
+import os
 
 class SquadPopup(Popup):
     def __init__(self, db_name, **kwargs):
@@ -60,12 +61,18 @@ class SquadPopup(Popup):
                     player = cursor.fetchone()
                     if player:
                         name, surname, nickname, face = player
+
+                        # Проверка на наличие изображения
+                        if not face or not os.path.exists(f"images/{face}"):
+                            face_image_path = "images/players/generic.png"
+                        else:
+                            face_image_path = f"images/{face}"
+
                         # Создаем виджет для отображения информации об игроке
                         player_info = BoxLayout(size_hint_y=None, height=100, size_hint_x=1)
 
                         # Добавляем изображение игрока с масштабированием
-                        face_image_path = f"images/{face}"
-                        player_image = Image(source=face_image_path, size_hint=(None, 1), width=50)
+                        player_image = Image(source=face_image_path, size_hint=(1, 1), width=50)
                         player_info.add_widget(player_image)
 
                         # Добавляем текст с именем и фамилией
@@ -88,3 +95,4 @@ class SquadPopup(Popup):
 def show_squad_popup(db_name):
     popup = SquadPopup(db_name=db_name)
     popup.open()
+

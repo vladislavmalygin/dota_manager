@@ -11,6 +11,7 @@ from settings import SettingsPopup
 from ingame_interface.inbox import show_message
 from ingame_interface.mixin import show_custom_popup
 from ingame_interface.squad import show_squad_popup
+from ingame_interface.tournaments import TournamentPopup
 
 
 class MainWindow(BoxLayout):
@@ -114,6 +115,29 @@ class MainWindow(BoxLayout):
         self.rect_main_area.pos = self.main_area.pos
         self.rect_main_area.size = self.main_area.size
 
+    def get_next_tournament_date(self):
+        # Получаем дату из базы данных
+        date_object = self.get_date_from_db(1)
+
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+
+        query = '''
+            SELECT start_date FROM tournaments
+            WHERE start_date >= ?
+            ORDER BY start_date ASC
+            LIMIT 1
+        '''
+
+        cursor.execute(query, (date_object,))
+        result = cursor.fetchone()
+
+        conn.close()
+
+        if result:
+            return result[0]  # Возвращаем дату следующего турнира
+        return None
+
     def on_next(self, instance):
         self.date_object += timedelta(days=1)
         database = self.db_name
@@ -127,17 +151,28 @@ class MainWindow(BoxLayout):
             # Сохраняем изменения
             conn.commit()
             print(f"Дата успешно обновлена на {self.date_object} в базе данных")
+
             cursor.execute("SELECT date FROM save WHERE id = 1")
             updated_date = cursor.fetchone()
 
             if updated_date:
-                updated_date_value = updated_date[0]  #
+                updated_date_value = updated_date[0]  # Получаем обновленную дату
+
+                # Получаем следующую дату турнира
+                next_tournament_date = self.get_next_tournament_date()
+
+                # Проверяем совпадение дат
+                if next_tournament_date and updated_date_value == next_tournament_date:
+                    # Если даты совпадают, запускаем TournamentPopup
+                    self.show_tournament_popup()
+
                 self.today_date_button.text = updated_date_value
         except sqlite3.Error as e:
             print(f"Ошибка при работе с базой данных: {e}")
         finally:
             if conn:
                 conn.close()
+
 
 
     def on_press(self, instance):
@@ -238,13 +273,19 @@ class MainWindow(BoxLayout):
             return result[0]
         return None
 
+    def show_tournament_popup(self):
+        popup = TournamentPopup(self.db_name)
+        popup.open()
+
+
+
 
 class DotaPopup(Popup):
     def __init__(self, db_name, **kwargs):
         super(DotaPopup, self).__init__(**kwargs)
-        self.title = ""  # Убираем заголовок
+        self.title = ""
         self.content = MainWindow(db_name,self)
-        self.size_hint = (1, 1)  # Занимает всё пространство
+        self.size_hint = (1, 1)
         self.auto_dismiss = False
 
     def open_popup(self, db_name):
