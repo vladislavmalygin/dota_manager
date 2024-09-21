@@ -20,16 +20,9 @@ class MainWindow(BoxLayout):
         self.db_name = db_name
         self.popup = popup
 
-        global year
-        year = 2024
-        global month
-        month = 9
-        global day
-        day = 20
+        self.date_object = self.get_date_from_db(1)
 
-        global date_object
-        date_object = date(year, month, day)
-        self.today_date_button = Button(text=f'{date_object}', background_color=(0.5, 0.5, 0.2, 1),
+        self.today_date_button = Button(text=f'{self.date_object}', background_color=(0.5, 0.5, 0.2, 1),
                                         on_press=self.on_press)
 
         # Установка фона с изображением
@@ -96,6 +89,23 @@ class MainWindow(BoxLayout):
 
         self.add_widget(main_layout)
 
+    def get_date_from_db(self, record_id):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute("SELECT date FROM save WHERE id = ?", (record_id,))
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                # Предполагаем, что дата хранится в формате 'YYYY-MM-DD'
+                return date.fromisoformat(result[0])
+            else:
+                raise ValueError("No record found with the given ID.")
+        except Exception as e:
+            print(f"Error retrieving date from database: {e}")
+            return date.today()
+
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
         self.rect.size = self.size
@@ -105,9 +115,29 @@ class MainWindow(BoxLayout):
         self.rect_main_area.size = self.main_area.size
 
     def on_next(self, instance):
-        global date_object
-        date_object += timedelta(days=1)
-        self.today_date_button.text = f'{date_object}'
+        self.date_object += timedelta(days=1)
+        database = self.db_name
+        conn = None
+        try:
+            conn = sqlite3.connect(database)
+            cursor = conn.cursor()
+
+            cursor.execute("UPDATE save SET date = ? WHERE id = 1", (str(self.date_object),))
+
+            # Сохраняем изменения
+            conn.commit()
+            print(f"Дата успешно обновлена на {self.date_object} в базе данных")
+            cursor.execute("SELECT date FROM save WHERE id = 1")
+            updated_date = cursor.fetchone()
+
+            if updated_date:
+                updated_date_value = updated_date[0]  #
+                self.today_date_button.text = updated_date_value
+        except sqlite3.Error as e:
+            print(f"Ошибка при работе с базой данных: {e}")
+        finally:
+            if conn:
+                conn.close()
 
 
     def on_press(self, instance):
@@ -150,7 +180,7 @@ class MainWindow(BoxLayout):
         yes_button.bind(on_press=self.exit_to_main_menu)
 
         no_button = Button(text='Нет', size_hint_y=None, height=44)
-        no_button.bind(on_press=self.close_popup)  # Привязываем обработчик к кнопке "Нет"
+        no_button.bind(on_press=self.close_popup)
 
         content.add_widget(label)
         content.add_widget(yes_button)
@@ -186,14 +216,12 @@ class MainWindow(BoxLayout):
             return None
 
     def get_next_tournament(self):
-        # Создаем объект даты
-        date_object = date(year, month, day)
+        # Получаем дату из базы данных
+        date_object = self.get_date_from_db(1)
 
-        # Подключаемся к базе данных
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
-        # SQL-запрос для нахождения ближайшего турнира
         query = '''
             SELECT name FROM tournaments
             WHERE start_date >= ?
