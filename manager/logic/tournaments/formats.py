@@ -12,7 +12,7 @@ class WorldCupSystemTournamentGroupStage:
         self.teams = self.invites()
         self.groups = self.worldcup_system_draw()
         self.tables = {f"Группа {i + 1}": {team: 0 for team in group} for i, group in enumerate(self.groups)}  # Таблицы очков для каждой группы
-
+        self.current_round = 0
     def invites(self):
         """Получить список команд из базы данных."""
         return invites(self.database)
@@ -52,21 +52,23 @@ class WorldCupSystemTournamentGroupStage:
                     winner = determine_winner(team1, team2)
                     winners.append(f"Победитель пары {team1} : {team2} - {winner}")
 
-                    # Обновляем таблицу очков для соответствующей группы
+
                     if winner == team1:
                         self.tables[group_name][team1] += 3
                     else:
                         self.tables[group_name][team2] += 3
 
-                    # Добавляем команды в множество сыгравших
+
                     played_teams.add(team1)
                     played_teams.add(team2)
 
-                    # Печатаем результат матча
+
                     print(f"{team1} : {team2} - Победитель: {winner}")
 
                 if len(played_teams) >= len(group):  # Если все команды сыграли, выходим
                     break
+
+        self.current_round += 1
 
         # Печатаем таблицы после текущего тура
         print("\nТаблицы после текущего тура:")
@@ -97,13 +99,20 @@ class WorldCupSystemTournamentGroupStage:
         # Печатаем результаты и таблицы после каждого тура
         for round_number in range(1, 4):
             self.play_round(round_number)
+    def are_all_rounds_played(self):
+        """Проверяет, сыграны ли все три тура."""
+        round = self.current_round == 3
 
     def get_top_teams(self):
         """Возвращает список команд, занявших первые два места в каждой группе."""
         top_teams = {}
         for group_name, table in self.tables.items():
-            sorted_teams = sorted(table.items(), key=lambda x: x[1], reverse=True)  # Сортируем команды по очкам
-            top_teams[group_name] = [team for team, points in sorted_teams[:2]]  # Берем первые две команды
+            # Сортируем команды по очкам (по убыванию) и по имени (по возрастанию)
+            sorted_teams = sorted(table.items(), key=lambda x: (-x[1], x[0]))
+
+            # Берем первые две команды
+            top_teams[group_name] = [team for team, points in sorted_teams[:2]]
+
         return top_teams
 
     def get_all_top_teams(self):
@@ -115,6 +124,11 @@ class WorldCupSystemTournamentGroupStage:
             all_top_teams.extend(teams)  # Добавляем команды в общий список
 
         return all_top_teams
+
+    def main(self):
+        while not self.are_all_rounds_played():
+            self.get_top_teams()
+            self.get_all_top_teams()
 
     def print_top_teams(self):
         top_teams = tournament.get_top_teams()
@@ -188,8 +202,8 @@ class WorldCupSystemTournamentPlayoff:
 
 
 tournament = WorldCupSystemTournamentGroupStage('test_database.db', 'tournament_id')
-teams = tournament.get_all_top_teams()
 tournament.print_tournament_info()
+teams = tournament.get_all_top_teams()
 playoff = WorldCupSystemTournamentPlayoff(teams)
 playoff.generate_quarter_finals()
 playoff.play_quarter_finals()
