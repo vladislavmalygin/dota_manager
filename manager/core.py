@@ -12,6 +12,7 @@ from ingame_interface.inbox import show_message
 from ingame_interface.mixin import show_custom_popup
 from ingame_interface.squad import show_squad_popup
 from ingame_interface.tournaments import TournamentPopup
+from logic.tournaments.invites import invites
 
 
 class MainWindow(BoxLayout):
