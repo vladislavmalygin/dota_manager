@@ -92,13 +92,31 @@ class SelectTeamPopup(Popup):
         self.update_team_info()
 
     def update_team_info(self):
+        from new_game import NewGamePopup
+        new_db_name = NewGamePopup.get_db_name(self)
         if self.selected_team:
-            team_id, name, logo, country, carry, mid, offlane, partial_support, full_support, budget = self.selected_team
+            team_id, name, logo, country, carry_id, mid_id, offlane_id, partial_support_id, full_support_id, budget = self.selected_team
 
+            # Подключение к базе данных
+            conn = sqlite3.connect(new_db_name)
+            cursor = conn.cursor()
+
+            # Получаем ники и роли игроков по их ID
+            cursor.execute("SELECT nickname, role FROM players WHERE id IN (?, ?, ?, ?, ?)",
+                           (carry_id, mid_id, offlane_id, partial_support_id, full_support_id))
+            player_info = cursor.fetchall()
+
+            # Форматируем информацию об игроках
+            player_info_str = '\n'.join([f"{role}: {nickname}" for nickname, role in player_info])
+
+            # Формируем текст для вывода
             info_text = f"Команда: {name}\nСтрана: {country}\nБюджет: {budget}\nСостав:\n" \
-                        f"Carry: {carry}\nMid: {mid}\nOfflane: {offlane}\n" \
-                        f"Partial Support: {partial_support}\nFull Support: {full_support}"
+                        f"{player_info_str}"
+
             self.team_info_label.text = info_text
+
+            # Закрытие соединения с базой данных
+            conn.close()
 
     def select_team(self, instance):
         from new_game import NewGamePopup
