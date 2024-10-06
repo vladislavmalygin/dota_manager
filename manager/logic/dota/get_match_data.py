@@ -21,16 +21,16 @@ def get_match_data(team1, team2, db_name):
 
     # Получаем id игроков
     player_ids = {
-        'team1_carry': team1_ids[0],
-        'team1_mid': team1_ids[1],
-        'team1_offlane': team1_ids[2],
-        'team1_partial_support': team1_ids[3],
-        'team1_full_support': team1_ids[4],
-        'team2_carry': team2_ids[0],
-        'team2_mid': team2_ids[1],
-        'team2_offlane': team2_ids[2],
-        'team2_partial_support': team2_ids[3],
-        'team2_full_support': team2_ids[4],
+        f'{team1}_carry': team1_ids[0],
+        f'{team1}_mid': team1_ids[1],
+        f'{team1}_offlane': team1_ids[2],
+        f'{team1}_partial_support': team1_ids[3],
+        f'{team1}_full_support': team1_ids[4],
+        f'{team2}_carry': team2_ids[0],
+        f'{team2}_mid': team2_ids[1],
+        f'{team2}_offlane': team2_ids[2],
+        f'{team2}_partial_support': team2_ids[3],
+        f'{team2}_full_support': team2_ids[4],
     }
 
     # Словарь для хранения навыков игроков
@@ -42,9 +42,11 @@ def get_match_data(team1, team2, db_name):
         player_skills = cursor.fetchone()
 
         if player_skills:
-            skills[f'{role}_micro_skills'] = player_skills[0]
-            skills[f'{role}_macro_skills'] = player_skills[1]
-            skills[f'{role}_soft_skills'] = player_skills[2]
+            skills[f'{role}'] = {
+                'micro_skills': player_skills[0],
+                'macro_skills': player_skills[1],
+                'soft_skills': player_skills[2]
+            }
         else:
             print(f"Игрок с id {player_id} не найден.")
 
@@ -57,5 +59,6 @@ def get_match_data(team1, team2, db_name):
 # Пример использования
 match_data = get_match_data('Team Spirit', 'Team Falcons', 'test_database.db')
 print(match_data)
+
 
 
