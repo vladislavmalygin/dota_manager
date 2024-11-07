@@ -1,4 +1,4 @@
-from manager.logic.dota.Game import determine_winner
+from manager.logic.dota.match_data import determine_winner
 from manager.logic.tournaments.draw import worldcup_system_draw
 from manager.logic.tournaments.invites import invites
 
