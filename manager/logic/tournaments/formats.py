@@ -1,9 +1,10 @@
-from manager.logic.dota.match_data import determine_winner
 from manager.logic.tournaments.draw import worldcup_system_draw
 from manager.logic.tournaments.invites import invites
+from manager.logic.dota.game import  dota_simulation
 
 
 import random
+database = 'test_database.db'
 
 class WorldCupSystemTournamentGroupStage:
     def __init__(self, database, tournament_id):
@@ -49,7 +50,7 @@ class WorldCupSystemTournamentGroupStage:
             for match in matches:
                 team1, team2 = match
                 if team1 not in played_teams and team2 not in played_teams:  # Проверяем, играли ли команды в этом туре
-                    winner = determine_winner(team1, team2)
+                    winner = dota_simulation(team1, team2, database)
                     winners.append(f"Победитель пары {team1} : {team2} - {winner}")
 
 
@@ -152,16 +153,12 @@ class WorldCupSystemTournamentPlayoff:
         for match in self.quarter_finals_pairs:
             print(f"{match[0]} vs {match[1]}")
 
-    def determine_winner(self, team1, team2):
-        """Определяет победителя между двумя командами."""
-        return random.choice([team1, team2])  # Случайный выбор победителя
-
     def play_quarter_finals(self):
         """Симулирует результаты матчей четвертьфинала."""
         print("\nРезультаты четвертьфинала:")
         self.quarter_finals_winners = []
         for match in self.quarter_finals_pairs:
-            winner = self.determine_winner(match[0], match[1])
+            winner = dota_simulation(match[0], match[1], database)
             self.quarter_finals_winners.append(winner)
             print(f"Победитель: {winner}")
 
@@ -181,7 +178,7 @@ class WorldCupSystemTournamentPlayoff:
         print("\nРезультаты полуфинала:")
         self.semi_finals_winners = []
         for match in self.semi_finals_pairs:
-            winner = self.determine_winner(match[0], match[1])
+            winner = dota_simulation(match[0], match[1], database)
             self.semi_finals_winners.append(winner)
             print(f"Победитель: {winner}")
 
@@ -194,7 +191,7 @@ class WorldCupSystemTournamentPlayoff:
         final_match = (self.semi_finals_winners[0], self.semi_finals_winners[1])
         print(f"{final_match[0]} vs {final_match[1]}")
 
-        winner = self.determine_winner(final_match[0], final_match[1])
+        winner = dota_simulation(final_match[0], final_match[1], database)
         print(f"Победитель финала: {winner}")
         print(f"Поздравляем {winner} с победой в турнире!")
 
