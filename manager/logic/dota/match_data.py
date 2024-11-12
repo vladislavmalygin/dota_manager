@@ -1,46 +1,47 @@
-import random
 import sqlite3
-
-def dota_simulation(team1, team2):
-    """Определяет победителя между двумя командами случайным образом."""
-    winner = random.choice([team1, team2])
-    return winner
 
 def get_match_data(team1, team2, db_name):
     # Подключаемся к базе данных
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
-    # Находим id команд
-    cursor.execute("SELECT carry, mid, offlane, partial_support, full_support FROM teams WHERE name IN (?, ?)",
-                   (team1, team2))
-    team_data = cursor.fetchall()
+    # Получаем id игроков для первой команды
+    cursor.execute("SELECT carry, mid, offlane, partial_support, full_support FROM teams WHERE name = ?", (team1,))
+    team1_data = cursor.fetchone()
 
-    if len(team_data) != 2:
-        print("Одна или обе команды не найдены.")
+    if not team1_data:
+        print(f"Команда {team1} не найдена.")
         conn.close()
         return
 
-    # Извлекаем id игроков для каждой роли
-    team1_ids = team_data[0]
-    team2_ids = team_data[1]
+    # Получаем id игроков для второй команды
+    cursor.execute("SELECT carry, mid, offlane, partial_support, full_support FROM teams WHERE name = ?", (team2,))
+    team2_data = cursor.fetchone()
 
-    # Получаем id игроков
+    if not team2_data:
+        print(f"Команда {team2} не найдена.")
+        conn.close()
+        return
+
+    # Получаем id игроков для каждой роли
     player_ids = {
-        'team1_carry': team1_ids[0],
-        'team1_mid': team1_ids[1],
-        'team1_offlane': team1_ids[2],
-        'team1_partial_support': team1_ids[3],
-        'team1_full_support': team1_ids[4],
-        'team2_carry': team2_ids[0],
-        'team2_mid': team2_ids[1],
-        'team2_offlane': team2_ids[2],
-        'team2_partial_support': team2_ids[3],
-        'team2_full_support': team2_ids[4],
+        'team1_carry': team1_data[0],
+        'team1_mid': team1_data[1],
+        'team1_offlane': team1_data[2],
+        'team1_partial_support': team1_data[3],
+        'team1_full_support': team1_data[4],
+        'team2_carry': team2_data[0],
+        'team2_mid': team2_data[1],
+        'team2_offlane': team2_data[2],
+        'team2_partial_support': team2_data[3],
+        'team2_full_support': team2_data[4],
     }
 
-    # Словарь для хранения навыков игроков
-    skills = {}
+    # Словари для хранения навыков игроков
+    skills = {
+        'team1': {},
+        'team2': {}
+    }
 
     # Получаем значения полей micro_skills, macro_skills, soft_skills для каждого игрока
     for role, player_id in player_ids.items():
@@ -48,20 +49,36 @@ def get_match_data(team1, team2, db_name):
         player_skills = cursor.fetchone()
 
         if player_skills:
-            skills[f'{role}_micro_skills'] = player_skills[0]
-            skills[f'{role}_macro_skills'] = player_skills[1]
-            skills[f'{role}_soft_skills'] = player_skills[2]
+            team_key = 'team1' if role.startswith('team1') else 'team2'
+            skills[team_key][role] = {
+                'micro_skills': player_skills[0],
+                'macro_skills': player_skills[1],
+                'soft_skills': player_skills[2]
+            }
         else:
             print(f"Игрок с id {player_id} не найден.")
 
     # Закрываем соединение с базой данных
     conn.close()
-
     return skills
 
 
-# Пример использования
-match_data = get_match_data('Team Spirit', 'Team Falcons', 'test_database.db')
-print(match_data)
 
 
+
+def get_teams_with_player_yes(db_name):
+    # Подключаемся к базе данных
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    # Выполняем запрос для получения имен команд с player = 'yes'
+    cursor.execute("SELECT name FROM teams WHERE player = 'yes'")
+    teams = cursor.fetchall()
+
+    # Закрываем соединение с базой данных
+    conn.close()
+
+    # Извлекаем имена команд из полученных данных
+    team_names = [team[0].strip() for team in teams]  # Убираем лишние пробелы
+
+    return team_names  # Возвращаем список команд\

@@ -1,7 +1,7 @@
+from manager.logic.dota.match_data import get_match_data
 from manager.logic.tournaments.draw import worldcup_system_draw
 from manager.logic.tournaments.invites import invites
-from manager.logic.dota.game import  dota_simulation
-
+from manager.logic.dota.game import dota_simulation_for_bots, db_name
 
 import random
 database = 'test_database.db'
@@ -50,7 +50,8 @@ class WorldCupSystemTournamentGroupStage:
             for match in matches:
                 team1, team2 = match
                 if team1 not in played_teams and team2 not in played_teams:  # Проверяем, играли ли команды в этом туре
-                    winner = dota_simulation(team1, team2, database)
+                    skills = get_match_data(team1, team2, db_name)
+                    winner = dota_simulation_for_bots(team1, team2, skills)
                     winners.append(f"Победитель пары {team1} : {team2} - {winner}")
 
 
@@ -158,7 +159,8 @@ class WorldCupSystemTournamentPlayoff:
         print("\nРезультаты четвертьфинала:")
         self.quarter_finals_winners = []
         for match in self.quarter_finals_pairs:
-            winner = dota_simulation(match[0], match[1], database)
+            skills = get_match_data(match[0], match[1], db_name)
+            winner = dota_simulation_for_bots(match[0], match[1], skills)
             self.quarter_finals_winners.append(winner)
             print(f"Победитель: {winner}")
 
@@ -178,7 +180,8 @@ class WorldCupSystemTournamentPlayoff:
         print("\nРезультаты полуфинала:")
         self.semi_finals_winners = []
         for match in self.semi_finals_pairs:
-            winner = dota_simulation(match[0], match[1], database)
+            skills = get_match_data(match[0], match[1], database)
+            winner = dota_simulation_for_bots(match[0], match[1], skills)
             self.semi_finals_winners.append(winner)
             print(f"Победитель: {winner}")
 
@@ -190,8 +193,8 @@ class WorldCupSystemTournamentPlayoff:
         print("\nФинал:")
         final_match = (self.semi_finals_winners[0], self.semi_finals_winners[1])
         print(f"{final_match[0]} vs {final_match[1]}")
-
-        winner = dota_simulation(final_match[0], final_match[1], database)
+        skills = get_match_data(final_match[0], final_match[1], db_name)
+        winner = dota_simulation_for_bots(final_match[0], final_match[1], skills)
         print(f"Победитель финала: {winner}")
         print(f"Поздравляем {winner} с победой в турнире!")
 
