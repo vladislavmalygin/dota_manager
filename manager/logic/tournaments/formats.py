@@ -1,10 +1,12 @@
-from manager.logic.dota.match_data import get_match_data
+from manager.logic.dota.match_data import get_match_data, get_teams_with_player_yes
 from manager.logic.tournaments.draw import worldcup_system_draw
 from manager.logic.tournaments.invites import invites
-from manager.logic.dota.game import dota_simulation_for_bots, db_name
+from manager.logic.dota.game import dota_simulation_for_bots, dota_simulation
 
 import random
 database = 'test_database.db'
+
+import random
 
 class WorldCupSystemTournamentGroupStage:
     def __init__(self, database, tournament_id):
@@ -14,6 +16,7 @@ class WorldCupSystemTournamentGroupStage:
         self.groups = self.worldcup_system_draw()
         self.tables = {f"Группа {i + 1}": {team: 0 for team in group} for i, group in enumerate(self.groups)}  # Таблицы очков для каждой группы
         self.current_round = 0
+
     def invites(self):
         """Получить список команд из базы данных."""
         return invites(self.database)
@@ -41,29 +44,33 @@ class WorldCupSystemTournamentGroupStage:
         winners = []
         matches_per_group = self.generate_matches()
 
-        print(f"\nРезультаты тура {round_number}:")
+        print(f"nРезультаты тура {round_number}:")
         for i, (matches, group) in enumerate(zip(matches_per_group, self.groups)):
             group_name = f"Группа {i + 1}"
-            print(f"\nМатчи в {group_name}:")
+            print(f"nМатчи в {group_name}:")
             played_teams = set()  # Множество для отслеживания сыгравших команд
 
             for match in matches:
                 team1, team2 = match
                 if team1 not in played_teams and team2 not in played_teams:  # Проверяем, играли ли команды в этом туре
-                    skills = get_match_data(team1, team2, db_name)
-                    winner = dota_simulation_for_bots(team1, team2, skills)
-                    winners.append(f"Победитель пары {team1} : {team2} - {winner}")
+                    skills = get_match_data(team1, team2, self.database)
 
+                    # Проверяем, является ли одна из команд командой под управлением игрока
+                    player_teams = get_teams_with_player_yes(self.database)
+                    if team1 in player_teams or team2 in player_teams:
+                        winner = dota_simulation(team1, team2, skills)  # Используем симуляцию для игроков
+                    else:
+                        winner = dota_simulation_for_bots(team1, team2, skills)  # Используем симуляцию для ботов
+
+                    winners.append(f"Победитель пары {team1} : {team2} - {winner}")
 
                     if winner == team1:
                         self.tables[group_name][team1] += 3
                     else:
                         self.tables[group_name][team2] += 3
 
-
                     played_teams.add(team1)
                     played_teams.add(team2)
-
 
                     print(f"{team1} : {team2} - Победитель: {winner}")
 
@@ -73,14 +80,15 @@ class WorldCupSystemTournamentGroupStage:
         self.current_round += 1
 
         # Печатаем таблицы после текущего тура
-        print("\nТаблицы после текущего тура:")
+        print("nТаблицы после текущего тура:")
         tables = self.get_table()
         for group, table in tables.items():
-            print(f"\n{group}:")
-            for team, points in table:
+            print(f"n{group}:")
+            for team, points in table.items():
                 print(f"{team}: {points} очков")
 
         return winners
+
 
     def get_table(self):
         """Возвращает таблицы очков для всех групп."""
@@ -159,7 +167,7 @@ class WorldCupSystemTournamentPlayoff:
         print("\nРезультаты четвертьфинала:")
         self.quarter_finals_winners = []
         for match in self.quarter_finals_pairs:
-            skills = get_match_data(match[0], match[1], db_name)
+            skills = get_match_data(match[0], match[1], database)
             winner = dota_simulation_for_bots(match[0], match[1], skills)
             self.quarter_finals_winners.append(winner)
             print(f"Победитель: {winner}")
@@ -193,7 +201,7 @@ class WorldCupSystemTournamentPlayoff:
         print("\nФинал:")
         final_match = (self.semi_finals_winners[0], self.semi_finals_winners[1])
         print(f"{final_match[0]} vs {final_match[1]}")
-        skills = get_match_data(final_match[0], final_match[1], db_name)
+        skills = get_match_data(final_match[0], final_match[1], database)
         winner = dota_simulation_for_bots(final_match[0], final_match[1], skills)
         print(f"Победитель финала: {winner}")
         print(f"Поздравляем {winner} с победой в турнире!")
