@@ -1,35 +1,20 @@
-import time
 import random
 
-from manager.logic.dota.match_data import get_match_data
-
+from logic.dota.match_data import get_match_data
 
 dispersion = 200
 
-def dota_simulation(team1, team2, skills):
-    # Получаем данные о командах
 
-    # Инициализация токенов
-    tokens = {team1: 0, team2: 0}
-    synergy = 1  # Сыгранность (пока равна 1)
-
-    # Симуляция ранней игры
+def _early_game(team1, team2, skills, tokens):
+    synergy = 1
     for tick in range(12):
-        print(f"Минута {tick + 1}")
-        time.sleep(5)  # Интервал в 5 секунд
-        # Мид линия (тик равен 2 минутам)
         if tick % 2 == 0:
-            if (random.randint(0, dispersion) +
-                    skills['team1']['team1_mid']['micro_skills'] >
-                    random.randint(0, dispersion) +
-                    skills['team2']['team2_mid']['micro_skills']):
-                print(f"{team1} получает преимущество на миду! Счёт: {tokens[team1]} - {tokens[team2]}")
+            if (random.randint(0, dispersion) + skills['team1']['team1_mid']['micro_skills'] >
+                    random.randint(0, dispersion) + skills['team2']['team2_mid']['micro_skills']):
                 tokens[team1] += 1
             else:
                 tokens[team2] += 1
-                print(f"{team2} получает преимущество на миду! Счёт: {tokens[team1]} - {tokens[team2]}")
 
-        # Топ линия (тик равен 3 минутам)
         if tick % 3 == 0:
             if (random.randint(0, dispersion) +
                     skills['team1']['team1_offlane']['micro_skills'] * synergy +
@@ -37,13 +22,10 @@ def dota_simulation(team1, team2, skills):
                     random.randint(0, dispersion) +
                     skills['team2']['team2_carry']['micro_skills'] * synergy +
                     skills['team2']['team2_full_support']['micro_skills'] * synergy):
-                print(f"{team1} получает преимущество на топе! Счёт: {tokens[team1]} - {tokens[team2]}")
                 tokens[team1] += 2
             else:
-                print(f"{team2} получает преимущество на топе! Счёт: {tokens[team1]} - {tokens[team2]}")
                 tokens[team2] += 2
 
-        # Бот линия (тик равен 3 минутам)
         if tick % 3 == 0:
             if (random.randint(0, dispersion) +
                     skills['team1']['team1_carry']['micro_skills'] * synergy +
@@ -51,182 +33,69 @@ def dota_simulation(team1, team2, skills):
                     random.randint(0, dispersion) +
                     skills['team2']['team2_offlane']['micro_skills'] * synergy +
                     skills['team2']['team2_partial_support']['micro_skills'] * synergy):
-                print(f"{team1} получает преимущество на боте! Счёт: {tokens[team1]} - {tokens[team2]}")
-                tokens[team2] += 2
-            else:
-                print(f"{team2} получает преимущество на боте! Счёт: {tokens[team1]} - {tokens[team2]}")
                 tokens[team1] += 2
+            else:
+                tokens[team2] += 2
 
-    print("Результаты ранней игры:")
-    print(f"Токены команды {team1}: {tokens[team1]}")
-    print(f"Токены команды {team2}: {tokens[team2]}")
 
-    print("Мидгейм начался")
-    # Симуляция мидгейма
-    mid_game_ticks = 3
-    for tick in range(mid_game_ticks):
-        time.sleep(5)  # Интервал в 5 секунд
-        # Определяем параметры для команды в зависимости от тика
-        if tick == 0:
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_partial_support']['micro_skills'],
-                skills['team1']['team1_partial_support']['macro_skills'],
-                skills['team1']['team1_full_support']['micro_skills'],
-                skills['team1']['team1_full_support']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_partial_support']['micro_skills'],
-                skills['team2']['team2_partial_support']['macro_skills'],
-                skills['team2']['team2_full_support']['micro_skills'],
-                skills['team2']['team2_full_support']['macro_skills']
-            ]
-        elif tick == 1:
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_partial_support']['micro_skills'],
-                skills['team1']['team1_partial_support']['macro_skills'],
-                skills['team1']['team1_offlane']['micro_skills'],
-                skills['team1']['team1_offlane']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_partial_support']['micro_skills'],
-                skills['team2']['team2_partial_support']['macro_skills'],
-                skills['team2']['team2_offlane']['micro_skills'],
-                skills['team2']['team2_offlane']['macro_skills']
-            ]
-        else:  # tick == 2
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_carry']['micro_skills'],
-                skills['team1']['team1_carry']['macro_skills'],
-                skills['team1']['team1_offlane']['micro_skills'],
-                skills['team1']['team1_offlane']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_carry']['micro_skills'],
-                skills['team2']['team2_carry']['macro_skills'],
-                skills['team2']['team2_offlane']['micro_skills'],
-                skills['team2']['team2_offlane']['macro_skills']
-            ]
-
-        roll_team1 = random.randint(0, dispersion) + sum(skills_team1)
-        roll_team2 = random.randint(0, dispersion) + sum(skills_team2)
-
-        # Определяем победителя в текущем тике
-        if roll_team1 > roll_team2:
+def _mid_game(team1, team2, skills, tokens):
+    tick_params = [
+        (['team1_mid', 'team1_partial_support', 'team1_full_support'],
+         ['team2_mid', 'team2_partial_support', 'team2_full_support']),
+        (['team1_mid', 'team1_partial_support', 'team1_offlane'],
+         ['team2_mid', 'team2_partial_support', 'team2_offlane']),
+        (['team1_mid', 'team1_carry', 'team1_offlane'],
+         ['team2_mid', 'team2_carry', 'team2_offlane']),
+    ]
+    for t1_roles, t2_roles in tick_params:
+        s1 = sum(skills['team1'][r][k] for r in t1_roles for k in ('macro_skills', 'micro_skills'))
+        s2 = sum(skills['team2'][r][k] for r in t2_roles for k in ('macro_skills', 'micro_skills'))
+        if random.randint(0, dispersion) + s1 > random.randint(0, dispersion) + s2:
             tokens[team1] += 4
-            print(f"{team1} выигрывает тимфайт! Счёт: {tokens[team1]} - {tokens[team2]}")
         else:
             tokens[team2] += 4
-            print(f"{team2} выигрывает тимфайт! Счёт: {tokens[team1]} - {tokens[team2]}")
+        if abs(tokens[team1] - tokens[team2]) >= 24:
+            return
 
-        # Проверяем условие окончания игры
-        if abs(tokens[team1] - tokens[team2]) >= 18:
-            winner = team1 if tokens[team1] > tokens[team2] else team2
-            print(f"Игра закончена! Победила команда: {winner} со счётом {tokens[winner]}.")
-            return winner
 
-    print("Результаты мидгейма:")
-    print(f"Токены команды {team1}: {tokens[team1]}")
-    print(f"Токены команды {team2}: {tokens[team2]}")
-
-    ley_game_time = 30  # Начальная минута лейтгейма
-    events = [
-        f"забрала Рошана.",
-        f"сломала бараки.",
-        f"убила кора противника без байбека.",
-        f"совершила отличное командное действие.",
-        f"реализует смок-ганг трон.",
-        f"убивает героев противника."
-    ]
-
-    # Создаем отдельные списки событий для каждой команды
-    team1_events = [f"{team1} {event}" for event in events]
-    team2_events = [f"{team2} {event}" for event in events]
+def _late_game(team1, team2, skills, tokens):
+    all_roles_t1 = ['team1_mid', 'team1_carry', 'team1_offlane', 'team1_partial_support', 'team1_full_support']
+    all_roles_t2 = ['team2_mid', 'team2_carry', 'team2_offlane', 'team2_partial_support', 'team2_full_support']
 
     while abs(tokens[team1] - tokens[team2]) < 24:
-        print(f"{ley_game_time}-я минута.")  # Вывод текущей минуты
-        time.sleep(5)  # Интервал в 5 секунд
-
-        # Генерация бросков для обеих команд
-        roll_team1 = (
-                random.randint(0, dispersion) +
-                skills['team1']['team1_mid']['macro_skills'] +
-                skills['team1']['team1_mid']['micro_skills'] +
-                skills['team1']['team1_carry']['macro_skills'] +
-                skills['team1']['team1_carry']['micro_skills'] +
-                skills['team1']['team1_offlane']['micro_skills'] +
-                skills['team1']['team1_offlane']['macro_skills'] +
-                skills['team1']['team1_partial_support']['micro_skills'] +
-                skills['team1']['team1_partial_support']['macro_skills'] +
-                skills['team1']['team1_full_support']['micro_skills'] +
-                skills['team1']['team1_full_support']['macro_skills']
-        )
-
-        roll_team2 = (
-                random.randint(0, dispersion) +
-                skills['team2']['team2_mid']['macro_skills'] +
-                skills['team2']['team2_mid']['micro_skills'] +
-                skills['team2']['team2_carry']['macro_skills'] +
-                skills['team2']['team2_carry']['micro_skills'] +
-                skills['team2']['team2_offlane']['micro_skills'] +
-                skills['team2']['team2_offlane']['macro_skills'] +
-                skills['team2']['team2_partial_support']['micro_skills'] +
-                skills['team2']['team2_partial_support']['macro_skills'] +
-                skills['team2']['team2_full_support']['micro_skills'] +
-                skills['team2']['team2_full_support']['macro_skills']
-        )
-
-        # Определяем победителя в текущем тике
-        if roll_team1 > roll_team2:
+        s1 = sum(skills['team1'][r][k] for r in all_roles_t1 for k in ('macro_skills', 'micro_skills'))
+        s2 = sum(skills['team2'][r][k] for r in all_roles_t2 for k in ('macro_skills', 'micro_skills'))
+        if random.randint(0, dispersion) + s1 > random.randint(0, dispersion) + s2:
             tokens[team1] += 8
-            event_message = random.choice(team1_events)
-            print(f"{team1} выиграла тик! {event_message}")
-            print(f"Счёт: {tokens[team1]} - {tokens[team2]}")
         else:
             tokens[team2] += 8
-            event_message = random.choice(team2_events)
-            print(f"{team2} выиграла тик! {event_message}")
-            print(f"Счёт: {tokens[team1]} - {tokens[team2]}")
-
-        ley_game_time += 5  # Увеличиваем минуту на 5
-
-    # Определяем победителя
-    winner = team1 if tokens[team1] > tokens[team2] else team2
-    print(f"Игра закончена! Победила команда: {winner} со счётом {tokens[winner]}.")
-    return winner
-
 
 
 def dota_simulation_for_bots(team1, team2, skills):
-
-    # Инициализация токенов
     tokens = {team1: 0, team2: 0}
-    synergy = 1  # Сыгранность (пока равна 1)
+    _early_game(team1, team2, skills, tokens)
+    _mid_game(team1, team2, skills, tokens)
+    _late_game(team1, team2, skills, tokens)
+    return team1 if tokens[team1] > tokens[team2] else team2
 
-    # Симуляция ранней игры
+
+def dota_simulation(team1, team2, skills):
+    """Версия с выводом для матчей игрока (без задержек)."""
+    tokens = {team1: 0, team2: 0}
+    synergy = 1
+
+    print(f"\n=== МАТЧ: {team1} vs {team2} ===")
+
     for tick in range(12):
-        # Мид линия (тик равен 2 минутам)
         if tick % 2 == 0:
-            if (random.randint(0, dispersion) +
-                    skills['team1']['team1_mid']['micro_skills'] >
-                    random.randint(0, dispersion) +
-                    skills['team2']['team2_mid']['micro_skills']):
+            if (random.randint(0, dispersion) + skills['team1']['team1_mid']['micro_skills'] >
+                    random.randint(0, dispersion) + skills['team2']['team2_mid']['micro_skills']):
                 tokens[team1] += 1
+                print(f"  Мид: {team1} получает преимущество [{tokens[team1]}:{tokens[team2]}]")
             else:
                 tokens[team2] += 1
+                print(f"  Мид: {team2} получает преимущество [{tokens[team1]}:{tokens[team2]}]")
 
-        # Топ линия (тик равен 3 минутам)
         if tick % 3 == 0:
             if (random.randint(0, dispersion) +
                     skills['team1']['team1_offlane']['micro_skills'] * synergy +
@@ -235,10 +104,11 @@ def dota_simulation_for_bots(team1, team2, skills):
                     skills['team2']['team2_carry']['micro_skills'] * synergy +
                     skills['team2']['team2_full_support']['micro_skills'] * synergy):
                 tokens[team1] += 2
+                print(f"  Топ: {team1} выигрывает лайн [{tokens[team1]}:{tokens[team2]}]")
             else:
                 tokens[team2] += 2
+                print(f"  Топ: {team2} выигрывает лайн [{tokens[team1]}:{tokens[team2]}]")
 
-        # Бот линия (тик равен 3 минутам)
         if tick % 3 == 0:
             if (random.randint(0, dispersion) +
                     skills['team1']['team1_carry']['micro_skills'] * synergy +
@@ -246,124 +116,52 @@ def dota_simulation_for_bots(team1, team2, skills):
                     random.randint(0, dispersion) +
                     skills['team2']['team2_offlane']['micro_skills'] * synergy +
                     skills['team2']['team2_partial_support']['micro_skills'] * synergy):
-                tokens[team2] += 2
-            else:
                 tokens[team1] += 2
+                print(f"  Бот: {team1} выигрывает лайн [{tokens[team1]}:{tokens[team2]}]")
+            else:
+                tokens[team2] += 2
+                print(f"  Бот: {team2} выигрывает лайн [{tokens[team1]}:{tokens[team2]}]")
 
-    mid_game_ticks = 3
+    print(f"После лайнстейджа: {team1}={tokens[team1]}, {team2}={tokens[team2]}")
 
-    for tick in range(mid_game_ticks):
-        # Определяем параметры для команды в зависимости от тика
-        if tick == 0:
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_partial_support']['micro_skills'],
-                skills['team1']['team1_partial_support']['macro_skills'],
-                skills['team1']['team1_full_support']['micro_skills'],
-                skills['team1']['team1_full_support']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_partial_support']['micro_skills'],
-                skills['team2']['team2_partial_support']['macro_skills'],
-                skills['team2']['team2_full_support']['micro_skills'],
-                skills['team2']['team2_full_support']['macro_skills']
-            ]
-        elif tick == 1:
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_partial_support']['micro_skills'],
-                skills['team1']['team1_partial_support']['macro_skills'],
-                skills['team1']['team1_offlane']['micro_skills'],
-                skills['team1']['team1_offlane']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_partial_support']['micro_skills'],
-                skills['team2']['team2_partial_support']['macro_skills'],
-                skills['team2']['team2_offlane']['micro_skills'],
-                skills['team2']['team2_offlane']['macro_skills']
-            ]
-        else:  # tick == 2
-            skills_team1 = [
-                skills['team1']['team1_mid']['macro_skills'],
-                skills['team1']['team1_mid']['micro_skills'],
-                skills['team1']['team1_carry']['micro_skills'],
-                skills['team1']['team1_carry']['macro_skills'],
-                skills['team1']['team1_offlane']['micro_skills'],
-                skills['team1']['team1_offlane']['macro_skills']
-            ]
-            skills_team2 = [
-                skills['team2']['team2_mid']['macro_skills'],
-                skills['team2']['team2_mid']['micro_skills'],
-                skills['team2']['team2_carry']['micro_skills'],
-                skills['team2']['team2_carry']['macro_skills'],
-                skills['team2']['team2_offlane']['micro_skills'],
-                skills['team2']['team2_offlane']['macro_skills']
-            ]
-
-        roll_team1 = random.randint(0, dispersion) + sum(skills_team1)
-        roll_team2 = random.randint(0, dispersion) + sum(skills_team2)
-
-        # Определяем победителя в текущем тике
-        if roll_team1 > roll_team2:
+    tick_params = [
+        (['team1_mid', 'team1_partial_support', 'team1_full_support'],
+         ['team2_mid', 'team2_partial_support', 'team2_full_support']),
+        (['team1_mid', 'team1_partial_support', 'team1_offlane'],
+         ['team2_mid', 'team2_partial_support', 'team2_offlane']),
+        (['team1_mid', 'team1_carry', 'team1_offlane'],
+         ['team2_mid', 'team2_carry', 'team2_offlane']),
+    ]
+    for t1_roles, t2_roles in tick_params:
+        s1 = sum(skills['team1'][r][k] for r in t1_roles for k in ('macro_skills', 'micro_skills'))
+        s2 = sum(skills['team2'][r][k] for r in t2_roles for k in ('macro_skills', 'micro_skills'))
+        if random.randint(0, dispersion) + s1 > random.randint(0, dispersion) + s2:
             tokens[team1] += 4
+            print(f"  Тимфайт: {team1} выигрывает [{tokens[team1]}:{tokens[team2]}]")
         else:
             tokens[team2] += 4
-        # Проверяем условие окончания игры
+            print(f"  Тимфайт: {team2} выигрывает [{tokens[team1]}:{tokens[team2]}]")
         if abs(tokens[team1] - tokens[team2]) >= 24:
             winner = team1 if tokens[team1] > tokens[team2] else team2
-            print(f"Игра закончена! Победила команда: {winner} со счётом {tokens[winner]}.")
+            print(f"  Ранняя победа: {winner}!")
             return winner
 
-    while abs(tokens[team1] - tokens[team2])  < 24:
+    all_roles_t1 = ['team1_mid', 'team1_carry', 'team1_offlane', 'team1_partial_support', 'team1_full_support']
+    all_roles_t2 = ['team2_mid', 'team2_carry', 'team2_offlane', 'team2_partial_support', 'team2_full_support']
+    events = ["забрала Рошана", "сломала бараки", "убила кора", "совершила смок-ганг"]
+    minute = 30
 
-        # Генерация бросков для обеих команд
-        roll_team1 = (
-                random.randint(0, dispersion) +
-                skills['team1']['team1_mid']['macro_skills'] +
-                skills['team1']['team1_mid']['micro_skills'] +
-                skills['team1']['team1_carry']['macro_skills'] +
-                skills['team1']['team1_carry']['micro_skills'] +
-                skills['team1']['team1_offlane']['micro_skills'] +
-                skills['team1']['team1_offlane']['macro_skills'] +
-                skills['team1']['team1_partial_support']['micro_skills'] +
-                skills['team1']['team1_partial_support']['macro_skills'] +
-                skills['team1']['team1_full_support']['micro_skills'] +
-                skills['team1']['team1_full_support']['macro_skills']
-        )
-
-        roll_team2 = (
-                random.randint(0, dispersion) +
-                skills['team2']['team2_mid']['macro_skills'] +
-                skills['team2']['team2_mid']['micro_skills'] +
-                skills['team2']['team2_carry']['macro_skills'] +
-                skills['team2']['team2_carry']['micro_skills'] +
-                skills['team2']['team2_offlane']['micro_skills'] +
-                skills['team2']['team2_offlane']['macro_skills'] +
-                skills['team2']['team2_partial_support']['micro_skills'] +
-                skills['team2']['team2_partial_support']['macro_skills'] +
-                skills['team2']['team2_full_support']['micro_skills'] +
-                skills['team2']['team2_full_support']['macro_skills']
-        )
-
-        # Определяем победителя в текущем тике
-        if roll_team1 > roll_team2:
+    while abs(tokens[team1] - tokens[team2]) < 24:
+        s1 = sum(skills['team1'][r][k] for r in all_roles_t1 for k in ('macro_skills', 'micro_skills'))
+        s2 = sum(skills['team2'][r][k] for r in all_roles_t2 for k in ('macro_skills', 'micro_skills'))
+        if random.randint(0, dispersion) + s1 > random.randint(0, dispersion) + s2:
             tokens[team1] += 8
+            print(f"  {minute}мин: {team1} {random.choice(events)} [{tokens[team1]}:{tokens[team2]}]")
         else:
             tokens[team2] += 8
+            print(f"  {minute}мин: {team2} {random.choice(events)} [{tokens[team1]}:{tokens[team2]}]")
+        minute += 5
 
-    # Определяем победителя
     winner = team1 if tokens[team1] > tokens[team2] else team2
-    print(f"Игра закончена! Победила команда: {winner} со счётом {tokens[winner]}.")
+    print(f"=== Победитель: {winner} ===\n")
     return winner
-
-team2 = 'Aurora'
-team1 = 'Team Spirit'
-db_name = 'test_database.db'
-skills = get_match_data(team1, team2,  db_name)
-dota_simulation(team1, team2 , skills)

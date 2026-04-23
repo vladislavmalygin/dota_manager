@@ -11,8 +11,12 @@ from settings import SettingsPopup
 from ingame_interface.inbox import show_message
 from ingame_interface.mixin import show_custom_popup
 from ingame_interface.squad import show_squad_popup
-from ingame_interface.tournaments import TournamentPopup
+from ingame_interface.tournaments import TournamentPopup, TournamentsViewPopup
+from ingame_interface.organization import show_organization_popup
+from ingame_interface.profile import show_profile_popup
+from ingame_interface.transfers import show_transfers_popup
 from logic.tournaments.invites import invites
+from logic.tournaments.runner import ensure_season_tournaments
 
 
 class MainWindow(BoxLayout):
@@ -21,6 +25,9 @@ class MainWindow(BoxLayout):
         self.orientation = 'vertical'
         self.db_name = db_name
         self.popup = popup
+
+        # Ensure all season tournaments exist in this save
+        ensure_season_tournaments(db_name)
 
         self.date_object = self.get_date_from_db(1)
 
@@ -117,29 +124,39 @@ class MainWindow(BoxLayout):
         self.rect_main_area.size = self.main_area.size
 
     def get_next_tournament_date(self):
-        # Получаем дату из базы данных
         date_object = self.get_date_from_db(1)
-
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-
-        query = '''
-            SELECT start_date FROM tournaments
-            WHERE start_date >= ?
-            ORDER BY start_date ASC
-            LIMIT 1
-        '''
-
-        cursor.execute(query, (date_object,))
+        cursor.execute(
+            "SELECT start_date FROM tournaments "
+            "WHERE start_date >= ? AND place1 IS NULL "
+            "ORDER BY start_date ASC LIMIT 1",
+            (date_object,)
+        )
         result = cursor.fetchone()
-
         conn.close()
+        return result[0] if result else None
 
-        if result:
-            return result[0]  # Возвращаем дату следующего турнира
-        return None
+    def _deduct_salaries(self, conn):
+        """Списывает зарплаты игроков с бюджета команды (раз в месяц)."""
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, carry, mid, offlane, partial_support, full_support FROM teams WHERE player = 'yes'")
+        team = cursor.fetchone()
+        if not team:
+            return
+        team_id = team[0]
+        player_ids = [pid for pid in team[1:] if pid]
+        if not player_ids:
+            return
+        placeholders = ','.join('?' * len(player_ids))
+        cursor.execute(f"SELECT COALESCE(SUM(wage), 0) FROM players WHERE id IN ({placeholders})", player_ids)
+        total_wage = cursor.fetchone()[0] or 0
+        if total_wage > 0:
+            cursor.execute("UPDATE teams SET budget = MAX(0, budget - ?) WHERE id = ?", (total_wage, team_id))
+            print(f"Зарплаты списаны: ${total_wage:,}")
 
     def on_next(self, instance):
+        prev_month = self.date_object.month
         self.date_object += timedelta(days=1)
         database = self.db_name
         conn = None
@@ -149,22 +166,21 @@ class MainWindow(BoxLayout):
 
             cursor.execute("UPDATE save SET date = ? WHERE id = 1", (str(self.date_object),))
 
-            # Сохраняем изменения
+            # Ежемесячное списание зарплат (1-го числа каждого месяца)
+            if self.date_object.month != prev_month and self.date_object.day == 1:
+                self._deduct_salaries(conn)
+
             conn.commit()
-            print(f"Дата успешно обновлена на {self.date_object} в базе данных")
 
             cursor.execute("SELECT date FROM save WHERE id = 1")
             updated_date = cursor.fetchone()
 
             if updated_date:
-                updated_date_value = updated_date[0]  # Получаем обновленную дату
+                updated_date_value = updated_date[0]
 
-                # Получаем следующую дату турнира
                 next_tournament_date = self.get_next_tournament_date()
 
-                # Проверяем совпадение дат
                 if next_tournament_date and updated_date_value == next_tournament_date:
-                    # Если даты совпадают, запускаем TournamentPopup
                     self.show_tournament_popup()
 
                 self.today_date_button.text = updated_date_value
@@ -180,32 +196,42 @@ class MainWindow(BoxLayout):
         print(f'Нажата кнопка: {instance.text}')
 
     def on_incoming(self, instance):
-        messages = [
-            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': 'Добро пожаловать!'},
-            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Рады приветстовать вас на посту менеджера'
-                                                                         f' команды {self.get_team_name()}! '},
-            {'date': '2023-09-20', 'author': 'Владелец команды', 'text': f'Впереди турнир {self.get_next_tournament()} '
-                                                                         f'Желаем удачи! '},
-        ]
+        messages = self._load_messages()
+        if not messages:
+            messages = [
+                {'date': str(self.date_object), 'author': 'Система',
+                 'text': 'Нет новых сообщений.'},
+            ]
         show_message(messages)
+
+    def _load_messages(self):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute("SELECT date, author, text FROM messages ORDER BY id DESC")
+            rows = cursor.fetchall()
+            conn.close()
+            return [{'date': r[0], 'author': r[1], 'text': r[2]} for r in rows]
+        except Exception:
+            return []
 
     def on_roster(self, instance):
         show_squad_popup(self.db_name)
 
     def on_organization(self, instance):
-        show_custom_popup()
+        show_organization_popup(self.db_name)
 
     def on_tournaments(self, instance):
-        show_custom_popup()
+        TournamentsViewPopup(self.db_name).open()
 
     def on_transfers(self, instance):
-        show_custom_popup()
+        show_transfers_popup(self.db_name)
 
     def on_settings(self, instance):
         SettingsPopup().open()
 
     def on_profile(self, instance):
-        show_custom_popup()
+        show_profile_popup(self.db_name)
 
     def on_main_menu(self, instance):
         content = BoxLayout(orientation='vertical')
@@ -252,27 +278,18 @@ class MainWindow(BoxLayout):
             return None
 
     def get_next_tournament(self):
-        # Получаем дату из базы данных
         date_object = self.get_date_from_db(1)
-
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-
-        query = '''
-            SELECT name FROM tournaments
-            WHERE start_date >= ?
-            ORDER BY start_date ASC
-            LIMIT 1
-        '''
-
-        cursor.execute(query, (date_object,))
+        cursor.execute(
+            "SELECT name FROM tournaments "
+            "WHERE start_date >= ? AND place1 IS NULL "
+            "ORDER BY start_date ASC LIMIT 1",
+            (date_object,)
+        )
         result = cursor.fetchone()
-
         conn.close()
-
-        if result:
-            return result[0]
-        return None
+        return result[0] if result else "Нет турниров"
 
     def show_tournament_popup(self):
         popup = TournamentPopup(self.db_name)

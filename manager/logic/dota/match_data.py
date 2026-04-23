@@ -45,18 +45,16 @@ def get_match_data(team1, team2, db_name):
 
     # Получаем значения полей micro_skills, macro_skills, soft_skills для каждого игрока
     for role, player_id in player_ids.items():
-        cursor.execute("SELECT micro_skills, macro_skills, soft_skills FROM players WHERE id = ?", (player_id,))
-        player_skills = cursor.fetchone()
-
-        if player_skills:
-            team_key = 'team1' if role.startswith('team1') else 'team2'
-            skills[team_key][role] = {
-                'micro_skills': player_skills[0],
-                'macro_skills': player_skills[1],
-                'soft_skills': player_skills[2]
-            }
-        else:
-            print(f"Игрок с id {player_id} не найден.")
+        team_key = 'team1' if role.startswith('team1') else 'team2'
+        player_skills = None
+        if player_id:
+            cursor.execute("SELECT micro_skills, macro_skills, soft_skills FROM players WHERE id = ?", (player_id,))
+            player_skills = cursor.fetchone()
+        skills[team_key][role] = {
+            'micro_skills': (player_skills[0] or 1) if player_skills else 1,
+            'macro_skills': (player_skills[1] or 1) if player_skills else 1,
+            'soft_skills':  (player_skills[2] or 1) if player_skills else 1,
+        }
 
     # Закрываем соединение с базой данных
     conn.close()

@@ -1,5 +1,5 @@
 import random
-from invites import invites
+from logic.tournaments.invites import invites
 
 
 def worldcup_system_draw(db_name):

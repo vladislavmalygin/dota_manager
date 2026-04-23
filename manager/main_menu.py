@@ -22,35 +22,41 @@ class MainMenu(FloatLayout):
 
         self.bind(size=self._update_rect, pos=self._update_rect)
 
-        # Создаем BoxLayout для кнопок
-        self.box_layout = BoxLayout(orientation='vertical', size_hint=(None, None), size=(400, 400),
-                                    pos_hint={'center_x': 0.5, 'center_y': 0.5})
-
+        # Центральная панель с кнопками (адаптивный размер)
+        self.box_layout = BoxLayout(
+            orientation='vertical',
+            size_hint=(0.32, 0.65),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5},
+            spacing=6,
+        )
         self.add_widget(self.box_layout)
 
-        title = Label(text='Главное меню', font_size=32, size_hint_y=None, height=50, color=(1, 1, 1, 1))
+        title = Label(
+            text='Главное меню', font_size='28sp',
+            size_hint_y=0.22, color=(1, 1, 1, 1),
+        )
         self.box_layout.add_widget(title)
 
-        # Задать фон только для заголовка
         with title.canvas.before:
-            Color(0.2, 0.6, 0.8, 0.7)  # Прозрачный фон
+            Color(0.2, 0.6, 0.8, 0.7)
             self.rect_title = Rectangle(pos=title.pos, size=title.size)
-
         title.bind(size=self._update_title_rect, pos=self._update_title_rect)
 
-        button_color = (0.2, 0.6, 0.8, 0.7)
-
-        # Создание кнопок с заданной высотой
-        buttons = [
-            Button(text='Новая игра', background_color=button_color, size_hint_y=None, height=50, on_press=self.new_game),
-            Button(text='Продолжить игру', background_color=button_color, size_hint_y=None, height=50, on_press=self.continue_game),
-            Button(text='Загрузить игру', background_color=button_color, size_hint_y=None, height=50, on_press=self.load_game),
-            Button(text='Настройки', background_color=button_color, size_hint_y=None, height=50, on_press=self.open_settings),
-            Button(text='Выйти из игры', background_color=button_color, size_hint_y=None, height=50, on_press=self.exit_game)
+        button_color = (0.2, 0.6, 0.8, 0.8)
+        items = [
+            ('Новая игра',       self.new_game),
+            ('Продолжить игру',  self.continue_game),
+            ('Загрузить игру',   self.load_game),
+            ('Настройки',        self.open_settings),
+            ('Выйти из игры',    self.exit_game),
         ]
-
-        for button in buttons:
-            self.box_layout.add_widget(button)
+        for text, handler in items:
+            btn = Button(
+                text=text, background_color=button_color,
+                font_size='15sp', size_hint_y=1,
+                on_press=handler,
+            )
+            self.box_layout.add_widget(btn)
 
     def _update_rect(self, instance, value):
         self.rect.pos = self.pos
