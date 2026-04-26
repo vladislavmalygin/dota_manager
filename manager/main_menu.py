@@ -10,6 +10,7 @@ from new_game import NewGamePopup
 from settings import SettingsPopup
 from load_game import LoadSavePopup
 from continue_game import ContinueLastSavePopup
+from db_editor import open_db_editor
 
 class MainMenu(FloatLayout):
     def __init__(self, **kwargs):  # Исправлено init на __init__
@@ -44,11 +45,12 @@ class MainMenu(FloatLayout):
 
         button_color = (0.2, 0.6, 0.8, 0.8)
         items = [
-            ('Новая игра',       self.new_game),
-            ('Продолжить игру',  self.continue_game),
-            ('Загрузить игру',   self.load_game),
-            ('Настройки',        self.open_settings),
-            ('Выйти из игры',    self.exit_game),
+            ('Новая игра',           self.new_game),
+            ('Продолжить игру',      self.continue_game),
+            ('Загрузить игру',       self.load_game),
+            ('Редактор базы данных', self.open_db_editor),
+            ('Настройки',            self.open_settings),
+            ('Выйти из игры',        self.exit_game),
         ]
         for text, handler in items:
             btn = Button(
@@ -75,8 +77,11 @@ class MainMenu(FloatLayout):
     def load_game(self, instance):
         LoadSavePopup().open()
 
+    def open_db_editor(self, instance):
+        open_db_editor()
+
     def open_settings(self, instance):
-        SettingsPopup().open()  # Открываем окно настроек
+        SettingsPopup().open()
 
     def exit_game(self, instance):
         if hasattr(self, 'conn'):
