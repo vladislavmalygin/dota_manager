@@ -37,7 +37,10 @@ class ProfilePopup(Popup):
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT name, surname, nickname, portrait FROM characters LIMIT 1")
+        cursor.execute(
+            "SELECT name, surname, nickname, portrait, COALESCE(reputation,0) "
+            "FROM characters LIMIT 1"
+        )
         char = cursor.fetchone()
 
         cursor.execute("SELECT name, country, rating FROM teams WHERE player = 'yes'")
@@ -47,16 +50,31 @@ class ProfilePopup(Popup):
         save = cursor.fetchone()
         conn.close()
 
+        _REP_LEVEL = [
+            (0,   'Новичок'),
+            (10,  'Известный'),
+            (25,  'Опытный'),
+            (50,  'Ветеран'),
+            (100, 'Легенда'),
+            (200, 'Икона'),
+        ]
+
         layout.add_widget(self._label("МОЙ ПРОФИЛЬ", font_size=22,
                                        color=(0.4, 0.9, 1.0, 1), height=50))
 
         if char:
-            name, surname, nickname, portrait = char
+            name, surname, nickname, portrait, reputation = char
             if portrait and os.path.exists(portrait):
                 img = Image(source=portrait, size_hint_y=None, height=150)
                 layout.add_widget(img)
 
             layout.add_widget(self._label(f"{name} '{nickname}' {surname}", font_size=20, height=44))
+
+            rep_label = next((l for th, l in reversed(_REP_LEVEL) if reputation >= th), 'Новичок')
+            layout.add_widget(self._label(
+                f"Репутация: {reputation} пт  [{rep_label}]",
+                height=36, color=(1.0, 0.85, 0.25, 1),
+            ))
         else:
             layout.add_widget(self._label("Менеджер", font_size=20, height=44))
 

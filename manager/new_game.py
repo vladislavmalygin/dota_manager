@@ -1,6 +1,7 @@
 import sqlite3
 import shutil
 import os
+import random
 
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -10,6 +11,34 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, RoundedRectangle
 from team_choice import TeamChoicePopup
+
+
+def _randomize_skill_caps(db_name):
+    """Randomize skill_cap only for players that have the default/unset cap."""
+    conn = sqlite3.connect(db_name)
+    cur = conn.cursor()
+    # Only randomize players whose skill_cap matches the migration default (200)
+    # or is NULL — preserves values manually set in DB editor
+    cur.execute(
+        "SELECT id, micro_skills, macro_skills, soft_skills, skill_cap FROM players "
+        "WHERE skill_cap IS NULL OR skill_cap = 200"
+    )
+    players = cur.fetchall()
+    for pid, mi, ma, so, _ in players:
+        mi = mi or 0; ma = ma or 0; so = so or 0
+        current_total = mi + ma + so
+        base = random.choices(
+            [random.randint(150, 200),
+             random.randint(180, 250),
+             random.randint(220, 280),
+             random.randint(260, 300)],
+            weights=[30, 35, 25, 10],
+            k=1
+        )[0]
+        cap = max(current_total + 10, base)
+        cur.execute("UPDATE players SET skill_cap=? WHERE id=?", (cap, pid))
+    conn.commit()
+    conn.close()
 
 
 class NewGamePopup(Popup):
@@ -92,8 +121,41 @@ class NewGamePopup(Popup):
         if not os.path.exists('saves'):
             os.makedirs('saves')
 
-        # Копирование базы данных
+        # Копируем шаблон ПЕРВЫМ — пользовательские правки из DB-редактора сохранятся
         shutil.copy('start_database.db', new_db_name)
+
+        # Миграции запускаем на КОПИИ, не на шаблоне
+        from db_migrate2 import migrate as _m2
+        from db_migrate3 import migrate as _m3
+        from db_migrate4 import migrate as _m4
+        from db_migrate5 import migrate as _m5
+        from db_migrate6 import migrate as _m6
+        from db_migrate7 import migrate as _m7
+        from db_migrate8 import migrate as _m8
+        from db_migrate9  import migrate as _m9
+        from db_migrate15 import migrate as _m15
+        from db_migrate18 import migrate as _m18
+        from db_migrate18_fix import migrate as _m18fix
+        from db_migrate19 import migrate as _m19
+        from db_migrate20 import migrate as _m20
+        from db_fix_orphans import fix as _fix
+        _m2(new_db_name)
+        _m3(new_db_name)
+        _m4(new_db_name)
+        _m5(new_db_name)
+        _m6(new_db_name)
+        _m7(new_db_name)
+        _m8(new_db_name)
+        _m9(new_db_name)
+        _m15(new_db_name)
+        _m18(new_db_name)
+        _m18fix(new_db_name)
+        _m19(new_db_name)
+        _m20(new_db_name)
+        _fix(new_db_name)
+
+        # Рандомизация skill_cap для новых игроков (пропускаем у кого уже задано)
+        _randomize_skill_caps(new_db_name)
 
         # Сохранение персонажа в новую базу данных
         conn = sqlite3.connect(new_db_name)

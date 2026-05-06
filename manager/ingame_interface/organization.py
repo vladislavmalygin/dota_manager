@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import date as _date
 
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
@@ -7,10 +8,14 @@ from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 
+_BOOTCAMP_COOLDOWN_DAYS = 30
+
+
 
 class OrganizationPopup(Popup):
     def __init__(self, db_name, **kwargs):
         super().__init__(**kwargs)
+        self.db_name = db_name
         self.title = ""
         self.size_hint = (0.85, 0.85)
         self.background_color = (1, 1, 1, 0)
@@ -105,7 +110,133 @@ class OrganizationPopup(Popup):
             f"(после выплаты: ${budget - total_wage:,})"
         ))
 
+        # Loan info
+        loan_row = cursor.execute(
+            "SELECT COALESCE(loan_amount,0), COALESCE(loan_monthly,0) FROM teams WHERE id=?",
+            (team_id,)
+        ).fetchone()
+        if loan_row and loan_row[0] > 0:
+            grid.add_widget(self._row(
+                f"  💳 Долг: ${loan_row[0]:,}  (погашение: ${loan_row[1]:,}/мес)",
+                height=36,
+            ))
+
+        # Check bootcamp cooldown
+        bootcamp_days_left = 0
+        try:
+            conn2 = sqlite3.connect(db_name)
+            gd_row = conn2.execute("SELECT date FROM save WHERE id=1").fetchone()
+            lbd_row = conn2.execute(
+                "SELECT last_bootcamp_date FROM teams WHERE id=?", (team_id,)
+            ).fetchone()
+            conn2.close()
+            if gd_row and lbd_row and lbd_row[0]:
+                game_dt = _date.fromisoformat(gd_row[0])
+                last_bc = _date.fromisoformat(lbd_row[0])
+                days_since = (game_dt - last_bc).days
+                bootcamp_days_left = max(0, _BOOTCAMP_COOLDOWN_DAYS - days_since)
+        except Exception:
+            pass
+
         conn.close()
+
+        # ── Actions ──────────────────────────────────────────────
+        grid.add_widget(self._header("Действия"))
+
+        # Bootcamp
+        if bootcamp_days_left > 0:
+            grid.add_widget(Label(
+                text=f'⛺ Буткемп недоступен — кулдаун {bootcamp_days_left} дн.',
+                color=(0.6, 0.6, 0.6, 1), size_hint_y=None, height=36,
+                halign='center', valign='middle',
+            ))
+        for cost, coh_gain, morale_gain, label in [
+            (15_000, 10, 0, '⛺ Буткемп лёгкий  ($15,000 → +10 сыгранности)'),
+            (25_000, 15, 1, '⛺ Буткемп серьёзный  ($25,000 → +15 сыгр. +1 мораль)'),
+        ]:
+            can = budget >= cost and bootcamp_days_left == 0
+            btn = Button(
+                text=label, size_hint_y=None, height=50,
+                background_color=(0.15, 0.45, 0.20, 1) if can else (0.35, 0.35, 0.35, 1),
+                background_normal='',
+                disabled=not can,
+            )
+            btn.bind(on_press=lambda _, db=db_name, tid=team_id, c=cost,
+                     cg=coh_gain, mg=morale_gain: _do_bootcamp(db, tid, c, cg, mg, self))
+            grid.add_widget(btn)
+
+        # Loan button — only if budget < 2 months wages
+        if total_wage > 0 and budget < total_wage * 2:
+            loan_btn = Button(
+                text='💳 Взять кредит  ($50,000 / погашение $10,000×6 мес)',
+                size_hint_y=None, height=50,
+                background_color=(0.55, 0.35, 0.08, 1), background_normal='',
+            )
+            loan_btn.bind(on_press=lambda _, db=db_name, tid=team_id: _do_loan(db, tid, self))
+            grid.add_widget(loan_btn)
+
+
+def _do_bootcamp(db_name, team_id, cost, coh_gain, morale_gain, popup):
+    from kivy.uix.popup import Popup
+    from kivy.uix.label import Label
+    conn = sqlite3.connect(db_name)
+    budget = conn.execute("SELECT COALESCE(budget,0) FROM teams WHERE id=?", (team_id,)).fetchone()[0]
+    if budget < cost:
+        conn.close()
+        Popup(content=Label(text='Недостаточно средств'), size_hint=(0.4, 0.22)).open()
+        return
+    gd_row = conn.execute("SELECT date FROM save WHERE id=1").fetchone()
+    game_date_str = gd_row[0] if gd_row else None
+    conn.execute(
+        "UPDATE teams SET budget=budget-?, cohesion=MIN(100,COALESCE(cohesion,0)+?), "
+        "last_bootcamp_date=? WHERE id=?",
+        (cost, coh_gain, game_date_str, team_id),
+    )
+    if morale_gain > 0:
+        slots = conn.execute(
+            "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+            (team_id,)
+        ).fetchone() or ()
+        for pid in slots:
+            if pid:
+                conn.execute(
+                    "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+?) WHERE id=?",
+                    (morale_gain, pid)
+                )
+    conn.execute(
+        "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+        (f"Буткемп проведён: +{coh_gain} сыгранности"
+         + (f", +{morale_gain} мораль" if morale_gain else "") +
+         f". Стоимость: −${cost:,}", "Организация"),
+    )
+    conn.commit(); conn.close()
+    popup.dismiss()
+    show_organization_popup(db_name)
+
+
+def _do_loan(db_name, team_id, popup):
+    from kivy.uix.popup import Popup
+    from kivy.uix.label import Label
+    conn = sqlite3.connect(db_name)
+    existing = (conn.execute(
+        "SELECT COALESCE(loan_amount,0) FROM teams WHERE id=?", (team_id,)
+    ).fetchone() or (0,))[0]
+    if existing > 0:
+        conn.close()
+        Popup(content=Label(text='Уже есть непогашенный кредит', halign='center'),
+              size_hint=(0.45, 0.22)).open()
+        return
+    conn.execute(
+        "UPDATE teams SET budget=budget+50000, loan_amount=50000, loan_monthly=10000 WHERE id=?",
+        (team_id,)
+    )
+    conn.execute(
+        "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+        ("Кредит получен: +$50,000. Погашение: $10,000/мес × 6.", "Финансы"),
+    )
+    conn.commit(); conn.close()
+    popup.dismiss()
+    show_organization_popup(db_name)
 
 
 def show_organization_popup(db_name):

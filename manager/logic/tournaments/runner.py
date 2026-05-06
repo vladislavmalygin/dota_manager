@@ -26,7 +26,7 @@ import random
 
 from logic.dota.match_data import get_match_data, get_teams_with_player_yes
 from logic.dota.game import dota_simulation_for_bots, dota_simulation_logged
-from logic.tournaments.invites import invites
+from logic.tournaments.invites import invites, invites_with_events, get_non_qualified_teams
 from logic.tournaments.prizepool import get_prizepool_worldcup_system
 from logic.tournaments.rating import get_ratingpool_worldcup_system
 
@@ -68,11 +68,16 @@ def _play_one(t1, t2, db_name):
     return dota_simulation_for_bots(t1, t2, skills) if skills else random.choice([t1, t2])
 
 
-def _play_one_logged(t1, t2, db_name):
-    skills = get_match_data(t1, t2, db_name)
+def _play_one_logged(t1, t2, db_name, hero_picks=None):
+    skills = get_match_data(t1, t2, db_name, hero_picks=hero_picks)
     if not skills:
-        return random.choice([t1, t2]), [], []
+        return random.choice([t1, t2]), [], [], {}
     return dota_simulation_logged(t1, t2, skills)
+
+
+def replay_match_with_heroes(t1, t2, db_name, hero_picks):
+    """Re-run a logged match with hero picks applied. Returns (winner, lines, snaps, stats)."""
+    return _play_one_logged(t1, t2, db_name, hero_picks=hero_picks)
 
 
 def _play_bo(t1, t2, db_name, n):
@@ -114,7 +119,7 @@ def _play_bo2_logged(t1, t2, db_name):
         for line in [sep, header, sep]:
             all_lines.append(line)
             all_snaps.append(blank.copy())
-        gw, lines, snaps = _play_one_logged(t1, t2, db_name)
+        gw, lines, snaps, _stats = _play_one_logged(t1, t2, db_name)
         all_lines.extend(lines)
         all_snaps.extend(snaps)
         wins[gw] += 1
@@ -132,17 +137,22 @@ def _play_bo_logged(t1, t2, db_name, n):
     needed = n // 2 + 1
     s = {t1: 0, t2: 0}
     all_lines, all_snaps = [], []
-    blank = {'phase': 'laning', 'minute': 0,
-             'kills_t1': 0, 'kills_t2': 0, 'tokens_t1': 0, 'tokens_t2': 0}
 
     for game_num in range(1, n + 1):
+        blank = {'phase': 'laning', 'minute': 0,
+                 'kills_t1': 0, 'kills_t2': 0, 'tokens_t1': 0, 'tokens_t2': 0,
+                 'game_score_t1': s[t1], 'game_score_t2': s[t2], 'best_of': n}
         sep = '═' * 50
         header = f'  ИГРА {game_num}  ·  {t1} [{s[t1]}] — [{s[t2]}] {t2}'
         for line in [sep, header, sep]:
             all_lines.append(line)
             all_snaps.append(blank.copy())
 
-        winner_game, lines, snaps = _play_one_logged(t1, t2, db_name)
+        winner_game, lines, snaps, last_stats = _play_one_logged(t1, t2, db_name)
+        for snp in snaps:
+            snp['game_score_t1'] = s[t1]
+            snp['game_score_t2'] = s[t2]
+            snp['best_of'] = n
         all_lines.extend(lines)
         all_snaps.extend(snaps)
         s[winner_game] += 1
@@ -153,7 +163,7 @@ def _play_bo_logged(t1, t2, db_name, n):
         winner = random.choice([t1, t2])
     else:
         winner = t1 if s[t1] > s[t2] else t2
-    return winner, s[t1], s[t2], all_lines, all_snaps
+    return winner, s[t1], s[t2], all_lines, all_snaps, last_stats
 
 
 # ── event builder helpers ─────────────────────────────────────────────────────
@@ -175,7 +185,8 @@ def _match_event(t1, t2, winner, loser, score_t1, score_t2, stage,
     return ev
 
 
-def _lineup_event(t1, t2, stage, lines, snaps, winner, score_t1, score_t2, db_name, n):
+def _lineup_event(t1, t2, stage, lines, snaps, winner, score_t1, score_t2, db_name, n,
+                  stats=None):
     return {
         'type':        'match_lineup',
         'stage':       stage,
@@ -187,17 +198,146 @@ def _lineup_event(t1, t2, stage, lines, snaps, winner, score_t1, score_t2, db_na
         'winner':      winner,
         'score_t1':    score_t1, 'score_t2': score_t2,
         'best_of':     n,
+        'match_stats': stats or {},
     }
+
+
+# ── Minor tournament helpers ──────────────────────────────────────────────────
+
+def _swiss_pairs(teams, wins):
+    """Swiss pairing: pair teams by closest win count."""
+    sorted_t = sorted(teams, key=lambda t: (-wins.get(t, 0), random.random()))
+    pairs, used = [], set()
+    for i, t1 in enumerate(sorted_t):
+        if t1 in used:
+            continue
+        for t2 in sorted_t[i+1:]:
+            if t2 not in used:
+                pairs.append((t1, t2))
+                used.add(t1); used.add(t2)
+                break
+    return pairs
+
+
+def _generate_minor(minor_teams, db_name, player_teams, gp_fn):
+    """Swiss BO1 group + top-4 BO3 playoff. Returns (events, placements)."""
+    if len(minor_teams) < 4:
+        return [], {}
+
+    events  = []
+    teams   = list(minor_teams)
+    wins    = {t: 0 for t in teams}
+
+    events.append({
+        'type': 'minor_header',
+        'teams': teams,
+        'player_teams': list(player_teams),
+    })
+
+    num_rounds = min(4, max(3, len(teams) - 1))
+
+    for rnd in range(1, num_rounds + 1):
+        pairs = _swiss_pairs(teams, wins)
+        stage = f'Малый Т. — Швейцарка Р{rnd} (BO1)'
+        events.append({'type': 'stage_header', 'stage': stage, 'pairs': pairs})
+
+        for t1, t2 in pairs:
+            is_p = t1 in player_teams or t2 in player_teams
+            if is_p:
+                winner, lines, snaps, mstats = _play_one_logged(t1, t2, db_name)
+                s1, s2 = (1, 0) if winner == t1 else (0, 1)
+                events.append(_lineup_event(t1, t2, stage, lines, snaps,
+                                            winner, s1, s2, db_name, 1, mstats))
+            else:
+                winner = _play_one(t1, t2, db_name)
+                s1, s2 = (1, 0) if winner == t1 else (0, 1)
+            loser = t2 if winner == t1 else t1
+            wins[winner] += 1
+            gp_fn(t1, t2, 1)
+            events.append(_match_event(t1, t2, winner, loser, s1, s2, stage, is_p))
+
+        ranked = sorted(teams, key=lambda t: (-wins[t], t))
+        events.append({
+            'type': 'minor_standings',
+            'round': rnd,
+            'standings': [(t, wins[t]) for t in ranked],
+            'player_teams': list(player_teams),
+        })
+
+    # ── Playoff ────────────────────────────────────────────────────
+    ranked = sorted(teams, key=lambda t: (-wins[t], t))
+    top4   = ranked[:4]
+    events.append({
+        'type': 'stage_header',
+        'stage': 'Малый Т. — Плей-офф (BO3)',
+        'pairs': [(top4[0], top4[3]), (top4[1], top4[2])],
+    })
+
+    sf_winners, sf_losers = [], []
+    for t1, t2 in [(top4[0], top4[3]), (top4[1], top4[2])]:
+        is_p = t1 in player_teams or t2 in player_teams
+        if is_p:
+            w, s1, s2, lines, snaps, mstats = _play_bo_logged(t1, t2, db_name, 3)
+            events.append(_lineup_event(t1, t2, 'Малый Т. Полуфинал',
+                                        lines, snaps, w, s1, s2, db_name, 3, mstats))
+        else:
+            w, s1, s2 = _play_bo(t1, t2, db_name, 3)
+        l = t2 if w == t1 else t1
+        sf_winners.append(w); sf_losers.append(l)
+        gp_fn(t1, t2, s1 + s2)
+        events.append(_match_event(t1, t2, w, l, s1, s2, 'Малый Т. Полуфинал', is_p))
+
+    t1, t2 = sf_winners
+    is_p = t1 in player_teams or t2 in player_teams
+    if is_p:
+        wf, s1, s2, lines, snaps, mstats = _play_bo_logged(t1, t2, db_name, 3)
+        events.append(_lineup_event(t1, t2, 'Малый Т. Финал',
+                                    lines, snaps, wf, s1, s2, db_name, 3, mstats))
+    else:
+        wf, s1, s2 = _play_bo(t1, t2, db_name, 3)
+    lf = t2 if wf == t1 else t1
+    gp_fn(t1, t2, s1 + s2)
+    events.append(_match_event(t1, t2, wf, lf, s1, s2, 'Малый Т. Финал', is_p))
+
+    minor_places = {wf: 1, lf: 2}
+    for i, l in enumerate(sf_losers): minor_places[l] = 3 + i
+    for i, t in enumerate(ranked[4:]): minor_places[t] = 5 + i
+
+    events.append({
+        'type':       'minor_results',
+        'champion':    wf,
+        'placements':  minor_places,
+        'wins':        dict(wins),
+        'player_teams': list(player_teams),
+    })
+
+    return events, minor_places
 
 
 # ── main generator ────────────────────────────────────────────────────────────
 
 def generate_tournament_events(db_name, tournament_id):
     player_teams = get_teams_with_player_yes(db_name)
-    all_teams = invites(db_name)[:16]
-    random.shuffle(all_teams)
-    # 2 groups of 8
-    groups = [all_teams[:8], all_teams[8:]]
+    qualified_16, qualifier_events, player_qualified = invites_with_events(db_name)
+    qualified_16 = qualified_16[:16]
+    direct_8     = qualified_16[:8]
+    qualifier_8  = qualified_16[8:]
+    minor_teams  = get_non_qualified_teams(db_name, qualified_16)
+
+    # Seed groups by rating: snake-draft so top teams split across groups
+    conn_r = sqlite3.connect(db_name)
+    _ratings = {r[0].strip(): r[1] for r in conn_r.execute(
+        "SELECT name, COALESCE(rating,0) FROM teams"
+    ).fetchall()}
+    conn_r.close()
+    seeded = sorted(qualified_16, key=lambda t: _ratings.get(t, 0), reverse=True)
+    # snake: picks alternate groups, shuffled within each pair to add variance
+    group_a, group_b = [], []
+    for i, t in enumerate(seeded):
+        (group_a if i % 2 == 0 else group_b).append(t)
+    random.shuffle(group_a)
+    random.shuffle(group_b)
+    groups = [group_a, group_b]
     group_standings = [{t: 0 for t in g} for g in groups]
 
     events = []
@@ -209,6 +349,31 @@ def generate_tournament_events(db_name, tournament_id):
         games_played[t1] = games_played.get(t1, 0) + n
         games_played[t2] = games_played.get(t2, 0) + n
 
+    # ── Qualifier events (player's matches, if any) ───────────────
+    if qualifier_events:
+        events.append({
+            'type':         'qualifier_header',
+            'player_teams': list(player_teams),
+            'player_qualified': player_qualified,
+        })
+        events.extend(qualifier_events)
+        events.append({
+            'type':         'qualifier_done',
+            'qualified_8':  list(qualifier_8),
+            'player_qualified': player_qualified,
+            'player_teams': list(player_teams),
+        })
+
+    # ── Qualifier summary ──────────────────────────────────────────
+    events.append({
+        'type':             'qualifier_summary',
+        'direct':            list(direct_8),
+        'qualified':         list(qualifier_8),
+        'minor':             list(minor_teams),
+        'player_teams':      list(player_teams),
+        'player_qualified':  player_qualified,
+    })
+
     # ── Draw ──────────────────────────────────────────────────────
     events.append({
         'type': 'draw',
@@ -217,18 +382,36 @@ def generate_tournament_events(db_name, tournament_id):
     })
 
     # ── Group stage: round-robin BO2 ──────────────────────────────
-    pairs_per_group = []
-    for gi, group in enumerate(groups):
-        pairs = [(gi, group[i], group[j])
-                 for i in range(len(group))
-                 for j in range(i + 1, len(group))]
-        pairs_per_group.append(pairs)
+    def _rr_rounds(gi, group):
+        """Standard round-robin: fix team[0], rotate the rest.
+        Returns list of rounds; each round is a list of (gi, t1, t2) pairs."""
+        teams = list(group)
+        if len(teams) % 2:
+            teams.append(None)          # dummy bye slot
+        n = len(teams)
+        fixed    = teams[0]
+        rotating = teams[1:]
+        rounds   = []
+        for _ in range(n - 1):
+            round_pairs = []
+            a, b = fixed, rotating[0]
+            if a is not None and b is not None:
+                round_pairs.append((gi, a, b))
+            for k in range(1, n // 2):
+                a, b = rotating[k], rotating[n - 1 - k]
+                if a is not None and b is not None:
+                    round_pairs.append((gi, a, b))
+            rounds.append(round_pairs)
+            rotating = [rotating[-1]] + rotating[:-1]   # rotate right
+        return rounds
 
-    max_pairs = max(len(p) for p in pairs_per_group)
-    ordered = [pairs_per_group[gi][mi]
-               for mi in range(max_pairs)
-               for gi in range(len(groups))
-               if mi < len(pairs_per_group[gi])]
+    schedules   = [_rr_rounds(gi, group) for gi, group in enumerate(groups)]
+    num_rounds  = max(len(s) for s in schedules)
+    ordered     = []
+    for rnd in range(num_rounds):
+        for gi, schedule in enumerate(schedules):
+            if rnd < len(schedule):
+                ordered.extend(schedule[rnd])
 
     for gi, t1, t2 in ordered:
         is_player = t1 in player_teams or t2 in player_teams
@@ -284,16 +467,17 @@ def generate_tournament_events(db_name, tournament_id):
             t1, t2 = pairs_flat[i], pairs_flat[i + 1]
             is_player = t1 in player_teams or t2 in player_teams
             if is_player:
-                w, s1, s2, lines, snaps = _play_bo_logged(t1, t2, db_name, bo)
+                w, s1, s2, lines, snaps, mstats = _play_bo_logged(t1, t2, db_name, bo)
             else:
                 w, s1, s2 = _play_bo(t1, t2, db_name, bo)
-                lines, snaps = [], []
+                lines, snaps, mstats = [], [], {}
             l = t2 if w == t1 else t1
             _gp(t1, t2, s1 + s2)
             winners.append(w)
             losers.append(l)
             if is_player:
-                events.append(_lineup_event(t1, t2, label, lines, snaps, w, s1, s2, db_name, bo))
+                events.append(_lineup_event(t1, t2, label, lines, snaps,
+                                            w, s1, s2, db_name, bo, mstats))
             events.append(_match_event(t1, t2, w, l, s1, s2, label, is_player))
         return winners, losers
 
@@ -375,9 +559,9 @@ def generate_tournament_events(db_name, tournament_id):
     t1, t2 = ub_champion, lb_champion
     is_player = t1 in player_teams or t2 in player_teams
     if is_player:
-        gf_w, gs1, gs2, gf_lines, gf_snaps = _play_bo_logged(t1, t2, db_name, 5)
+        gf_w, gs1, gs2, gf_lines, gf_snaps, gf_stats = _play_bo_logged(t1, t2, db_name, 5)
         events.append(_lineup_event(t1, t2, 'Гранд-финал (BO5)',
-                                    gf_lines, gf_snaps, gf_w, gs1, gs2, db_name, 5))
+                                    gf_lines, gf_snaps, gf_w, gs1, gs2, db_name, 5, gf_stats))
     else:
         gf_w, gs1, gs2 = _play_bo(t1, t2, db_name, 5)
     _gp(t1, t2, gs1 + gs2)
@@ -396,6 +580,11 @@ def generate_tournament_events(db_name, tournament_id):
         'tournament_id':    tournament_id,
         'games_played':     games_played,
     })
+
+    # ── Minor tournament (parallel) ───────────────────────────────
+    if minor_teams:
+        minor_events, _ = _generate_minor(minor_teams, db_name, player_teams, _gp)
+        events.extend(minor_events)
 
     return events, placements, group_eliminated
 
@@ -456,7 +645,7 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
         tid = id_map.get(team_name.strip())
         if tid:
             cur.execute(
-                "UPDATE teams SET cohesion = MIN(100, COALESCE(cohesion, 0) + 5) WHERE id=?",
+                "UPDATE teams SET cohesion = MIN(100, COALESCE(cohesion, 0) + 10) WHERE id=?",
                 (tid,),
             )
 

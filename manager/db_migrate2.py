@@ -238,6 +238,12 @@ def migrate(db_path):
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
+    cur.execute("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)")
+    cur.execute("SELECT COUNT(*) FROM _migrations WHERE name='migrate2'")
+    if cur.fetchone()[0]:
+        conn.close()
+        return
+
     # ── Update ratings / budgets for teams 1-16 ──────────────────────────
     for tid, name, rating, budget in TEAM_RATINGS:
         cur.execute(
@@ -296,9 +302,9 @@ def migrate(db_path):
             )
 
     # ── Deduplication fixes ───────────────────────────────────────────────
-    # Free-agent clones of active players → delete
+    # Free-agent clones of active players → delete; 293=Miracle2 (removed from roster)
     cur.execute("""DELETE FROM players WHERE id IN (
-        291,292,296,297,298,299,300,301,302,303,306,307,310,183,190,192,312,33
+        291,292,293,296,297,298,299,300,301,302,303,306,307,310,183,190,192,312,33
     )""")
 
     # Sumail Hassan: put original free agent (72) on EG carry, delete clone (241)
@@ -335,6 +341,10 @@ def migrate(db_path):
     # Team Zero duplicate: rename empty team 41 → Team Empire
     cur.execute("UPDATE teams SET name='Team Empire', country='Russia' WHERE id=41 AND name='Team Zero'")
 
+    # y` role correction: was inserted as mid (team 10), user moved to full_support FA
+    cur.execute("UPDATE players SET role='full_support', team_id=0, wage=0 WHERE id=207 AND role='mid'")
+
+    cur.execute("INSERT OR IGNORE INTO _migrations (name) VALUES ('migrate2')")
     conn.commit()
     conn.close()
     print(f"✓ Migrated: {db_path}")

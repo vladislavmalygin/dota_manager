@@ -5,8 +5,10 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
 from kivy.uix.popup import Popup
-from kivy.graphics import Color, Rectangle
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.clock import Clock
+
+import ui_theme as T
 
 from settings import SettingsPopup
 from ingame_interface.inbox import show_message
@@ -15,10 +17,12 @@ from ingame_interface.squad import show_squad_popup
 from ingame_interface.tournaments import TournamentPopup, TournamentsViewPopup
 from ingame_interface.organization import show_organization_popup
 from ingame_interface.profile import show_profile_popup
-from ingame_interface.transfers import show_transfers_popup
+from ingame_interface.transfers import show_transfers_popup, is_transfer_window as _is_transfer_window
 from logic.tournaments.invites import invites
 from logic.tournaments.runner import ensure_season_tournaments
-from logic.ai import update_morale_monthly, ai_transfers, ai_poach_attempt
+from logic.ai import (update_morale_monthly, update_form_monthly, ai_poach_attempt,
+                       develop_free_agents, ai_buy_offer, ai_team_trades,
+                       set_ai_train_priorities)
 from logic.events import random_event_monthly
 from logic.sponsors import ensure_sponsors_table, pay_monthly_income
 from db_migrate2 import migrate as _migrate2
@@ -26,6 +30,23 @@ import random as _random
 from db_migrate3 import migrate as _migrate3
 from db_migrate4 import migrate as _migrate4
 from db_migrate5 import migrate as _migrate5
+from db_migrate6 import migrate as _migrate6
+from db_migrate7 import migrate as _migrate7
+from db_migrate8 import migrate as _migrate8
+from db_migrate9  import migrate as _migrate9
+from db_migrate10 import migrate as _migrate10
+from db_migrate11 import migrate as _migrate11
+from db_migrate12 import migrate as _migrate12
+from db_migrate13 import migrate as _migrate13
+from db_migrate14 import migrate as _migrate14
+from db_migrate15 import migrate as _migrate15
+from db_migrate16 import migrate as _migrate16
+from db_migrate17 import migrate as _migrate17
+from db_migrate18 import migrate as _migrate18
+from db_migrate18_fix import migrate as _migrate18_fix
+from db_migrate19 import migrate as _migrate19
+from db_migrate20 import migrate as _migrate20
+from db_migrate21 import migrate as _migrate21
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -130,6 +151,187 @@ def _fix_contracts(db_name):
     conn.close()
 
 
+def _get_menu_badges(db_name):
+    """Return dict of button_text → badge_suffix for menu buttons."""
+    badges = {}
+    try:
+        conn = sqlite3.connect(db_name)
+        # Входящие: unread messages
+        unread = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE COALESCE(read,0)=0"
+        ).fetchone()
+        if unread and unread[0] > 0:
+            badges['Входящие'] = f' ({unread[0]})'
+
+        # AI offers pending
+        offers = conn.execute("SELECT COUNT(*) FROM ai_offers").fetchone()
+        if offers and offers[0] > 0:
+            badges['Трансферы'] = f' 📨{offers[0]}'
+
+        # Состав: active conflict or wants_to_leave
+        team = conn.execute(
+            "SELECT id, COALESCE(conflict_targets,'') FROM teams WHERE player='yes'"
+        ).fetchone()
+        if team:
+            has_conflict = bool(team[1])
+            if not has_conflict:
+                leaving = conn.execute(
+                    "SELECT COUNT(*) FROM players WHERE team_id=? AND COALESCE(wants_to_leave,0)=1",
+                    (team[0],)
+                ).fetchone()
+                has_conflict = leaving and leaving[0] > 0
+            if has_conflict:
+                badges['Состав'] = ' ⚡'
+
+        conn.close()
+    except Exception as _e:
+        T.log_err('_get_menu_badges', _e)
+    return badges
+
+
+def _pay_streaming_income(db_name, game_date_str):
+    """Monthly passive income from streaming/merch based on rating and reputation."""
+    conn = sqlite3.connect(db_name)
+    try:
+        row = conn.execute(
+            "SELECT t.id, COALESCE(t.rating,0) FROM teams t WHERE t.player='yes'"
+        ).fetchone()
+        if not row:
+            conn.close()
+            return
+        team_id, rating = row
+        rep_row = conn.execute(
+            "SELECT COALESCE(reputation,0) FROM characters LIMIT 1"
+        ).fetchone()
+        reputation = rep_row[0] if rep_row else 0
+
+        income = max(500, int(rating * 40 + reputation * 80))
+        income = round(income / 500) * 500   # round to $500
+
+        conn.execute("UPDATE teams SET budget=budget+? WHERE id=?", (income, team_id))
+        conn.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+            (f"Доход от стриминга и мерча: +${income:,} (рейтинг {int(rating)}, репутация {reputation})",
+             game_date_str, "Организация"),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+
+def _enforce_conflict_states(db_name):
+    """Keep morale=1 for wants_to_leave players; keep cohesion=0 while conflict_targets active."""
+    conn = sqlite3.connect(db_name)
+    # Enforce morale=1 for players who want to leave (and are still on a team)
+    conn.execute(
+        "UPDATE players SET morale=1 WHERE wants_to_leave=1 AND team_id != 0"
+    )
+    # Check if conflict_targets are still on the team; clear if all gone
+    row = conn.execute(
+        "SELECT id, conflict_targets FROM teams WHERE player='yes' AND conflict_targets IS NOT NULL"
+    ).fetchone()
+    if row:
+        team_id, ct = row
+        targets = [int(x) for x in ct.split(',') if x.strip().isdigit()]
+        still_on_team = []
+        for pid in targets:
+            p = conn.execute(
+                "SELECT team_id FROM players WHERE id=?", (pid,)
+            ).fetchone()
+            if p and p[0] == team_id:
+                still_on_team.append(pid)
+        if not still_on_team:
+            conn.execute(
+                "UPDATE teams SET conflict_targets=NULL WHERE id=?", (team_id,)
+            )
+        else:
+            conn.execute("UPDATE teams SET cohesion=0 WHERE id=?", (team_id,))
+    conn.commit()
+    conn.close()
+
+
+_current_game_popup = None   # single-popup-at-a-time tracking
+
+
+def _patch_popups():
+    """Position sub-popups in the main area; one at a time; sidebar always accessible."""
+    from kivy.uix.popup import Popup
+    from kivy.uix.modalview import ModalView
+
+    if hasattr(Popup, '_orig_open'):
+        return
+
+    Popup._orig_open = Popup.open
+
+    def _game_open(self, *a, **kw):
+        global _current_game_popup
+        sw, sh = (self.size_hint or (0.8, 0.8))[:2]
+        if float(sw) >= 0.99 and float(sh) >= 0.99:
+            Popup._orig_open(self, *a, **kw)
+            return
+
+        # Close previous sub-popup before opening new one
+        if _current_game_popup and _current_game_popup is not self:
+            try:
+                _current_game_popup.dismiss()
+            except Exception:
+                pass
+        _current_game_popup = self
+
+        # Position in free area, no dim overlay
+        sw = min(float(sw), 0.78)
+        sh = min(float(sh), 0.89)
+        self.size_hint = (sw, sh)
+        cx = 0.20 + (0.80 - sw) / 2
+        cy = (0.90 - sh) / 2
+        self.pos_hint  = {'x': max(0.20, cx), 'y': max(0.0, cy)}
+        self.background_color   = (0, 0, 0, 0)
+        self.background         = ''
+        self.separator_color    = (0, 0, 0, 0)
+        self.title_bar_height   = 0
+        Popup._orig_open(self, *a, **kw)
+
+        # Clear ref when this popup dismisses
+        def _on_dismiss(_inst):
+            global _current_game_popup
+            if _current_game_popup is self:
+                _current_game_popup = None
+        self.bind(on_dismiss=_on_dismiss)
+
+    Popup.open = _game_open
+
+    # Pass sidebar (x<20%) and topbar (y>89%) touches through
+    ModalView._orig_touch_down = ModalView.on_touch_down
+
+    def _mv_touch(self, touch):
+        if not self.collide_point(*touch.pos):
+            from kivy.core.window import Window
+            if Window.width > 0:
+                rx = touch.x / Window.width
+                ry = touch.y / Window.height
+                if rx < 0.205 or ry > 0.89:
+                    return False
+            if self.auto_dismiss:
+                self.dismiss()
+            return True
+        from kivy.uix.floatlayout import FloatLayout
+        return FloatLayout.on_touch_down(self, touch)
+
+    ModalView.on_touch_down = _mv_touch
+
+
+def _unpatch_popups():
+    from kivy.uix.popup import Popup
+    from kivy.uix.modalview import ModalView
+    if hasattr(Popup, '_orig_open'):
+        Popup.open = Popup._orig_open
+        del Popup._orig_open
+    if hasattr(ModalView, '_orig_touch_down'):
+        ModalView.on_touch_down = ModalView._orig_touch_down
+        del ModalView._orig_touch_down
+
+
 class MainWindow(BoxLayout):
     def __init__(self, db_name, popup, **kwargs):
         super(MainWindow, self).__init__(**kwargs)
@@ -137,83 +339,577 @@ class MainWindow(BoxLayout):
         self.db_name = db_name
         self.popup = popup
 
-        # Ensure all season tournaments exist in this save
+        _patch_popups()
         ensure_season_tournaments(db_name)
         self._migrate_db(db_name)
 
         self.date_object = self.get_date_from_db(1)
 
-        self.today_date_button = Button(text=f'{self.date_object}', background_color=(0.5, 0.5, 0.2, 1),
-                                        on_press=self.on_press)
+        from kivy.uix.label import Label
+        from kivy.animation import Animation
 
-        # Установка фона с изображением
+        # ── Background ────────────────────────────────────────────────────────
         with self.canvas.before:
-            Color(1, 1, 1, 0.5)  # Белый цвет фона
+            Color(1, 1, 1, 0.5)
             self.rect = Rectangle(source='images/core1.png', pos=self.pos, size=self.size)
-
-        # Обновление размера прямоугольника при изменении размера окна
         self.bind(size=self._update_rect, pos=self._update_rect)
 
-        # Верхняя часть интерфейса
-        top_layout = GridLayout(cols=5, size_hint_y=0.1)
-
-        team_name = self.get_team_name()
+        # ── Top bar ───────────────────────────────────────────────────────────
+        team_name      = self.get_team_name()
         tournament_name = self.get_next_tournament()
 
-        # Добавляем кнопки в верхнюю часть с цветами
-        top_layout.add_widget(Button(text='Dota Manager', background_color=(0.2, 0.6, 0.8, 1), on_press=self.on_press))
-        top_layout.add_widget(Button(text=team_name, background_color=(0.2, 0.8, 0.2, 1), on_press=self.on_press))
-        self.tournament_button = Button(text=tournament_name, background_color=(0.8, 0.2, 0.2, 1), on_press=self.on_press)
-        top_layout.add_widget(self.tournament_button)
-        top_layout.add_widget(self.today_date_button)
-        top_layout.add_widget(Button(text='Далее', background_color=(0.8, 0.8, 0.2, 1), on_press=self.on_next))
+        top_bar = BoxLayout(
+            orientation='horizontal', size_hint_y=None, height=52, spacing=3, padding=(4, 3),
+        )
+        with top_bar.canvas.before:
+            Color(*T.BG_TOPBAR)
+            self._top_rect = Rectangle(pos=top_bar.pos, size=top_bar.size)
+        top_bar.bind(
+            pos=lambda w, _: setattr(self._top_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(self._top_rect, 'size', w.size),
+        )
 
-        # Добавляем верхнюю часть в основной макет
-        self.add_widget(top_layout)
+        # Team name (left, wide)
+        team_lbl = Label(
+            text=f'[b]{team_name}[/b]', markup=True,
+            color=(0.30, 1.00, 0.50, 1), font_size='18sp',
+            size_hint_x=0.22, halign='left', valign='middle',
+        )
+        team_lbl.bind(size=team_lbl.setter('text_size'))
+        top_bar.add_widget(team_lbl)
 
-        # Создаем основной макет для левой и правой части интерфейса
+        # Budget label (updates live)
+        budget_txt, budget_color = self._get_budget_display()
+        self._budget_lbl = Label(
+            text=budget_txt, markup=True,
+            color=budget_color, font_size='15sp',
+            size_hint_x=0.18, halign='center', valign='middle',
+        )
+        self._budget_lbl.bind(size=self._budget_lbl.setter('text_size'))
+        top_bar.add_widget(self._budget_lbl)
+
+        # Rating label
+        self._rating_lbl = Label(
+            text=self._get_rating_display(), markup=True,
+            color=(0.85, 0.85, 0.85, 1), font_size='15sp',
+            size_hint_x=0.14, halign='center', valign='middle',
+        )
+        self._rating_lbl.bind(size=self._rating_lbl.setter('text_size'))
+        top_bar.add_widget(self._rating_lbl)
+
+        # Tournament button (center)
+        self.tournament_button = Button(
+            text=tournament_name,
+            background_color=(0.65, 0.15, 0.15, 1), background_normal='',
+            font_size='14sp', size_hint_x=0.28,
+            on_press=self.on_tournament_btn,
+        )
+        top_bar.add_widget(self.tournament_button)
+
+        # Date label
+        self.today_date_button = Button(
+            text=str(self.date_object),
+            background_color=(0.25, 0.35, 0.20, 1), background_normal='',
+            font_size='14sp', size_hint_x=0.12,
+            on_press=self.on_press,
+        )
+        top_bar.add_widget(self.today_date_button)
+
+        # Далее button (prominent) — toggles auto-advance every 1.5 s
+        self._next_btn = Button(
+            text='Далее  >',
+            background_color=(0.75, 0.65, 0.05, 1), background_normal='',
+            font_size='15sp', bold=True, size_hint_x=0.10,
+            on_press=self.on_next,
+        )
+        top_bar.add_widget(self._next_btn)
+
+        # Skip-to-tournament button (ignores notifications)
+        self._skip_btn = Button(
+            text='>> Турнир',
+            background_color=(0.45, 0.35, 0.05, 1), background_normal='',
+            font_size='13sp', size_hint_x=0.10,
+            on_press=self.on_skip_to_tournament,
+        )
+        top_bar.add_widget(self._skip_btn)
+        self._auto_advance_event = None
+        self.add_widget(top_bar)
+
+        # ── Body (sidebar + main area) ────────────────────────────────────────
         main_layout = BoxLayout(orientation='horizontal')
 
-        # Левая часть
-        left_layout = BoxLayout(orientation='vertical', size_hint=(0.2, 1))
+        # ── Left sidebar ──────────────────────────────────────────────────────
+        from kivy.uix.scrollview import ScrollView
+        sidebar_scroll = ScrollView(size_hint=(0.185, 1), do_scroll_x=False)
+        left_layout = BoxLayout(orientation='vertical', size_hint_y=None, spacing=1)
+        left_layout.bind(minimum_height=left_layout.setter('height'))
 
-        # Заполняем левую часть кнопками с цветами
-        buttons = {
-            'Входящие': self.on_incoming,
-            'Состав': self.on_roster,
-            'Организация': self.on_organization,
-            'Команды': self.on_league,
-            'Турниры': self.on_tournaments,
-            'Трансферы': self.on_transfers,
-            'Спонсоры': self.on_sponsors,
-            'Настройки': self.on_settings,
-            'Мой профиль': self.on_profile,
-            'Главное меню': self.on_main_menu,
-        }
+        with sidebar_scroll.canvas.before:
+            Color(*T.BG_SIDEBAR)
+            self._side_rect = Rectangle(pos=sidebar_scroll.pos, size=sidebar_scroll.size)
+        sidebar_scroll.bind(
+            pos=lambda w, _: setattr(self._side_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(self._side_rect, 'size', w.size),
+        )
 
-        for btn_text, action in buttons.items():
-            button = Button(text=btn_text, background_color=(0.4, 0.4, 0.8, 0.8))
-            button.bind(on_press=action)  # Привязываем отдельный обработчик к кнопке
-            left_layout.add_widget(button)
+        _BTN_H = 44
+        _SEP_H = 22
+        self._active_nav_btn = None
 
-        # Создаем основной область экрана для переменного контента
-        self.main_area = BoxLayout(size_hint_x=0.8)
+        def _sep(text):
+            lbl = Label(
+                text=text, markup=False,
+                size_hint_y=None, height=_SEP_H,
+                color=T.NAV_SEP_FG, font_size='10sp',
+                halign='center', valign='middle',
+            )
+            lbl.bind(size=lbl.setter('text_size'))
+            with lbl.canvas.before:
+                Color(*T.NAV_SEP_BG)
+                _r = Rectangle()
+            lbl.bind(pos=lambda w, _: setattr(_r, 'pos', w.pos),
+                     size=lambda w, _: setattr(_r, 'size', w.size))
+            return lbl
 
-        # Создаем полупрозрачный белый фон для основной области контента
+        def _menu_btn(text, action):
+            btn = Button(
+                text=text, size_hint_y=None, height=_BTN_H,
+                background_color=T.NAV_IDLE, background_normal='',
+                font_size='13sp', halign='center',
+            )
+            btn._base_text = text
+            btn._has_alert = False
+
+            def _press(inst):
+                prev = self._active_nav_btn
+                if prev and prev is not btn:
+                    prev.background_color = (
+                        T.NAV_ALERT if getattr(prev, '_has_alert', False)
+                        else T.NAV_IDLE
+                    )
+                self._active_nav_btn = btn
+                btn.background_color = T.NAV_ACTIVE
+                action(inst)
+
+            btn.bind(on_press=_press)
+            return btn
+
+        # Groups
+        _GROUPS = [
+            ('КОМАНДА', [
+                ('Состав',     self.on_roster),
+                ('Трансферы',  self.on_transfers),
+                ('Академия',   self.on_academy),
+                ('Кланвары',   self.on_scrimmage),
+            ]),
+            ('МЕНЕДЖМЕНТ', [
+                ('Финансы',    self.on_finances),
+                ('Спонсоры',   self.on_sponsors),
+                ('Организация',self.on_organization),
+                ('Цели',       self.on_goals),
+            ]),
+            ('ТУРНИРЫ', [
+                ('Турниры',    self.on_tournaments),
+                ('Команды',    self.on_league),
+                ('История',    self.on_history),
+                ('Статистика', self.on_stats),
+            ]),
+            ('ПРОЧЕЕ', [
+                ('Входящие',   self.on_incoming),
+                ('Мой профиль',self.on_profile),
+                ('Настройки',  self.on_settings),
+                ('Сохранить',  self.on_manual_save),
+                ('Главное меню',self.on_main_menu),
+            ]),
+        ]
+
+        # ── Home button ───────────────────────────────────────────────────────
+        _home_sidebar_btn = Button(
+            text='⌂  Главная', size_hint_y=None, height=_BTN_H + 4,
+            background_color=T.NAV_ACTIVE, background_normal='',
+            font_size='14sp', bold=True,
+        )
+        def _press_home(inst):
+            prev = self._active_nav_btn
+            if prev:
+                prev.background_color = T.NAV_ALERT if getattr(prev, '_has_alert', False) else T.NAV_IDLE
+            self._active_nav_btn = None
+            _home_sidebar_btn.background_color = T.NAV_ACTIVE
+            self._show_dashboard()
+        _home_sidebar_btn.bind(on_press=_press_home)
+        self._home_btn = _home_sidebar_btn
+        left_layout.add_widget(_home_sidebar_btn)
+
+        self._menu_buttons = {}
+        for group_name, items in _GROUPS:
+            left_layout.add_widget(_sep(group_name))
+            for btn_text, action in items:
+                btn = _menu_btn(btn_text, action)
+                left_layout.add_widget(btn)
+                self._menu_buttons[btn_text] = btn
+
+        sidebar_scroll.add_widget(left_layout)
+        self._refresh_menu_badges()
+
+        # ── Main area ─────────────────────────────────────────────────────────
+        self.main_area = BoxLayout(size_hint=(1, 1))
         with self.main_area.canvas.before:
-            Color(0.4, 0.4, 0.4, 0.2)  # Полупрозрачный белый цвет фона
+            Color(0.06, 0.08, 0.11, 0.82)
             self.rect_main_area = Rectangle(pos=self.main_area.pos, size=self.main_area.size)
-
-        # Обновление размера прямоугольника основной области при изменении размера окна
         self.main_area.bind(size=self._update_main_area_rect)
 
-        # Добавляем левую часть и основную область к главному окну
-        main_layout.add_widget(left_layout)
-        main_layout.add_widget(self.main_area)
+        self._show_dashboard()
 
+        main_layout.add_widget(sidebar_scroll)
+        main_layout.add_widget(self.main_area)
         self.add_widget(main_layout)
 
-        Clock.schedule_once(lambda dt: self.on_incoming(None), 0.3)
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+
+    def _get_budget_display(self):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT COALESCE(budget,0) FROM teams WHERE player='yes'"
+            ).fetchone()
+            conn.close()
+            budget = row[0] if row else 0
+            txt = f'[b]${budget:,}[/b]'
+            color = ((0.25, 0.90, 0.40, 1) if budget > 200_000
+                     else (1.0, 0.85, 0.20, 1) if budget > 50_000
+                     else (1.0, 0.35, 0.25, 1))
+            return txt, color
+        except Exception:
+            return '$—', (0.5, 0.5, 0.5, 1)
+
+    def _get_rating_display(self):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            rows = conn.execute(
+                "SELECT name, COALESCE(rating,0) FROM teams ORDER BY COALESCE(rating,0) DESC"
+            ).fetchall()
+            conn.close()
+            my = conn = None
+            conn2 = sqlite3.connect(self.db_name)
+            my_row = conn2.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+            conn2.close()
+            if not my_row:
+                return 'Рейтинг: —'
+            my_name = my_row[0].strip()
+            for i, (n, r) in enumerate(rows, 1):
+                if n.strip() == my_name:
+                    return f'[b]#{i}[/b]  {int(r)} pts'
+        except Exception:
+            pass
+        return 'Рейтинг: —'
+
+    def _show_inline(self, popup_instance, title=''):
+        """Show any Popup's content inline in main_area (no floating popup)."""
+        from kivy.uix.label import Label
+        if hasattr(self, '_home_btn'):
+            self._home_btn.background_color = T.NAV_IDLE
+
+        self.main_area.clear_widgets()
+
+        # ── Breadcrumb bar ────────────────────────────────────────────────────
+        hdr = BoxLayout(size_hint_y=None, height=36, spacing=6, padding=(10, 2))
+        with hdr.canvas.before:
+            Color(*T.BG_HEADER)
+            _hr = Rectangle()
+        hdr.bind(pos =lambda w, _: setattr(_hr, 'pos',  w.pos),
+                 size=lambda w, _: setattr(_hr, 'size', w.size))
+
+        title_lbl = Label(text=f'[b]{title}[/b]', markup=True,
+                          color=T.TEXT_MAIN, font_size=T.FS_BODY,
+                          halign='left', valign='middle')
+        title_lbl.bind(size=title_lbl.setter('text_size'))
+
+        home_btn = Button(text='⌂  Главная',
+                          size_hint=(None, 1), width=115,
+                          background_color=T.NAV_IDLE, background_normal='',
+                          font_size=T.FS_SMALL)
+        home_btn.bind(on_press=lambda _: self._show_dashboard())
+
+        hdr.add_widget(title_lbl)
+        hdr.add_widget(home_btn)
+
+        # ── Content holder (auto-updates on popup._build / _rebuild) ─────────
+        content_box = BoxLayout()
+
+        def _detach_and_add(widget):
+            if widget.parent:
+                widget.parent.remove_widget(widget)
+            content_box.add_widget(widget)
+
+        def _update_content(inst, val):
+            content_box.clear_widgets()
+            if val:
+                _detach_and_add(val)
+
+        popup_instance.bind(content=_update_content)
+        popup_instance.dismiss = lambda *_: self._show_dashboard()
+
+        frame = BoxLayout(orientation='vertical')
+        frame.add_widget(hdr)
+        frame.add_widget(content_box)
+        self.main_area.add_widget(frame)
+
+        if popup_instance.content:
+            _detach_and_add(popup_instance.content)
+
+        self._active_inline_popup = popup_instance
+
+    def _show_dashboard(self, *_):
+        # Reset sidebar nav highlight → home becomes active
+        prev = getattr(self, '_active_nav_btn', None)
+        if prev:
+            prev.background_color = (
+                T.NAV_ALERT if getattr(prev, '_has_alert', False) else T.NAV_IDLE
+            )
+        self._active_nav_btn = None
+        if hasattr(self, '_home_btn'):
+            self._home_btn.background_color = T.NAV_ACTIVE
+        self._active_inline_popup = None
+        self._refresh_menu_badges()
+        self._build_dashboard()
+
+    def _build_dashboard(self):
+        from kivy.uix.label import Label
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.gridlayout import GridLayout
+
+        self.main_area.clear_widgets()
+
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+
+            team = c.execute(
+                "SELECT name, COALESCE(budget,0), COALESCE(rating,0), COALESCE(cohesion,0), "
+                "carry, mid, offlane, partial_support, full_support "
+                "FROM teams WHERE player='yes'"
+            ).fetchone()
+            if not team:
+                conn.close()
+                return
+
+            t_name, budget, rating, cohesion, *slot_ids = team
+            slot_ids = [s for s in slot_ids if s]
+
+            # Avg morale + wages
+            avg_morale, total_wage = 5, 0
+            if slot_ids:
+                ph = ','.join('?' * len(slot_ids))
+                rows = c.execute(
+                    f"SELECT COALESCE(morale,5), COALESCE(wage,0) FROM players WHERE id IN ({ph})",
+                    slot_ids
+                ).fetchall()
+                if rows:
+                    avg_morale = sum(r[0] for r in rows) // len(rows)
+                    total_wage = sum(r[1] for r in rows)
+
+            # Next tournament
+            t_row = c.execute(
+                "SELECT name, start_date FROM tournaments WHERE place1 IS NULL ORDER BY start_date LIMIT 1"
+            ).fetchone()
+
+            # Last 3 results
+            results = []
+            my_id = c.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+            if my_id:
+                tid = my_id[0]
+                for row in c.execute(
+                    "SELECT name, place1,place2,place3,place4,place5,place6,place7,place8 "
+                    "FROM tournaments WHERE place1 IS NOT NULL ORDER BY start_date DESC LIMIT 5"
+                ):
+                    t_title = row[0]
+                    for i, p in enumerate(row[1:], 1):
+                        if p == tid:
+                            results.append((t_title, i))
+                            break
+
+            # All-teams ranking
+            all_teams = c.execute(
+                "SELECT name, COALESCE(rating,0), player FROM teams ORDER BY COALESCE(rating,0) DESC"
+            ).fetchall()
+            my_rank = next((i+1 for i, (n, r, pl) in enumerate(all_teams) if pl == 'yes'), '?')
+
+            sponsor_income = 0
+            sp = c.execute("SELECT monthly_income FROM sponsors WHERE is_active=1 LIMIT 1").fetchone()
+            if sp:
+                sponsor_income = sp[0] or 0
+            streaming = int(rating * 40)
+            monthly_in = sponsor_income + streaming
+            balance = monthly_in - total_wage
+
+            # Action items
+            actions = []
+            game_date_str = str(self.date_object)
+
+            # Contracts expiring < 60 days
+            if slot_ids:
+                ph2 = ','.join('?' * len(slot_ids))
+                exp_rows = c.execute(
+                    f"SELECT nickname, contract_end FROM players "
+                    f"WHERE id IN ({ph2}) AND contract_end IS NOT NULL "
+                    f"AND contract_end <= date(?, '+60 days') "
+                    f"ORDER BY contract_end",
+                    list(slot_ids) + [game_date_str]
+                ).fetchall()
+                for enick, cend in exp_rows:
+                    try:
+                        days = (date.fromisoformat(cend) - self.date_object).days
+                        actions.append(('danger', f'Контракт {enick} истекает через {days} дн.'))
+                    except Exception:
+                        pass
+
+            # AI buy offers
+            ai_cnt = (c.execute("SELECT COUNT(*) FROM ai_offers").fetchone() or (0,))[0]
+            if ai_cnt:
+                actions.append(('warn', f'{ai_cnt} входящих трансферных предложения'))
+
+            # Wants to leave
+            leave_rows = c.execute(
+                "SELECT nickname FROM players WHERE team_id=? AND COALESCE(wants_to_leave,0)=1",
+                (my_id[0],)
+            ).fetchall() if my_id else []
+            for (lnick,) in leave_rows:
+                actions.append(('warn', f'{lnick} хочет покинуть команду'))
+
+            # Conflict
+            ct_row = c.execute(
+                "SELECT COALESCE(conflict_targets,'') FROM teams WHERE player='yes'"
+            ).fetchone()
+            if ct_row and ct_row[0]:
+                actions.append(('danger', 'Конфликт в команде — требует решения'))
+
+            # Low cohesion
+            if cohesion < 25:
+                actions.append(('warn', f'Сыгранность критически низкая: {cohesion}/100'))
+
+            conn.close()
+        except Exception as _e:
+            T.log_err('_show_dashboard', _e)
+            return
+
+        # ── Build dashboard layout ────────────────────────────────────────────
+        sv    = ScrollView(size_hint=(1, 1))
+        outer = GridLayout(cols=1, size_hint_y=None, spacing=10, padding=(12, 10))
+        outer.bind(minimum_height=outer.setter('height'))
+
+        def _card(bg=T.BG_CARD):
+            return T.make_card(bg=bg, radius=8, padding=(14, 10), spacing=2)
+
+        def _row(left, right, lc=T.TEXT_LABEL, rc=T.TEXT_MAIN):
+            r = BoxLayout(size_hint_y=None, height=30)
+            ll = Label(text=left,  markup=True, color=lc, font_size=T.FS_BODY,
+                       halign='left',  valign='middle', size_hint_x=0.55)
+            rl = Label(text=right, markup=True, color=rc, font_size=T.FS_BODY,
+                       halign='right', valign='middle', size_hint_x=0.45)
+            ll.bind(size=ll.setter('text_size'))
+            rl.bind(size=rl.setter('text_size'))
+            r.add_widget(ll); r.add_widget(rl)
+            return r
+
+        def _title(text, color=T.ACCENT):
+            lbl = Label(text=f'[b]{text}[/b]', markup=True, color=color,
+                        font_size=T.FS_TITLE, size_hint_y=None, height=36,
+                        halign='left', valign='middle')
+            lbl.bind(size=lbl.setter('text_size'))
+            return lbl
+
+        def _mc(rgba):
+            return T.markup_color(rgba)
+
+        # ── Action items card ────────────────────────────────────────────────
+        if actions:
+            ca = _card((0.12, 0.08, 0.08, 1))
+            ca.add_widget(_title('Требует внимания', T.NEGATIVE))
+            for kind, text in actions:
+                color = T.NEGATIVE if kind == 'danger' else T.WARNING
+                lbl = Label(
+                    text=f'  • {text}', color=color,
+                    font_size=T.FS_BODY, size_hint_y=None, height=28,
+                    halign='left', valign='middle',
+                )
+                lbl.bind(size=lbl.setter('text_size'))
+                ca.add_widget(lbl)
+            outer.add_widget(ca)
+
+        # ── Row 1: team overview + next tournament side by side ───────────────
+        row1 = BoxLayout(size_hint_y=None, spacing=10)
+        row1.bind(minimum_height=row1.setter('height'))
+
+        c1 = _card(T.BG_CARD)
+        c1.add_widget(_title(t_name.strip()))
+        bc = T.budget_color(budget)
+        c1.add_widget(_row('Бюджет',
+                           f'[color={_mc(bc)}][b]${budget:,}[/b][/color]'))
+        c1.add_widget(_row('Место в рейтинге',
+                           f'[b]#{my_rank}[/b]  ({int(rating)} pts)'))
+        coh_c = T.cohesion_color(cohesion)
+        c1.add_widget(_row('Сыгранность',
+                           f'[color={_mc(coh_c)}]{cohesion}/100[/color]'))
+        mor_c = T.morale_color(avg_morale)
+        c1.add_widget(_row('Мораль состава',
+                           f'[color={_mc(mor_c)}]{avg_morale}/10[/color]'))
+        bal_c  = T.balance_color(balance)
+        sign   = '+' if balance >= 0 else ''
+        c1.add_widget(_row('Баланс/мес',
+                           f'[color={_mc(bal_c)}]{sign}${balance:,}[/color]'))
+
+        if t_row:
+            t_title_val, t_start = t_row
+            try:
+                days_left = (date.fromisoformat(t_start) - self.date_object).days
+                days_txt  = f'через {days_left} дн.' if days_left >= 0 else 'идёт сейчас'
+            except Exception:
+                days_txt = ''
+            c2 = _card(T.BG_CARD_TRN)
+            c2.add_widget(_title('Следующий турнир', (0.80, 0.55, 1.00, 1)))
+            c2.add_widget(_row(t_title_val[:28], f'[b]{days_txt}[/b]',
+                               rc=(0.95, 0.85, 1.00, 1)))
+            row1.add_widget(c1)
+            row1.add_widget(c2)
+        else:
+            row1.add_widget(c1)
+
+        outer.add_widget(row1)
+
+        # ── Row 2: recent results + top-8 side by side ───────────────────────
+        row2 = BoxLayout(size_hint_y=None, spacing=10)
+        row2.bind(minimum_height=row2.setter('height'))
+
+        if results:
+            c3 = _card(T.BG_CARD_RES)
+            c3.add_widget(_title('Последние турниры', T.POSITIVE))
+            MEDALS = {1: 'Победа', 2: '2-е место', 3: '3-е место', 4: '4-е место'}
+            for t_title_val, place in results[:5]:
+                pc = T.place_color(place)
+                c3.add_widget(_row(
+                    t_title_val[:28],
+                    f'[color={_mc(pc)}][b]{MEDALS.get(place, f"{place}-е место")}[/b][/color]',
+                ))
+            row2.add_widget(c3)
+
+        c4 = _card(T.BG_CARD_B)
+        c4.add_widget(_title('Топ рейтинга', T.ACCENT))
+        for i, (n, r, pl) in enumerate(all_teams[:8], 1):
+            is_my = (pl == 'yes')
+            nc = f'[color={_mc(T.PLAYER_CLR)}]' if is_my else (
+                f'[color={_mc(T.GOLD)}]' if i <= 3 else f'[color={_mc(T.TEXT_MAIN)}]'
+            )
+            lc = T.PLAYER_CLR if is_my else T.TEXT_LABEL
+            c4.add_widget(_row(
+                f'{nc}[b]#{i}[/b][/color]  {n.strip()[:20]}',
+                f'{int(r)} pts', lc=lc,
+            ))
+        row2.add_widget(c4)
+
+        outer.add_widget(row2)
+
+        sv.add_widget(outer)
+        self.main_area.add_widget(sv)
 
     def _migrate_db(self, db_name):
         """Add new columns to existing saves without breaking old data."""
@@ -226,6 +922,13 @@ class MainWindow(BoxLayout):
             "ALTER TABLE players ADD COLUMN poaching_team_id INTEGER",
             "ALTER TABLE players ADD COLUMN renewal_notified INTEGER DEFAULT 0",
             "ALTER TABLE teams ADD COLUMN region TEXT",
+            "ALTER TABLE players ADD COLUMN age INTEGER DEFAULT 22",
+            "ALTER TABLE teams ADD COLUMN tactic TEXT DEFAULT 'balanced'",
+            "ALTER TABLE players ADD COLUMN pre_contract_team_id INTEGER",
+            "ALTER TABLE characters ADD COLUMN reputation INTEGER DEFAULT 0",
+            "ALTER TABLE players ADD COLUMN secondary_role TEXT",
+            "ALTER TABLE players ADD COLUMN secondary_comp INTEGER DEFAULT 5",
+            "ALTER TABLE teams ADD COLUMN last_bootcamp_date TEXT",
         ]:
             try:
                 conn.execute(ddl)
@@ -237,6 +940,23 @@ class MainWindow(BoxLayout):
         _migrate3(db_name)
         _migrate4(db_name)
         _migrate5(db_name)
+        _migrate6(db_name)
+        _migrate7(db_name)
+        _migrate8(db_name)
+        _migrate9(db_name)
+        _migrate10(db_name)
+        _migrate11(db_name)
+        _migrate12(db_name)
+        _migrate13(db_name)
+        _migrate14(db_name)
+        _migrate15(db_name)
+        _migrate16(db_name)
+        _migrate17(db_name)
+        _migrate18(db_name)
+        _migrate18_fix(db_name)
+        _migrate19(db_name)
+        _migrate20(db_name)
+        _migrate21(db_name)
         _fix_orphans(db_name)
         _fix_team_regions(db_name)
         _fix_contracts(db_name)
@@ -257,7 +977,8 @@ class MainWindow(BoxLayout):
         for pid, nick in expired:
             cur.execute(
                 "SELECT micro_skills, macro_skills, wage, role, "
-                "COALESCE(poaching_team_id,0) FROM players WHERE id=?",
+                "COALESCE(poaching_team_id,0), COALESCE(pre_contract_team_id,0) "
+                "FROM players WHERE id=?",
                 (pid,),
             )
             pr = cur.fetchone()
@@ -265,11 +986,13 @@ class MainWindow(BoxLayout):
                 avg = ((pr[0] or 10) + (pr[1] or 10)) // 2
                 expected = max(avg * 180, int((pr[2] or 0) * 0.85))
                 role = pr[3]
-                poaching_tid = pr[4] or 0
+                poaching_tid    = pr[4] or 0
+                pre_contract_tid = pr[5] or 0
             else:
                 expected = 0
                 role = None
                 poaching_tid = 0
+                pre_contract_tid = 0
 
             # Clear slot on current team
             cur.execute(
@@ -283,6 +1006,29 @@ class MainWindow(BoxLayout):
             )
 
             signed_to_poacher = False
+
+            # Priority 1: pre-contract with player's own team
+            if pre_contract_tid and role and not signed_to_poacher:
+                cur.execute(f"SELECT {role} FROM teams WHERE id=?", (pre_contract_tid,))
+                slot = cur.fetchone()
+                if slot and not slot[0]:
+                    cur.execute(f"UPDATE teams SET {role}=? WHERE id=?",
+                                (pid, pre_contract_tid))
+                    cur.execute(
+                        "UPDATE players SET team_id=?, wage=?, expected_wage=?, "
+                        "poaching_team_id=NULL, pre_contract_team_id=NULL, "
+                        "renewal_notified=0 WHERE id=?",
+                        (pre_contract_tid, expected, expected, pid),
+                    )
+                    cur.execute("SELECT name FROM teams WHERE id=?", (pre_contract_tid,))
+                    dest = (cur.fetchone() or ('?',))[0]
+                    conn.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+                        (f"{nick} прибыл по пре-контракту в {dest}!",
+                         'Трансфер'),
+                    )
+                    signed_to_poacher = True
+
             if poaching_tid and role:
                 cur.execute(f"SELECT {role} FROM teams WHERE id=?", (poaching_tid,))
                 slot_row = cur.fetchone()
@@ -382,13 +1128,54 @@ class MainWindow(BoxLayout):
                         (total_wage, team_id),
                     )
 
+        # AI team wage deductions
+        cursor.execute(
+            "SELECT t.id, SUM(COALESCE(p.wage, 0)) "
+            "FROM teams t "
+            "JOIN players p ON p.team_id = t.id "
+            "WHERE t.player != 'yes' "
+            "GROUP BY t.id"
+        )
+        for ai_tid, ai_wages in cursor.fetchall():
+            if ai_wages and ai_wages > 0:
+                cursor.execute(
+                    "UPDATE teams SET budget=MAX(0, budget-?) WHERE id=?",
+                    (ai_wages, ai_tid),
+                )
+
         self._expire_contracts(conn)
         self._notify_expiring_contracts(conn)
+        self._repay_loan(conn)
+        self._trim_messages(conn)
         conn.commit()
 
         update_morale_monthly(self.db_name)
-        ai_transfers(self.db_name)
+        update_form_monthly(self.db_name)
+        develop_free_agents(self.db_name)
+        set_ai_train_priorities(self.db_name)
+        _enforce_conflict_states(self.db_name)
         ai_poach_attempt(self.db_name, str(self.date_object))
+        if _is_transfer_window(str(self.date_object)):
+            ai_buy_offer(self.db_name)
+        ai_team_trades(self.db_name)
+
+        # Streaming / merch income
+        _pay_streaming_income(self.db_name, str(self.date_object))
+
+        # Cohesion goal check
+        from logic.goals import update_goal, year_from_date
+        year = year_from_date(str(self.date_object))
+        coh_row = conn.execute("SELECT COALESCE(cohesion,0) FROM teams WHERE player='yes'").fetchone()
+        if coh_row:
+            update_goal(self.db_name, year, 'cohesion_target', coh_row[0])
+
+        # Monthly news
+        from logic.news import generate_monthly_news
+        for news_text in generate_monthly_news(self.db_name):
+            c = sqlite3.connect(self.db_name)
+            c.execute("INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+                      (news_text, 'Новости'))
+            c.commit(); c.close()
 
         # Sponsor monthly income
         sponsor_pay = pay_monthly_income(self.db_name)
@@ -405,16 +1192,76 @@ class MainWindow(BoxLayout):
         # Random monthly event (60% chance)
         import random
         if random.random() < 0.60:
-            event = random_event_monthly(self.db_name)
+            event = random_event_monthly(self.db_name, str(self.date_object))
             if event:
-                title, text = event
-                c = sqlite3.connect(self.db_name)
-                c.execute(
-                    "INSERT INTO messages (text, date, author) VALUES (?, date('now'), ?)",
-                    (text, title),
+                if len(event) == 3 and event[2] == 'popup':
+                    title, text, _ = event
+                    c = sqlite3.connect(self.db_name)
+                    c.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?, date('now'), ?)",
+                        (text, 'Новости'),
+                    )
+                    c.commit()
+                    c.close()
+                    self._show_event_popup(title, text)
+                else:
+                    title, text = event
+                    c = sqlite3.connect(self.db_name)
+                    c.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?, date('now'), ?)",
+                        (text, title),
+                    )
+                    c.commit()
+                    c.close()
+
+        # Player dialogue
+        from logic.player_dialogue import get_player_dialogue
+        dialogue = get_player_dialogue(self.db_name)
+        if dialogue:
+            self._show_player_dialogue(dialogue)
+
+    def _trim_messages(self, conn):
+        """Keep only recent messages per noisy category, cap total."""
+        # Noisy authors: keep last 25 each
+        for author_like, keep in [
+            ('Трансфер', 25),
+            ('Новости',  20),
+            ('Скаутинг', 10),
+            ('Цели',     15),
+        ]:
+            conn.execute("""
+                DELETE FROM messages WHERE author LIKE ? AND id NOT IN (
+                    SELECT id FROM messages WHERE author LIKE ?
+                    ORDER BY id DESC LIMIT ?
                 )
-                c.commit()
-                c.close()
+            """, (f'%{author_like}%', f'%{author_like}%', keep))
+        # Hard cap: never more than 300 messages total
+        conn.execute("""
+            DELETE FROM messages WHERE id NOT IN (
+                SELECT id FROM messages ORDER BY id DESC LIMIT 300
+            )
+        """)
+
+    def _repay_loan(self, conn):
+        row = conn.execute(
+            "SELECT id, COALESCE(loan_amount,0), COALESCE(loan_monthly,0) "
+            "FROM teams WHERE player='yes'"
+        ).fetchone()
+        if not row or row[1] <= 0:
+            return
+        team_id, loan, monthly = row
+        payment = min(monthly, loan)
+        conn.execute(
+            "UPDATE teams SET budget=MAX(0,budget-?), "
+            "loan_amount=MAX(0,loan_amount-?) WHERE id=?",
+            (payment, payment, team_id),
+        )
+        if max(0, loan - payment) == 0:
+            conn.execute("UPDATE teams SET loan_monthly=0 WHERE id=?", (team_id,))
+            conn.execute(
+                "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+                ("Кредит полностью погашен!", "Финансы"),
+            )
 
     def _notify_expiring_contracts(self, conn):
         """Send inbox warning once when a player's contract is within 60 days."""
@@ -441,17 +1288,56 @@ class MainWindow(BoxLayout):
             cur.execute("UPDATE players SET renewal_notified=1 WHERE id=?", (pid,))
 
     def on_next(self, instance):
+        if self._auto_advance_event:
+            self._stop_auto_advance()
+        else:
+            self._start_auto_advance()
+
+    def _start_auto_advance(self):
+        self._next_btn.text = '|| Стоп'
+        self._next_btn.background_color = (0.75, 0.2, 0.05, 1)
+        self._auto_advance_event = Clock.schedule_interval(self._auto_advance_step, 1.5)
+
+    def _stop_auto_advance(self):
+        if self._auto_advance_event:
+            self._auto_advance_event.cancel()
+            self._auto_advance_event = None
+        self._next_btn.text = 'Далее  >'
+        self._next_btn.background_color = (0.75, 0.65, 0.05, 1)
+
+    def _auto_advance_step(self, dt):
+        had_notification = self._advance_one_day()
+        if had_notification:
+            self._stop_auto_advance()
+
+    def on_skip_to_tournament(self, instance):
+        next_date = self.get_next_tournament_date()
+        if not next_date:
+            return
+        if self._auto_advance_event:
+            self._stop_auto_advance()
+        target = date.fromisoformat(next_date)
+        while self.date_object < target:
+            self._advance_one_day(suppress_notifications=True)
+        if str(self.date_object) == next_date:
+            self.show_tournament_popup()
+
+    def _advance_one_day(self, suppress_notifications=False):
+        """Advance date by 1 day. Returns True if a notification was triggered."""
         prev_month = self.date_object.month
         self.date_object += timedelta(days=1)
         database = self.db_name
         conn = None
+        notification_triggered = False
         try:
             conn = sqlite3.connect(database)
             cursor = conn.cursor()
 
+            cursor.execute("SELECT COUNT(*) FROM messages")
+            prev_msg_count = cursor.fetchone()[0]
+
             cursor.execute("UPDATE save SET date = ? WHERE id = 1", (str(self.date_object),))
 
-            # Ежемесячное списание зарплат (1-го числа каждого месяца)
             if self.date_object.month != prev_month and self.date_object.day == 1:
                 self._deduct_salaries(conn)
 
@@ -465,24 +1351,45 @@ class MainWindow(BoxLayout):
 
                 next_tournament_date = self.get_next_tournament_date()
 
+                # За день до турнира — AI заполняет пустые слоты
+                if next_tournament_date:
+                    from datetime import date as _date
+                    days_left = (
+                        _date.fromisoformat(next_tournament_date) -
+                        _date.fromisoformat(updated_date_value)
+                    ).days
+                    if days_left == 1:
+                        from logic.ai import ai_transfers
+                        ai_transfers(self.db_name)
+
                 if next_tournament_date and updated_date_value == next_tournament_date:
-                    self.show_tournament_popup()
+                    if not suppress_notifications:
+                        self.show_tournament_popup()
+                    notification_triggered = True
 
                 self.today_date_button.text = updated_date_value
                 self.tournament_button.text = self.get_next_tournament()
+                self._refresh_menu_badges()
+                self._show_dashboard()
 
-                # ── Budget check ──────────────────────────────────
-                cursor.execute(
-                    "SELECT budget FROM teams WHERE player='yes'"
-                )
+                # Новые сообщения — останавливаем авто-листание
+                if not suppress_notifications:
+                    cursor.execute("SELECT COUNT(*) FROM messages")
+                    if cursor.fetchone()[0] > prev_msg_count:
+                        notification_triggered = True
+
+                # Бюджет
+                cursor.execute("SELECT budget FROM teams WHERE player='yes'")
                 budget_row = cursor.fetchone()
                 if budget_row and (budget_row[0] or 0) <= 0:
                     self._show_bankruptcy()
+                    notification_triggered = True
         except sqlite3.Error as e:
             print(f"Ошибка при работе с базой данных: {e}")
         finally:
             if conn:
                 conn.close()
+        return notification_triggered
 
 
 
@@ -506,6 +1413,29 @@ class MainWindow(BoxLayout):
         ok_btn.bind(on_press=lambda _: (popup.dismiss(), self.popup.dismiss()))
         popup.open()
 
+    def _refresh_menu_badges(self, *_):
+        if not hasattr(self, '_menu_buttons') or not hasattr(self, 'db_name'):
+            return
+        badges   = _get_menu_badges(self.db_name)
+        active   = getattr(self, '_active_nav_btn', None)
+        for base in ('Входящие', 'Трансферы', 'Состав'):
+            btn = self._menu_buttons.get(base)
+            if not btn:
+                continue
+            suffix = badges.get(base, '')
+            btn.text       = base + suffix
+            btn._has_alert = bool(suffix)
+            if btn is not active:
+                btn.background_color = T.NAV_ALERT if suffix else T.NAV_IDLE
+        if active:
+            active.background_color = T.NAV_ACTIVE
+        if hasattr(self, '_budget_lbl'):
+            txt, color = self._get_budget_display()
+            self._budget_lbl.text  = txt
+            self._budget_lbl.color = color
+        if hasattr(self, '_rating_lbl'):
+            self._rating_lbl.text = self._get_rating_display()
+
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')
 
@@ -516,7 +1446,15 @@ class MainWindow(BoxLayout):
                 {'date': str(self.date_object), 'author': 'Система',
                  'text': 'Нет новых сообщений.'},
             ]
-        show_message(messages)
+        try:
+            conn = sqlite3.connect(self.db_name)
+            conn.execute("UPDATE messages SET read=1 WHERE COALESCE(read,0)=0")
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+        from ingame_interface.inbox import MessagePopup
+        self._show_inline(MessagePopup(messages), 'Входящие')
+        self._refresh_menu_badges()
 
     def _load_messages(self):
         try:
@@ -530,55 +1468,147 @@ class MainWindow(BoxLayout):
             return []
 
     def on_roster(self, instance):
-        show_squad_popup(self.db_name)
+        from ingame_interface.squad import SquadPopup
+        self._show_inline(SquadPopup(self.db_name), 'Состав')
 
     def on_organization(self, instance):
-        show_organization_popup(self.db_name)
+        from ingame_interface.organization import OrganizationPopup
+        self._show_inline(OrganizationPopup(self.db_name), 'Организация')
 
     def on_league(self, instance):
         from ingame_interface.team_viewer import LeaguePopup
-        LeaguePopup(self.db_name).open()
+        self._show_inline(LeaguePopup(self.db_name), 'Команды')
 
     def on_tournaments(self, instance):
-        TournamentsViewPopup(self.db_name).open()
+        self._show_inline(TournamentsViewPopup(self.db_name), 'Турниры')
+
+    def on_history(self, instance):
+        from ingame_interface.history import HistoryPopup
+        self._show_inline(HistoryPopup(self.db_name), 'История')
+
+    def on_stats(self, instance):
+        from ingame_interface.stats import StatsPopup
+        self._show_inline(StatsPopup(self.db_name), 'Статистика')
+
+    def on_goals(self, instance):
+        from ingame_interface.goals import GoalsPopup
+        self._show_inline(GoalsPopup(self.db_name), 'Цели')
+
+    def on_manual_save(self, instance):
+        import shutil
+        from datetime import date as _date
+        from kivy.uix.popup import Popup
+        from kivy.uix.label import Label
+        backup = self.db_name.replace('.db', f'_save_{_date.today()}.db')
+        try:
+            shutil.copy(self.db_name, backup)
+            msg = f'Сохранено:\n{backup.split("/")[-1]}'
+            color = (0.2, 0.9, 0.3, 1)
+        except Exception as e:
+            msg = f'Ошибка сохранения:\n{e}'
+            color = (0.9, 0.3, 0.2, 1)
+        p = Popup(content=Label(text=msg, halign='center', color=color),
+                  title='', size_hint=(0.55, 0.25))
+        p.open()
 
     def on_transfers(self, instance):
-        show_transfers_popup(self.db_name)
+        from ingame_interface.transfers import TransferPopup
+        self._show_inline(TransferPopup(self.db_name), 'Трансферы')
+
+    def _show_event_popup(self, title, text):
+        from kivy.uix.popup import Popup
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+
+        root = BoxLayout(orientation='vertical', padding=14, spacing=10)
+        lbl = Label(
+            text=text, markup=True,
+            color=(0.92, 0.92, 0.92, 1), halign='center', valign='middle',
+            font_size='14sp',
+        )
+        lbl.bind(size=lbl.setter('text_size'))
+        root.add_widget(lbl)
+        popup = Popup(title=title, content=root, size_hint=(0.62, 0.38), auto_dismiss=False)
+        ok = Button(text='OK', size_hint_y=None, height=44,
+                    background_normal='', background_color=(0.22, 0.50, 0.22, 1))
+        ok.bind(on_press=popup.dismiss)
+        root.add_widget(ok)
+        popup.open()
+
+    def _show_player_dialogue(self, dialogue):
+        from kivy.uix.popup import Popup
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+        from logic.player_dialogue import apply_dialogue_choice
+
+        root = BoxLayout(orientation='vertical', padding=14, spacing=10)
+        txt = Label(
+            text=dialogue['text'], markup=True,
+            color=(0.92, 0.92, 0.92, 1), halign='center', valign='middle',
+            font_size='14sp',
+        )
+        txt.bind(size=txt.setter('text_size'))
+        root.add_widget(txt)
+
+        btn_row = BoxLayout(size_hint_y=None, height=48, spacing=8)
+        popup = Popup(
+            title=dialogue['title'],
+            content=root,
+            size_hint=(0.65, 0.42),
+            auto_dismiss=False,
+        )
+
+        def _choose(key):
+            popup.dismiss()
+            title, result = apply_dialogue_choice(self.db_name, dialogue, key)
+            info = Popup(
+                title=title,
+                content=Label(text=result, halign='center', valign='middle',
+                              color=(0.9, 0.9, 0.9, 1)),
+                size_hint=(0.55, 0.28),
+            )
+            info.open()
+
+        for label, key in dialogue['choices']:
+            b = Button(text=label, background_normal='',
+                       background_color=(0.22, 0.50, 0.22, 1) if 'Согл' in label or 'OK' in label or 'Разреш' in label
+                       else (0.55, 0.18, 0.18, 1))
+            b.bind(on_press=lambda _, k=key: _choose(k))
+            btn_row.add_widget(b)
+        root.add_widget(btn_row)
+        popup.open()
+
+    def on_finances(self, instance):
+        from ingame_interface.finances import FinancesPopup
+        self._show_inline(FinancesPopup(self.db_name), 'Финансы')
+
+    def on_academy(self, instance):
+        from ingame_interface.academy import AcademyPopup
+        self._show_inline(AcademyPopup(self.db_name), 'Академия')
+
+    def on_scrimmage(self, instance):
+        from ingame_interface.scrimmage import ScrimmagePopup
+        self._show_inline(ScrimmagePopup(self.db_name), 'Кланвары')
 
     def on_sponsors(self, instance):
-        from ingame_interface.sponsors import show_sponsors_popup
-        show_sponsors_popup(self.db_name)
+        from ingame_interface.sponsors import SponsorsPopup
+        self._show_inline(SponsorsPopup(self.db_name), 'Спонсоры')
 
     def on_settings(self, instance):
         SettingsPopup().open()
 
     def on_profile(self, instance):
-        show_profile_popup(self.db_name)
+        from ingame_interface.profile import ProfilePopup
+        self._show_inline(ProfilePopup(self.db_name), 'Мой профиль')
 
     def on_main_menu(self, instance):
-        content = BoxLayout(orientation='vertical')
-
-        label = Button(text='Хотите ли вы выйти в главное меню?', size_hint_y=None, height=44)
-
-        yes_button = Button(text='Да', size_hint_y=None, height=44)
-        yes_button.bind(on_press=self.exit_to_main_menu)
-
-        no_button = Button(text='Нет', size_hint_y=None, height=44)
-        no_button.bind(on_press=self.close_popup)
-
-        content.add_widget(label)
-        content.add_widget(yes_button)
-        content.add_widget(no_button)
-
-        self.popup_confirm = Popup(title='Подтверждение', content=content, size_hint=(0.6, 0.4))
-        self.popup_confirm.open()
-
-    def exit_to_main_menu(self, instance):
-        self.popup_confirm.dismiss()
-        self.popup.dismiss()
+        from ingame_interface.exit_screen import show_exit_screen
+        show_exit_screen(self.db_name, on_exit=self.popup.dismiss)
 
     def close_popup(self, instance):
-        self.popup_confirm.dismiss()
+        pass  # legacy, kept for safety
 
     def get_team_name(self):
         try:
@@ -599,7 +1629,25 @@ class MainWindow(BoxLayout):
             print(f"Ошибка при работе с базой данных: {e}")
             return None
 
+    def get_current_tournament(self):
+        """Return name of ongoing tournament (started, not finished), or None."""
+        date_object = self.get_date_from_db(1)
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM tournaments "
+            "WHERE start_date <= ? AND place1 IS NULL "
+            "ORDER BY start_date DESC LIMIT 1",
+            (date_object,)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+
     def get_next_tournament(self):
+        current = self.get_current_tournament()
+        if current:
+            return f'⚔ {current}'
         date_object = self.get_date_from_db(1)
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
@@ -612,6 +1660,33 @@ class MainWindow(BoxLayout):
         result = cursor.fetchone()
         conn.close()
         return result[0] if result else "Нет турниров"
+
+    def on_tournament_btn(self, instance):
+        if self.get_current_tournament():
+            self.show_tournament_popup()
+        else:
+            # Tournament not started yet — show start date
+            date_object = self.get_date_from_db(1)
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT name, start_date FROM tournaments "
+                "WHERE start_date >= ? AND place1 IS NULL "
+                "ORDER BY start_date ASC LIMIT 1",
+                (date_object,)
+            ).fetchone()
+            conn.close()
+            from kivy.uix.popup import Popup
+            from kivy.uix.label import Label
+            if row:
+                text = f'Турнир начнётся {row[1]}\n{row[0]}'
+            else:
+                text = 'Нет предстоящих турниров'
+            Popup(
+                title='Турнир',
+                content=Label(text=text, halign='center', valign='middle',
+                              color=(0.92, 0.92, 0.92, 1)),
+                size_hint=(0.50, 0.25),
+            ).open()
 
     def show_tournament_popup(self):
         popup = TournamentPopup(self.db_name,

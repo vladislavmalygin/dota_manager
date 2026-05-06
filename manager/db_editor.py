@@ -213,6 +213,7 @@ class TeamEditorPanel(BoxLayout):
             self._on_refresh()
 
     def load(self, team_id):
+        self.flush()  # save pending changes before switching
         self._team_id = team_id
         self._staged = {}
         self.clear_widgets()
@@ -223,14 +224,20 @@ class TeamEditorPanel(BoxLayout):
         cur.execute("""
             SELECT t.name, t.country, t.budget, COALESCE(t.rating,0),
                    t.carry, t.mid, t.offlane, t.partial_support, t.full_support,
-                   COALESCE(t.cohesion, 0)
+                   COALESCE(t.cohesion, 0),
+                   COALESCE(t.region, 'WEU'),
+                   COALESCE(t.tactic, 'balanced')
             FROM teams t WHERE t.id=?
         """, (team_id,))
         row = cur.fetchone()
         conn.close()
         if not row:
             return
-        name, country, budget, rating, *slot_ids, cohesion = row
+        name, country, budget, rating, *rest = row
+        slot_ids = rest[:5]
+        cohesion = rest[5]
+        region   = rest[6]
+        tactic   = rest[7]
 
         self.add_widget(_lbl(name, bold=True, color=_GOLD, height=32, font_size='15sp'))
 
@@ -247,9 +254,30 @@ class TeamEditorPanel(BoxLayout):
         _field('Страна',   country or '', 'country')
         _field('Бюджет $', budget or 0,  'budget', int)
         _field('Рейтинг',  int(rating),  'rating', float)
+        _field('Сыгранность', cohesion,  'cohesion', int)
 
         self.add_widget(fields_grid)
-        self.add_widget(_lbl(f'Сыгранность: {cohesion}/100', color=_DIM, height=24))
+
+        # Region spinner
+        from kivy.uix.spinner import Spinner
+        regions = ['EEU', 'WEU', 'NA', 'SA', 'China', 'SEA', 'OPEN']
+        tactics = ['balanced', 'aggressive', 'farming', 'teamplay']
+
+        spin_row = GridLayout(cols=4, size_hint_y=None, height=36, spacing=4)
+        spin_row.add_widget(_lbl('Регион', height=36))
+        reg_spin = Spinner(text=region, values=regions,
+                           size_hint_y=None, height=34,
+                           background_color=(0.18, 0.35, 0.55, 1), background_normal='')
+        reg_spin.bind(text=lambda inst, v: self._stage('region', v, str))
+        spin_row.add_widget(reg_spin)
+
+        spin_row.add_widget(_lbl('Тактика', height=36))
+        tac_spin = Spinner(text=tactic, values=tactics,
+                           size_hint_y=None, height=34,
+                           background_color=(0.18, 0.35, 0.55, 1), background_normal='')
+        tac_spin.bind(text=lambda inst, v: self._stage('tactic', v, str))
+        spin_row.add_widget(tac_spin)
+        self.add_widget(spin_row)
 
         save_btn = _btn('💾  Сохранить команду', color=_SAVE_CLR, height=38)
         save_btn.bind(on_press=lambda _: self.flush())
@@ -344,6 +372,7 @@ class PlayerEditorPanel(BoxLayout):
             self._on_refresh()
 
     def load(self, player_id):
+        self.flush()  # save pending changes before switching
         self._pid = player_id
         self._staged = {}
         self.clear_widgets()
@@ -356,19 +385,25 @@ class PlayerEditorPanel(BoxLayout):
                    COALESCE(soft_skills,0), COALESCE(skill_cap,300),
                    COALESCE(competence,5), COALESCE(morale,5),
                    COALESCE(wage,0), COALESCE(expected_wage,0),
-                   team_id
+                   team_id, COALESCE(age,22), contract_end,
+                   secondary_role, COALESCE(secondary_comp,5),
+                   COALESCE(stability,5), COALESCE(learning_rate,5)
             FROM players WHERE id=?
         """, (player_id,))
         row = cur.fetchone()
         if not row:
             conn.close()
             return
-        nick, fname, lname, country, role, micro, macro, soft, cap, comp, morale, wage, exp_wage, team_id = row
+        (nick, fname, lname, country, role, micro, macro, soft, cap, comp, morale,
+         wage, exp_wage, team_id, age, contract_end, sec_role, sec_comp,
+         stability, learning_rate) = row
 
         team_name = ''
         if team_id:
             r = cur.execute("SELECT name FROM teams WHERE id=?", (team_id,)).fetchone()
             team_name = r[0] if r else str(team_id)
+        comp_exp = (cur.execute("SELECT COALESCE(comp_exp,0) FROM players WHERE id=?",
+                               (player_id,)).fetchone() or (0,))[0]
         conn.close()
 
         self.add_widget(_lbl(f'id={player_id}  {nick}', bold=True, color=_GOLD,
@@ -405,15 +440,33 @@ class PlayerEditorPanel(BoxLayout):
         )
         role_spin.bind(text=lambda inst, v: self._stage('role', v, str))
         grid.add_widget(role_spin)
-
         _row('Micro',         micro,    'micro_skills', int)
         _row('Macro',         macro,    'macro_skills', int)
         _row('Soft',          soft,     'soft_skills',  int)
+        _row('Соревн. опыт',  comp_exp, 'comp_exp',     int)
         _row('Skill cap',     cap,      'skill_cap',    int)
         _row('Competence',    comp,     'competence',   int)
         _row('Morale',        morale,   'morale',       int)
         _row('Зарплата $',    wage,     'wage',         int)
         _row('Ожид. зарп. $', exp_wage, 'expected_wage',int)
+        _row('Возраст',        age,               'age',          int)
+        _row('Контракт до',   contract_end or '—', 'contract_end', ro=True)
+        _row('Стабильность',   stability,     'stability',     int)
+        _row('Скор. обучения', learning_rate, 'learning_rate', int)
+
+        # Secondary role section
+        from kivy.uix.spinner import Spinner as _Sp
+        grid.add_widget(_lbl('Доп. роль', height=32))
+        sec_vals = ['—'] + ROLES
+        sec_spin = _Sp(
+            text=sec_role or '—', values=sec_vals,
+            size_hint_y=None, height=32,
+            background_color=(0.18, 0.35, 0.55, 1), background_normal='',
+        )
+        sec_spin.bind(text=lambda inst, v: self._stage('secondary_role', None if v == '—' else v, str))
+        grid.add_widget(sec_spin)
+
+        _row('Компет. доп. роли', sec_comp, 'secondary_comp', int)
 
         sv.add_widget(grid)
         self.add_widget(sv)
@@ -697,6 +750,7 @@ class DBEditorPopup(Popup):
         save_all_btn = _btn('💾  Сохранить все изменения', color=_SAVE_CLR, height=44)
         save_all_btn.bind(on_press=self._save_all)
         close = _btn('Закрыть', color=(0.50, 0.18, 0.18, 1), height=44)
+        close.bind(on_press=self._save_all)
         close.bind(on_press=self.dismiss)
         btn_row.add_widget(save_all_btn)
         btn_row.add_widget(close)

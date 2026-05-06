@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import re
 
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
@@ -16,28 +17,34 @@ from logic.tournaments.runner import (
     generate_tournament_events,
     save_tournament_results,
     get_lineup,
+    replay_match_with_heroes,
 )
-from logic.ai import update_morale_after_tournament, ai_transfers, apply_training_from_games
+from logic.heroes import HEROES, ROLE_ORDER, random_picks
+from logic.ai import (update_morale_after_tournament, ai_transfers,
+                       apply_training_from_games, update_form_after_tournament)
+from ingame_interface.transfers import is_transfer_window as _is_transfer_window
 
 
-# ── palette ──────────────────────────────────────────────────────────────────
-_ACCENT   = (0.35, 0.85, 1.00, 1)
-_GOLD     = (1.00, 0.85, 0.25, 1)
-_SILVER   = (0.85, 0.85, 0.85, 1)
-_BRONZE   = (0.80, 0.55, 0.30, 1)
-_GREEN    = (0.20, 0.88, 0.35, 1)
-_RED      = (0.90, 0.28, 0.20, 1)
-_PLAYER   = (0.30, 1.00, 0.50, 1)
-_DIM      = (0.55, 0.55, 0.55, 1)
-_WHITE    = (0.92, 0.92, 0.92, 1)
-_YELLOW   = (1.00, 0.90, 0.25, 1)
+# ── palette (from shared theme) ───────────────────────────────────────────────
+import ui_theme as _T
 
-_BG_DARK  = (0.10, 0.10, 0.12, 1)
-_BG_MED   = (0.15, 0.15, 0.18, 1)
+_ACCENT   = _T.ACCENT
+_GOLD     = _T.GOLD
+_SILVER   = _T.SILVER
+_BRONZE   = _T.BRONZE
+_GREEN    = _T.POSITIVE
+_RED      = _T.NEGATIVE
+_PLAYER   = _T.PLAYER_CLR
+_DIM      = _T.TEXT_DIM
+_WHITE    = _T.TEXT_MAIN
+_YELLOW   = _T.WARNING
+
+_BG_DARK  = _T.BG_ROW_B
+_BG_MED   = _T.BG_ROW_A
 _BG_PANEL = (0.12, 0.18, 0.22, 1)
-_BG_WIN   = (0.08, 0.28, 0.10, 1)
-_BG_LOSE  = (0.28, 0.08, 0.08, 1)
-_BG_HEAD  = (0.10, 0.22, 0.32, 1)
+_BG_WIN   = _T.BG_WIN
+_BG_LOSE  = _T.BG_LOSE
+_BG_HEAD  = _T.BG_HEADER
 
 
 # ── widget helpers ────────────────────────────────────────────────────────────
@@ -62,6 +69,19 @@ def _add_message(db_name, text, author='Система'):
     )
     conn.commit()
     conn.close()
+
+
+def _update_reputation(db_name, delta):
+    try:
+        conn = sqlite3.connect(db_name)
+        conn.execute(
+            "UPDATE characters SET reputation=MAX(0, COALESCE(reputation,0)+?)",
+            (delta,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def _logo_path(logo):
@@ -124,34 +144,79 @@ def _team_logo_widget(logo, size=40):
 
 # ── match log schedule ────────────────────────────────────────────────────────
 
+def _plain(line):
+    """Strip Kivy color markup for string comparisons."""
+    return re.sub(r'\[/?[^\]]*\]', '', line).strip()
+
+
 def _build_log_schedule(lines):
     """Return [(cumulative_seconds, line)] for timed display."""
     schedule = []
     t = 0.0
-    speed = 0.5   # laning: 0.5s per event
+    speed = 0.5
 
     for line in lines:
-        s = line.strip()
-        if line.startswith('─'):
-            schedule.append((t, line))            # separators: instant
-        elif s == 'ЛАЙНСТЕЙДЖ':
-            schedule.append((t, line))            # instant
-        elif 'МИДГЕЙМ' in s:
-            t += 2.0                              # pause before midgame
+        p = _plain(line)
+        if line.startswith('─') or p.startswith('─'):
             schedule.append((t, line))
-            speed = 1.0
-        elif s == 'ЛЕЙТГЕЙМ':
-            t += 2.0
+        elif p in ('ЛАЙНСТЕЙДЖ', 'ЛАЙНИНГ'):
             schedule.append((t, line))
-            speed = 1.4
-        elif s.startswith('ПОБЕДИТЕЛЬ'):
-            t += 2.0
+        elif 'МИДГЕЙМ' in p:
+            t += 1.8
             schedule.append((t, line))
+            speed = 0.9
+        elif p in ('ЛЕЙТГЕЙМ',):
+            t += 1.8
+            schedule.append((t, line))
+            speed = 1.3
+        elif p.startswith('ПОБЕДИТЕЛЬ') or p.startswith('РАЗГРОМ'):
+            t += 1.5
+            schedule.append((t, line))
+        elif 'ПЕРВАЯ КРОВЬ' in p:
+            schedule.append((t, line))
+            t += 0.3
+        elif 'ИГРА' in p and '·' in p:   # game header in BO series
+            t += 1.0
+            schedule.append((t, line))
+            t += 0.5
         else:
             t += speed
             schedule.append((t, line))
 
     return schedule
+
+
+class _GoldBar(Widget):
+    """Horizontal token-advantage bar: green=team1, red=team2."""
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._adv = 0.0
+        self.bind(size=self._draw, pos=self._draw)
+
+    def update(self, tok1, tok2):
+        total = max(tok1 + tok2, 1)
+        self._adv = (tok1 - tok2) / total
+        self._draw()
+
+    def _draw(self, *_):
+        self.canvas.clear()
+        w, h = self.size
+        x0, y0 = self.pos
+        if w < 4:
+            return
+        mid = x0 + w / 2
+        with self.canvas:
+            Color(0.18, 0.18, 0.20, 1)
+            Rectangle(pos=(x0, y0), size=(w, h))
+            adv = self._adv
+            if adv > 0:
+                Color(0.20, 0.85, 0.35, 0.9)
+                Rectangle(pos=(mid, y0), size=(adv * w / 2, h))
+            elif adv < 0:
+                Color(0.90, 0.28, 0.22, 0.9)
+                Rectangle(pos=(mid + adv * w / 2, y0), size=(-adv * w / 2, h))
+            Color(0.75, 0.75, 0.75, 0.6)
+            Line(points=[mid, y0, mid, y0 + h], width=1.2)
 
 
 # ── GroupTableWidget ──────────────────────────────────────────────────────────
@@ -161,7 +226,7 @@ class GroupTableWidget(BoxLayout):
 
     _ROW_H = 34
 
-    def __init__(self, group_idx, teams, player_teams, logo_map=None, **kw):
+    def __init__(self, group_idx, teams, player_teams, logo_map=None, ratings_map=None, **kw):
         kw.setdefault('orientation', 'vertical')
         kw.setdefault('size_hint_y', None)
         kw.setdefault('spacing', 0)
@@ -169,6 +234,7 @@ class GroupTableWidget(BoxLayout):
         self._player_teams = set(player_teams)
         self._standings = {t: 0 for t in teams}
         self._logo_map = logo_map or {}
+        self._ratings_map = ratings_map or {}
         self._team_data = {}   # team → (tbox, name_lbl, pts_lbl)
         self._rows_grid = GridLayout(cols=1, size_hint_y=None, spacing=0)
         self._rows_grid.bind(minimum_height=self._rows_grid.setter('height'))
@@ -207,10 +273,12 @@ class GroupTableWidget(BoxLayout):
             if logo:
                 tbox.add_widget(_team_logo_widget(logo, size=28))
 
+            rating = self._ratings_map.get(team)
+            rating_suffix = f'  [{int(rating)}]' if rating is not None else ''
             name_lbl = Label(
-                text=('★ ' if is_p else '') + team,
+                text=('★ ' if is_p else '') + team + rating_suffix,
                 color=_PLAYER if is_p else _WHITE,
-                halign='left', valign='middle', font_size='12sp',
+                halign='left', valign='middle', font_size='11sp',
             )
             name_lbl.bind(size=name_lbl.setter('text_size'))
 
@@ -248,8 +316,9 @@ class GroupTableWidget(BoxLayout):
             self._rows_grid.add_widget(tbox)
 
         if last_match:
-            w, l = last_match
-            self._last_lbl.text = f'  {w}  →  победил  {l}'
+            t1, t2, winner = last_match
+            loser = t2 if winner == t1 else t1
+            self._last_lbl.text = f'  {winner}  победил  {loser}'
             self._last_lbl.color = _GREEN
 
     def finalize(self):
@@ -259,7 +328,7 @@ class GroupTableWidget(BoxLayout):
             if team not in self._team_data:
                 continue
             tbox, name_lbl, pts_lbl = self._team_data[team]
-            if rank < 2:
+            if rank < 4:
                 tbox.set_bg(_BG_WIN)
                 name_lbl.color = _GREEN
                 pts_lbl.color = _GREEN
@@ -274,42 +343,65 @@ class GroupTableWidget(BoxLayout):
 
 # ── DotaMapWidget ─────────────────────────────────────────────────────────────
 
-# Normalized (x, y) positions per role per phase. (0,0)=bottom-left, (1,1)=top-right.
+# ── Map layout constants ──────────────────────────────────────────────────────
+# Radiant = team1 (green, bottom-left), Dire = team2 (red, top-right)
+# (0,0)=bottom-left, (1,1)=top-right
+
+_LANE_PATH_BOT = [(0.16, 0.09), (0.80, 0.09), (0.91, 0.09), (0.91, 0.20), (0.91, 0.84)]
+_LANE_PATH_MID = [(0.16, 0.16), (0.84, 0.84)]
+_LANE_PATH_TOP = [(0.09, 0.16), (0.09, 0.80), (0.09, 0.91), (0.20, 0.91), (0.84, 0.91)]
+
+# Tower positions per team: each lane list is [T1_outermost, T2, T3]
+_MAP_TWR_T1 = {
+    'bot': [(0.65, 0.09), (0.46, 0.09), (0.27, 0.12)],
+    'mid': [(0.51, 0.37), (0.40, 0.46), (0.29, 0.55)],
+    'top': [(0.09, 0.65), (0.09, 0.46), (0.12, 0.27)],
+    'hg':  [(0.19, 0.22), (0.22, 0.15)],
+    'throne': (0.10, 0.10),
+}
+_MAP_TWR_T2 = {
+    'bot': [(0.91, 0.35), (0.91, 0.54), (0.88, 0.73)],
+    'mid': [(0.49, 0.63), (0.60, 0.54), (0.71, 0.45)],
+    'top': [(0.35, 0.91), (0.54, 0.91), (0.73, 0.88)],
+    'hg':  [(0.81, 0.78), (0.78, 0.85)],
+    'throne': (0.90, 0.90),
+}
+
 _MAP_POS = {
     'laning': {
-        'team1_carry':           (0.22, 0.12),
-        'team1_mid':             (0.38, 0.36),
-        'team1_offlane':         (0.12, 0.76),
-        'team1_partial_support': (0.16, 0.70),
-        'team1_full_support':    (0.20, 0.20),
-        'team2_carry':           (0.78, 0.88),
-        'team2_mid':             (0.62, 0.64),
-        'team2_offlane':         (0.88, 0.24),
-        'team2_partial_support': (0.84, 0.30),
-        'team2_full_support':    (0.80, 0.80),
+        'team1_carry':           (0.43, 0.09),
+        'team1_mid':             (0.34, 0.29),
+        'team1_offlane':         (0.09, 0.43),
+        'team1_partial_support': (0.13, 0.37),
+        'team1_full_support':    (0.38, 0.13),
+        'team2_carry':           (0.57, 0.91),
+        'team2_mid':             (0.66, 0.71),
+        'team2_offlane':         (0.91, 0.57),
+        'team2_partial_support': (0.87, 0.63),
+        'team2_full_support':    (0.62, 0.87),
     },
     'midgame': {
-        'team1_carry':           (0.38, 0.30),
-        'team1_mid':             (0.45, 0.48),
-        'team1_offlane':         (0.30, 0.55),
-        'team1_partial_support': (0.28, 0.50),
-        'team1_full_support':    (0.35, 0.42),
-        'team2_carry':           (0.62, 0.70),
-        'team2_mid':             (0.55, 0.52),
-        'team2_offlane':         (0.70, 0.45),
-        'team2_partial_support': (0.72, 0.50),
-        'team2_full_support':    (0.65, 0.58),
+        'team1_carry':           (0.40, 0.32),
+        'team1_mid':             (0.42, 0.46),
+        'team1_offlane':         (0.28, 0.52),
+        'team1_partial_support': (0.30, 0.44),
+        'team1_full_support':    (0.36, 0.38),
+        'team2_carry':           (0.60, 0.68),
+        'team2_mid':             (0.58, 0.54),
+        'team2_offlane':         (0.72, 0.48),
+        'team2_partial_support': (0.70, 0.56),
+        'team2_full_support':    (0.64, 0.62),
     },
     'lategame': {
-        'team1_carry':           (0.50, 0.46),
-        'team1_mid':             (0.48, 0.50),
-        'team1_offlane':         (0.44, 0.52),
-        'team1_partial_support': (0.42, 0.48),
-        'team1_full_support':    (0.46, 0.54),
-        'team2_carry':           (0.56, 0.52),
-        'team2_mid':             (0.58, 0.50),
-        'team2_offlane':         (0.60, 0.48),
-        'team2_partial_support': (0.62, 0.52),
+        'team1_carry':           (0.46, 0.44),
+        'team1_mid':             (0.44, 0.48),
+        'team1_offlane':         (0.40, 0.52),
+        'team1_partial_support': (0.38, 0.46),
+        'team1_full_support':    (0.42, 0.54),
+        'team2_carry':           (0.58, 0.56),
+        'team2_mid':             (0.56, 0.52),
+        'team2_offlane':         (0.62, 0.50),
+        'team2_partial_support': (0.64, 0.54),
         'team2_full_support':    (0.54, 0.46),
     },
 }
@@ -321,29 +413,70 @@ _ROLE_LABELS = {
     'team2_partial_support': '4', 'team2_full_support': '5',
 }
 
+_PHASE_LABEL = {'laning': 'ЛАЙНИНГ', 'midgame': 'МИДГЕЙМ', 'lategame': 'ЛЕЙТГЕЙМ'}
+
+_FRESH_TOWERS = {
+    'top': [True, True, True], 'mid': [True, True, True], 'bot': [True, True, True],
+    'hg': [True, True], 'throne': True,
+}
+
 
 class DotaMapWidget(Widget):
 
     def __init__(self, team1, team2, **kwargs):
         super().__init__(**kwargs)
-        self._team1  = team1
-        self._team2  = team2
-        self._snap   = {
-            'phase': 'laning', 'minute': 0,
-            'kills_t1': 0, 'kills_t2': 0,
-            'tokens_t1': 0, 'tokens_t2': 0,
-        }
-        self._roshan = True
+        self._team1      = team1
+        self._team2      = team2
+        self._snap       = {'phase': 'laning', 'minute': 0,
+                            'kills_t1': 0, 'kills_t2': 0,
+                            'tokens_t1': 0, 'tokens_t2': 0}
+        self._roshan     = True
+        self._hero_names = {}   # role_key → hero_name (e.g. 'team1_carry' → 'Anti-Mage')
+        # Animated positions: current (drawn) and target (from snap)
+        from logic.dota.game import _BASE_POS
+        self._cur_pos    = dict(_BASE_POS['laning'])
+        self._tgt_pos    = dict(_BASE_POS['laning'])
+        self._anim_t     = 0.0   # 0=at cur, 1=at tgt
+        self._anim_clock = None
         self.bind(size=self._draw, pos=self._draw)
+
+    def set_heroes(self, hero_names):
+        """hero_names: {'team1_carry': 'Anti-Mage', ...}"""
+        self._hero_names = hero_names or {}
 
     def apply_snap(self, snap):
         self._snap = snap
-        old_phase = getattr(self, '_last_phase', 'laning')
         if 'забрала Рошана' in str(snap.get('_event', '')):
             self._roshan = False
-        if snap.get('phase') != old_phase:
-            self._last_phase = snap['phase']
+        # Update hero names if snap carries them
+        hn = snap.get('hero_names', {})
+        if hn:
+            self._hero_names = hn
+        # Trigger animated transition to new positions
+        new_pos = snap.get('positions') or {}
+        if new_pos:
+            self._cur_pos = dict(self._tgt_pos)
+            self._tgt_pos = new_pos
+            self._anim_t  = 0.0
+            if self._anim_clock:
+                self._anim_clock.cancel()
+            self._anim_clock = Clock.schedule_interval(self._anim_step, 1/30)
+        else:
+            self._draw()
+
+    def _anim_step(self, dt):
+        self._anim_t = min(1.0, self._anim_t + dt * 3.5)  # ~0.28s full transition
         self._draw()
+        if self._anim_t >= 1.0:
+            self._anim_clock.cancel()
+            self._anim_clock = None
+
+    def _interp_pos(self, role):
+        """Lerp between cur and tgt position for this role."""
+        cx, cy = self._cur_pos.get(role, (0.5, 0.5))
+        tx, ty = self._tgt_pos.get(role, (cx, cy))
+        t = self._anim_t
+        return cx + (tx - cx) * t, cy + (ty - cy) * t
 
     def _draw(self, *_):
         self.canvas.clear()
@@ -352,114 +485,218 @@ class DotaMapWidget(Widget):
         if w < 10 or h < 10:
             return
 
-        snap   = self._snap
-        phase  = snap.get('phase', 'laning')
-        minute = snap.get('minute', 0)
-        kt1    = snap.get('kills_t1', 0)
-        kt2    = snap.get('kills_t2', 0)
-        tok1   = snap.get('tokens_t1', 0)
-        tok2   = snap.get('tokens_t2', 0)
-        total  = max(tok1 + tok2, 1)
-        adv    = (tok1 - tok2) / total  # -1..+1
+        snap  = self._snap
+        phase = snap.get('phase', 'laning')
+        twr1  = snap.get('towers_state_t1') or _FRESH_TOWERS
+        twr2  = snap.get('towers_state_t2') or _FRESH_TOWERS
+
+        def px(nx): return x0 + nx * w
+        def py(ny): return y0 + ny * h
+        def pts(path): return [c for nx, ny in path for c in (px(nx), py(ny))]
 
         with self.canvas:
             # ── background ──────────────────────────────────────
-            Color(0.08, 0.14, 0.08, 1)
+            Color(0.04, 0.10, 0.04, 1)
             Rectangle(pos=(x0, y0), size=(w, h))
 
-            # ── river (diagonal blue band) ───────────────────────
-            Color(0.10, 0.25, 0.45, 0.7)
-            # draw as a rotated parallelogram approximated by two triangles
-            rw = w * 0.13
-            # top-left to bottom-right diagonal strip
-            pts1 = [
-                x0 + w * 0.0,  y0 + h * 0.55,
-                x0 + w * 0.10, y0 + h * 0.65,
-                x0 + w * 0.90, y0 + h * 0.35,
-            ]
-            pts2 = [
-                x0 + w * 0.0,  y0 + h * 0.55,
-                x0 + w * 0.90, y0 + h * 0.35,
-                x0 + w * 0.90, y0 + h * 0.45,
-            ]
-            pts3 = [
-                x0 + w * 0.0,  y0 + h * 0.55,
-                x0 + w * 0.0,  y0 + h * 0.45,
-                x0 + w * 0.90, y0 + h * 0.35,
-            ]
-            Triangle(points=pts1)
-            Triangle(points=pts3)
+            # ── forest patches ───────────────────────────────────
+            Color(0.07, 0.15, 0.07, 1)
+            for fx, fy, fw, fh in [
+                (0.20, 0.56, 0.14, 0.18), (0.66, 0.26, 0.12, 0.18),
+                (0.38, 0.40, 0.10, 0.12), (0.50, 0.22, 0.08, 0.10),
+                (0.26, 0.70, 0.08, 0.10), (0.64, 0.48, 0.07, 0.09),
+            ]:
+                Rectangle(pos=(px(fx), py(fy)), size=(fw*w, fh*h))
 
-            # ── lane paths ───────────────────────────────────────
-            Color(0.22, 0.30, 0.18, 1)
-            lw = max(3, w * 0.04)
-            # top lane
-            Line(points=[x0+w*0.12, y0+h*0.88, x0+w*0.88, y0+h*0.88], width=lw)
-            # bot lane
-            Line(points=[x0+w*0.12, y0+h*0.12, x0+w*0.88, y0+h*0.12], width=lw)
-            # mid lane (diagonal)
-            Line(points=[x0+w*0.18, y0+h*0.18, x0+w*0.82, y0+h*0.82], width=lw)
+            # ── river (diagonal band) ─────────────────────────────
+            Color(0.08, 0.20, 0.45, 0.55)
+            Triangle(points=[
+                px(0.00), py(0.50),  px(0.50), py(1.00),  px(0.60), py(1.00)])
+            Triangle(points=[
+                px(0.00), py(0.50),  px(0.00), py(0.40),  px(0.60), py(1.00)])
+            Triangle(points=[
+                px(0.00), py(0.40),  px(0.40), py(0.00),  px(0.60), py(0.00)])
+            Triangle(points=[
+                px(0.00), py(0.40),  px(0.60), py(0.00),  px(0.60), py(1.00)])
 
-            # ── Radiant base (bottom-left) ───────────────────────
-            Color(0.15, 0.65, 0.25, 0.9)
-            bsz = w * 0.12
-            Rectangle(pos=(x0 + w*0.04, y0 + h*0.04), size=(bsz, bsz))
+            # ── lanes ─────────────────────────────────────────────
+            lw = max(4, w * 0.042)
+            Color(0.36, 0.44, 0.26, 1)
+            Line(points=pts(_LANE_PATH_BOT), width=lw, joint='miter', cap='round')
+            Line(points=pts(_LANE_PATH_MID), width=lw, cap='round')
+            Line(points=pts(_LANE_PATH_TOP), width=lw, joint='miter', cap='round')
 
-            # ── Dire base (top-right) ─────────────────────────────
-            Color(0.80, 0.22, 0.18, 0.9)
-            Rectangle(pos=(x0 + w*0.84, y0 + h*0.84), size=(bsz, bsz))
+            # ── bases ─────────────────────────────────────────────
+            bsz = w * 0.15
+            Color(0.10, 0.55, 0.18, 1)
+            Ellipse(pos=(px(0.01), py(0.01)), size=(bsz, bsz))
+            Color(0.55, 0.10, 0.08, 1)
+            Ellipse(pos=(px(1.0 - 0.01) - bsz, py(1.0 - 0.01) - bsz), size=(bsz, bsz))
+            Color(0, 0, 0, 0.40)
+            Line(circle=(px(0.01)+bsz/2, py(0.01)+bsz/2, bsz/2+1.5), width=1.5)
+            Line(circle=(px(1.0-0.01)-bsz/2, py(1.0-0.01)-bsz/2, bsz/2+1.5), width=1.5)
 
-            # ── Roshan pit ───────────────────────────────────────
-            rosh_x = x0 + w * 0.28
-            rosh_y = y0 + h * 0.52
+            # ── draw towers ───────────────────────────────────────
+            tsz_lane = max(6, w * 0.042)
+            tsz_hg   = max(7, w * 0.052)
+            tsz_thr  = max(9, w * 0.065)
+
+            def _tower(nx, ny, alive, c_alive, sz):
+                tx, ty = px(nx) - sz/2, py(ny) - sz/2
+                if alive:
+                    Color(*c_alive)
+                    Rectangle(pos=(tx, ty), size=(sz, sz))
+                    Color(0, 0, 0, 0.55)
+                    Line(rectangle=(tx, ty, sz, sz), width=1.1)
+                else:
+                    Color(0.20, 0.20, 0.20, 0.45)
+                    Rectangle(pos=(tx, ty), size=(sz, sz))
+                    # X mark
+                    Color(0.55, 0.18, 0.18, 0.70)
+                    Line(points=[tx+2, ty+2, tx+sz-2, ty+sz-2], width=1.0)
+                    Line(points=[tx+sz-2, ty+2, tx+2, ty+sz-2], width=1.0)
+
+            def _throne(nx, ny, alive, c_alive):
+                cx, cy = px(nx), py(ny)
+                r = tsz_thr / 2
+                if alive:
+                    Color(*c_alive)
+                    Ellipse(pos=(cx-r, cy-r), size=(tsz_thr, tsz_thr))
+                    Color(1.0, 0.85, 0.0, 0.9)
+                    Line(circle=(cx, cy, r+2), width=2.0)
+                else:
+                    Color(0.25, 0.25, 0.25, 0.45)
+                    Ellipse(pos=(cx-r, cy-r), size=(tsz_thr, tsz_thr))
+
+            T1C = (0.22, 0.88, 0.36, 0.92)
+            T2C = (0.92, 0.26, 0.20, 0.92)
+
+            for lane in ('bot', 'mid', 'top'):
+                st1 = twr1.get(lane, [True, True, True])
+                st2 = twr2.get(lane, [True, True, True])
+                for i, (nx, ny) in enumerate(_MAP_TWR_T1[lane]):
+                    _tower(nx, ny, st1[i] if i < len(st1) else False, T1C, tsz_lane)
+                for i, (nx, ny) in enumerate(_MAP_TWR_T2[lane]):
+                    _tower(nx, ny, st2[i] if i < len(st2) else False, T2C, tsz_lane)
+
+            hg1 = twr1.get('hg', [True, True])
+            hg2 = twr2.get('hg', [True, True])
+            for i, (nx, ny) in enumerate(_MAP_TWR_T1['hg']):
+                _tower(nx, ny, hg1[i] if i < len(hg1) else False, T1C, tsz_hg)
+            for i, (nx, ny) in enumerate(_MAP_TWR_T2['hg']):
+                _tower(nx, ny, hg2[i] if i < len(hg2) else False, T2C, tsz_hg)
+
+            _throne(*_MAP_TWR_T1['throne'], twr1.get('throne', True), T1C)
+            _throne(*_MAP_TWR_T2['throne'], twr2.get('throne', True), T2C)
+
+            # ── Roshan ───────────────────────────────────────────
+            rcx, rcy = px(0.31), py(0.56)
             rsz = max(8, w * 0.055)
             if self._roshan:
-                Color(0.85, 0.65, 0.10, 1)
-                Ellipse(pos=(rosh_x - rsz/2, rosh_y - rsz/2), size=(rsz, rsz))
+                Color(0.88, 0.65, 0.08, 1)
+                Ellipse(pos=(rcx-rsz/2, rcy-rsz/2), size=(rsz, rsz))
+                Color(0.55, 0.38, 0.04, 0.9)
+                Line(circle=(rcx, rcy, rsz/2 + 2), width=2.0)
             else:
-                Color(0.4, 0.4, 0.4, 0.5)
-                Ellipse(pos=(rosh_x - rsz/2, rosh_y - rsz/2), size=(rsz, rsz))
+                Color(0.30, 0.30, 0.30, 0.45)
+                Ellipse(pos=(rcx-rsz/2, rcy-rsz/2), size=(rsz, rsz))
 
-            # ── players ──────────────────────────────────────────
-            positions = _MAP_POS.get(phase, _MAP_POS['laning'])
-            dot_r = max(7, w * 0.055)
+            # ── hero dots with nicks + hero names ────────────────
+            _ROLES_T1 = ['team1_carry', 'team1_mid', 'team1_offlane',
+                         'team1_partial_support', 'team1_full_support']
+            _ROLES_T2 = ['team2_carry', 'team2_mid', 'team2_offlane',
+                         'team2_partial_support', 'team2_full_support']
+            # Role-size multipliers: carry=largest, supports=smallest
+            _DOT_MULT = {
+                'team1_carry': 1.20, 'team2_carry': 1.20,
+                'team1_mid':   1.12, 'team2_mid':   1.12,
+                'team1_offlane': 1.06, 'team2_offlane': 1.06,
+                'team1_partial_support': 0.90, 'team2_partial_support': 0.90,
+                'team1_full_support': 0.84,    'team2_full_support': 0.84,
+            }
+            base_dot_r = max(10, w * 0.072)
+            players_t1 = snap.get('players_t1', {})
+            players_t2 = snap.get('players_t2', {})
+            nick_map = {
+                'team1_carry':           players_t1.get('carry', 'C'),
+                'team1_mid':             players_t1.get('mid',   'M'),
+                'team1_offlane':         players_t1.get('off',   'O'),
+                'team1_partial_support': players_t1.get('ps',    '4'),
+                'team1_full_support':    players_t1.get('fs',    '5'),
+                'team2_carry':           players_t2.get('carry', 'C'),
+                'team2_mid':             players_t2.get('mid',   'M'),
+                'team2_offlane':         players_t2.get('off',   'O'),
+                'team2_partial_support': players_t2.get('ps',    '4'),
+                'team2_full_support':    players_t2.get('fs',    '5'),
+            }
 
-            for role, (nx, ny) in positions.items():
-                px = x0 + nx * w
-                py = y0 + ny * h
-                is_t1 = role.startswith('team1')
-                if is_t1:
-                    Color(0.20, 0.90, 0.35, 1)
-                else:
-                    Color(0.95, 0.30, 0.25, 1)
-                Ellipse(pos=(px - dot_r/2, py - dot_r/2), size=(dot_r, dot_r))
-                # border
-                Color(0.0, 0.0, 0.0, 0.8)
-                Line(circle=(px, py, dot_r/2 + 1), width=1)
+            for role in _ROLES_T1 + _ROLES_T2:
+                nx, ny = self._interp_pos(role)
+                hx, hy = px(nx), py(ny)
+                is_t1  = role.startswith('team1')
+                dot_r  = base_dot_r * _DOT_MULT.get(role, 1.0)
+                hr     = dot_r / 2
 
-            # ── advantage bar at bottom ──────────────────────────
-            bar_h = max(10, h * 0.055)
-            bar_y = y0 + 2
-            mid_x = x0 + w / 2
+                # Glow ring
+                glow_c = (0.18, 0.92, 0.38, 0.30) if is_t1 else (0.96, 0.26, 0.20, 0.30)
+                Color(*glow_c)
+                Ellipse(pos=(hx - hr - 3, hy - hr - 3), size=(dot_r + 6, dot_r + 6))
 
-            Color(0.55, 0.25, 0.18, 1)
-            Rectangle(pos=(x0, bar_y), size=(w, bar_h))
+                # Main dot
+                fill_c = (0.14, 0.82, 0.34, 1.0) if is_t1 else (0.94, 0.22, 0.16, 1.0)
+                Color(*fill_c)
+                Ellipse(pos=(hx - hr, hy - hr), size=(dot_r, dot_r))
 
-            if adv >= 0:
-                Color(0.20, 0.85, 0.35, 1)
-                Rectangle(pos=(mid_x, bar_y), size=(adv * w / 2, bar_h))
-            else:
-                Color(0.90, 0.28, 0.22, 1)
-                Rectangle(pos=(mid_x + adv * w / 2, bar_y),
-                          size=(-adv * w / 2, bar_h))
+                # Border
+                border_c = (0.90, 1.00, 0.90, 1) if is_t1 else (1.00, 0.90, 0.90, 1)
+                Color(*border_c)
+                Line(circle=(hx, hy, hr + 1.2), width=1.4)
 
-            # center tick
-            Color(0.9, 0.9, 0.9, 0.8)
-            Line(points=[mid_x, bar_y, mid_x, bar_y + bar_h], width=1.5)
+            # ── Text labels (drawn via canvas InstructionGroup) ─
+            # Use kivy's CoreLabel for per-dot text
+            from kivy.core.text import Label as CoreLabel
+            from kivy.graphics.texture import Texture
 
-        # ── overlay labels (kills + timer) drawn via canvas ──────
-        # We don't use Label here to avoid widget tree overhead;
-        # instead the parent popup owns those labels.
+            for role in _ROLES_T1 + _ROLES_T2:
+                nx, ny = self._interp_pos(role)
+                hx, hy = px(nx), py(ny)
+                is_t1  = role.startswith('team1')
+                dot_r  = base_dot_r * _DOT_MULT.get(role, 1.0)
+                hr     = dot_r / 2
+
+                nick  = nick_map.get(role, '')
+                hname = self._hero_names.get(role, '')
+
+                # Short nick inside dot
+                nick_short = nick[:5] if nick else ''
+                fs_nick = max(8, int(dot_r * 0.40))
+                lbl_nick = CoreLabel(text=nick_short, font_size=fs_nick,
+                                     color=(1, 1, 1, 1))
+                lbl_nick.refresh()
+                tex = lbl_nick.texture
+                if tex:
+                    Color(1, 1, 1, 1)
+                    Rectangle(texture=tex,
+                               pos=(hx - tex.width/2, hy - tex.height/2),
+                               size=(tex.width, tex.height))
+
+                # Hero name above dot
+                if hname:
+                    hname_short = hname[:9]
+                    fs_hero = max(7, int(dot_r * 0.32))
+                    lbl_hero = CoreLabel(text=hname_short, font_size=fs_hero,
+                                        color=(1.0, 0.92, 0.45, 1) if is_t1
+                                              else (1.0, 0.78, 0.78, 1))
+                    lbl_hero.refresh()
+                    tex2 = lbl_hero.texture
+                    if tex2:
+                        Color(0, 0, 0, 0.55)
+                        Rectangle(pos=(hx - tex2.width/2 - 1, hy + hr + 1),
+                                  size=(tex2.width + 2, tex2.height + 1))
+                        Color(1, 1, 1, 1)
+                        Rectangle(texture=tex2,
+                                  pos=(hx - tex2.width/2, hy + hr + 1),
+                                  size=(tex2.width, tex2.height))
 
     def get_kills(self):
         return self._snap.get('kills_t1', 0), self._snap.get('kills_t2', 0)
@@ -474,69 +711,109 @@ class MatchLogPopup(Popup):
 
     def __init__(self, team1, team2, winner, log_lines, on_close,
                  t1_logo=None, t2_logo=None, snapshots=None,
-                 best_of=1, final_score=(0, 0), **kwargs):
+                 best_of=1, final_score=(0, 0), match_stats=None,
+                 pre_match_team=None, db_name=None,
+                 on_result_update=None, **kwargs):
         super().__init__(**kwargs)
         self.title = ''
         self.size_hint = (0.95, 0.95)
         self.auto_dismiss = False
-        self._lines     = log_lines
-        self._snapshots    = snapshots or []
-        self._best_of      = best_of
-        self._final_score  = final_score
-        self._schedule  = _build_log_schedule(log_lines)
-        self._sched_idx = 0
-        self._elapsed   = 0.0
-        self._on_close  = on_close
-        self._interval  = None
-        self._winner    = winner
-        self._team1     = team1
-        self._team2     = team2
-        self._t1_logo   = t1_logo
-        self._t2_logo   = t2_logo
-        self._build()
-        Clock.schedule_once(lambda dt: self._start(), 0.15)
+        self._lines            = log_lines
+        self._snapshots        = snapshots or []
+        self._best_of          = best_of
+        self._final_score      = final_score
+        self._match_stats      = match_stats or {}
+        self._schedule         = _build_log_schedule(log_lines)
+        self._sched_idx        = 0
+        self._elapsed          = 0.0
+        self._on_close         = on_close
+        self._on_result_update = on_result_update
+        self._interval         = None
+        self._winner           = winner
+        self._team1            = team1
+        self._team2            = team2
+        self._t1_logo          = t1_logo
+        self._t2_logo          = t2_logo
+        self._pre_match_team   = pre_match_team
+        self._pre_match_db     = db_name
+        self._pre_strats       = {}   # phase → selected key
+        self._pre_strat_btns   = {}   # (phase, key) → Button
+        self._hero_picks       = {}   # role → hero tuple (player team)
+        self._hero_btns        = {}   # (role, hero_name) → Button
+        # BO per-map state
+        self._map_wins         = {team1: 0, team2: 0}
+        self._bo_needed        = best_of // 2 + 1 if best_of > 1 else 1
+        self._build()   # builds self._match_content and all live attrs
+        if pre_match_team and db_name:
+            self.content = self._build_pre_match_content()
+        else:
+            self.content = self._match_content
+            Clock.schedule_once(lambda dt: self._start(), 0.15)
 
     def _build(self):
         root = BoxLayout(orientation='vertical', spacing=0, padding=0)
 
-        # ── header: teams + score + timer ─────────────────────
+        # ── header: teams + kills + bo score ──────────────────
         header = _BgBox(bg=_BG_PANEL, orientation='horizontal',
-                        size_hint_y=None, height=70, padding=(8, 4), spacing=6)
+                        size_hint_y=None, height=80, padding=(6, 4), spacing=4)
 
-        def _team_hdr(name, logo, align):
-            box = BoxLayout(orientation='horizontal', spacing=6)
-            img = _team_logo_widget(logo, size=44) if logo else None
-            lbl = Label(text=f'[b]{name}[/b]', markup=True,
-                        color=_PLAYER, halign=align, valign='middle', font_size='13sp')
-            lbl.bind(size=lbl.setter('text_size'))
-            if align == 'right' and img:
-                box.add_widget(lbl); box.add_widget(img)
+        def _make_team_side(name, logo, align):
+            box = BoxLayout(orientation='vertical', spacing=2)
+            # logo + name row
+            name_row = BoxLayout(orientation='horizontal', spacing=6,
+                                 size_hint_y=None, height=42)
+            img = _team_logo_widget(logo, size=36) if logo else None
+            nl = Label(text=f'[b]{name}[/b]', markup=True,
+                       color=_PLAYER, halign=align, valign='middle', font_size='13sp')
+            nl.bind(size=nl.setter('text_size'))
+            if align == 'right':
+                name_row.add_widget(nl)
+                if img: name_row.add_widget(img)
             else:
-                if img: box.add_widget(img)
-                box.add_widget(lbl)
-            return box
+                if img: name_row.add_widget(img)
+                name_row.add_widget(nl)
+            box.add_widget(name_row)
+            # gold advantage label
+            gl = Label(text='', color=_DIM, halign=align, valign='middle',
+                       font_size='11sp', size_hint_y=None, height=18)
+            gl.bind(size=gl.setter('text_size'))
+            box.add_widget(gl)
+            return box, gl
 
-        header.add_widget(_team_hdr(self._team1, self._t1_logo, 'right'))
+        t1_box, self._gold_t1_lbl = _make_team_side(
+            self._team1, self._t1_logo, 'right')
+        t2_box, self._gold_t2_lbl = _make_team_side(
+            self._team2, self._t2_logo, 'left')
 
-        # center panel: score + timer
-        center = BoxLayout(orientation='vertical', size_hint_x=None, width=140,
+        # center: kills + bo squares + timer/phase
+        center = BoxLayout(orientation='vertical', size_hint_x=None, width=160,
                            spacing=2, padding=(4, 2))
         self._score_lbl = Label(
             text='[b]0  —  0[/b]', markup=True,
-            color=_YELLOW, halign='center', valign='middle', font_size='18sp',
-            size_hint_y=0.6,
+            color=_YELLOW, halign='center', valign='middle', font_size='20sp',
+            size_hint_y=None, height=30,
         )
         self._score_lbl.bind(size=self._score_lbl.setter('text_size'))
+
+        self._bo_lbl = Label(
+            text='', color=_DIM,
+            halign='center', valign='middle', font_size='11sp',
+            size_hint_y=None, height=16,
+        )
+        self._bo_lbl.bind(size=self._bo_lbl.setter('text_size'))
+
         self._timer_lbl = Label(
             text='0:00', color=_DIM, halign='center', valign='middle',
-            font_size='11sp', size_hint_y=0.4,
+            font_size='11sp', size_hint_y=None, height=14,
         )
         self._timer_lbl.bind(size=self._timer_lbl.setter('text_size'))
         center.add_widget(self._score_lbl)
+        center.add_widget(self._bo_lbl)
         center.add_widget(self._timer_lbl)
-        header.add_widget(center)
 
-        header.add_widget(_team_hdr(self._team2, self._t2_logo, 'left'))
+        header.add_widget(t1_box)
+        header.add_widget(center)
+        header.add_widget(t2_box)
         root.add_widget(header)
         root.add_widget(_divider())
 
@@ -544,21 +821,29 @@ class MatchLogPopup(Popup):
         body = BoxLayout(orientation='horizontal', size_hint=(1, 1), spacing=4)
 
         # map panel
-        map_panel = _BgBox(bg=(0.06, 0.10, 0.06, 1), orientation='vertical',
-                           size_hint=(0.42, 1), padding=(4, 4), spacing=0)
+        map_panel = _BgBox(bg=(0.04, 0.08, 0.04, 1), orientation='vertical',
+                           size_hint=(0.44, 1), padding=(3, 3), spacing=2)
+
+        self._phase_lbl = Label(
+            text='ЛАЙНИНГ', color=_ACCENT,
+            halign='center', valign='middle', font_size='12sp',
+            size_hint_y=None, height=20, bold=True,
+        )
+        self._phase_lbl.bind(size=self._phase_lbl.setter('text_size'))
+        map_panel.add_widget(self._phase_lbl)
+
         self._map = DotaMapWidget(self._team1, self._team2, size_hint=(1, 1))
         map_panel.add_widget(self._map)
 
-        # team legend
-        legend = BoxLayout(orientation='horizontal', size_hint_y=None, height=22,
+        legend = BoxLayout(orientation='horizontal', size_hint_y=None, height=20,
                            spacing=4, padding=(4, 0))
         def _leg_lbl(text, color):
             l = Label(text=text, color=color, font_size='10sp',
                       halign='center', valign='middle')
             l.bind(size=l.setter('text_size'))
             return l
-        legend.add_widget(_leg_lbl(f'● {self._team1}', _GREEN))
-        legend.add_widget(_leg_lbl(f'● {self._team2}', _RED))
+        legend.add_widget(_leg_lbl(f'● {self._team1[:12]}', _GREEN))
+        legend.add_widget(_leg_lbl(f'● {self._team2[:12]}', _RED))
         map_panel.add_widget(legend)
 
         body.add_widget(map_panel)
@@ -569,7 +854,8 @@ class MatchLogPopup(Popup):
             text='', size_hint_y=None,
             color=(0.88, 0.88, 0.88, 1),
             halign='left', valign='top',
-            padding=(10, 6), font_size='12sp',
+            padding=(12, 8), font_size='14sp',
+            markup=True,
         )
         self._log_lbl.bind(texture_size=self._log_lbl.setter('size'))
         self._scroll = ScrollView(size_hint=(1, 1))
@@ -594,19 +880,218 @@ class MatchLogPopup(Popup):
         # ── buttons ───────────────────────────────────────────
         btn_bar = _BgBox(bg=_BG_DARK, orientation='horizontal',
                          size_hint_y=None, height=48, spacing=6, padding=(6, 4))
-        skip_btn = Button(text='Пропустить',
-                          background_color=(0.45, 0.45, 0.15, 1),
-                          background_normal='')
-        skip_btn.bind(on_press=self._skip)
+        self._skip_btn = Button(text='Пропустить',
+                               background_color=(0.45, 0.45, 0.15, 1),
+                               background_normal='')
+        self._skip_btn.bind(on_press=self._skip)
         self._done_btn = Button(text='Закрыть матч  ✓',
                                 background_color=(0.12, 0.55, 0.20, 1),
                                 background_normal='', disabled=True)
         self._done_btn.bind(on_press=self._done)
-        btn_bar.add_widget(skip_btn)
+        btn_bar.add_widget(self._skip_btn)
         btn_bar.add_widget(self._done_btn)
         root.add_widget(btn_bar)
 
-        self.content = root
+        self._match_content = root
+
+    # ── pre-match strategy selector ───────────────────────────
+
+    def _build_pre_match_content(self):
+        import sqlite3 as _sq
+        from logic.dota.strategies import EARLY_STRATEGIES, MID_STRATEGIES, LATE_STRATEGIES
+
+        _PHASE_META = [
+            ('early', '🌅  Ранняя игра',   EARLY_STRATEGIES, 'strat_early', 'safe_farm'),
+            ('mid',   '⚔  Средняя игра',  MID_STRATEGIES,   'strat_mid',   'map_control'),
+            ('late',  '🌙  Поздняя игра',  LATE_STRATEGIES,  'strat_late',  'teamfight'),
+        ]
+
+        try:
+            row = _sq.connect(self._pre_match_db).execute(
+                "SELECT COALESCE(strat_early,'safe_farm'), "
+                "COALESCE(strat_mid,'map_control'), "
+                "COALESCE(strat_late,'teamfight') FROM teams WHERE name=?",
+                (self._pre_match_team,),
+            ).fetchone()
+            self._pre_strats = {
+                'early': row[0] if row else 'safe_farm',
+                'mid':   row[1] if row else 'map_control',
+                'late':  row[2] if row else 'teamfight',
+            }
+        except Exception:
+            self._pre_strats = {'early': 'safe_farm', 'mid': 'map_control', 'late': 'teamfight'}
+
+        root = BoxLayout(orientation='vertical', spacing=6, padding=10)
+
+        # header
+        hdr = _BgBox(bg=_BG_PANEL, orientation='horizontal',
+                     size_hint_y=None, height=50, padding=(8, 4))
+        hl = Label(
+            text=f'[b]Тактика: {self._team1}  vs  {self._team2}  '
+                 f'(BO{self._best_of})[/b]',
+            markup=True, color=_ACCENT,
+            halign='center', valign='middle', font_size='14sp',
+        )
+        hl.bind(size=hl.setter('text_size'))
+        hdr.add_widget(hl)
+        root.add_widget(hdr)
+
+        _SEL_BG   = (0.10, 0.45, 0.18, 1)
+        _UNSEL_BG = (0.22, 0.22, 0.30, 1)
+
+        for phase, phase_label, strats, _col, _def in _PHASE_META:
+            ph_box = _BgBox(bg=_BG_MED, orientation='vertical',
+                            size_hint_y=None, height=82, padding=(6, 4), spacing=3)
+            ph_lbl = Label(
+                text=f'[b]{phase_label}[/b]', markup=True,
+                color=_ACCENT, halign='left', valign='middle',
+                size_hint_y=None, height=22, font_size='12sp',
+            )
+            ph_lbl.bind(size=ph_lbl.setter('text_size'))
+            ph_box.add_widget(ph_lbl)
+
+            btn_row = BoxLayout(size_hint_y=None, height=46, spacing=4)
+            for key, s in strats.items():
+                is_sel = key == self._pre_strats.get(phase, _def)
+                btn = Button(
+                    text=s['name'],
+                    background_color=_SEL_BG if is_sel else _UNSEL_BG,
+                    background_normal='', font_size='11sp',
+                )
+                btn.bind(on_press=lambda _, p=phase, k=key: self._pre_select(p, k))
+                self._pre_strat_btns[(phase, key)] = btn
+                btn_row.add_widget(btn)
+            ph_box.add_widget(btn_row)
+            root.add_widget(ph_box)
+
+        # ── Hero picks ────────────────────────────────────────────────────────
+        hero_hdr = Label(
+            text='[b]ВЫБОР ГЕРОЕВ[/b]', markup=True, color=(0.85,0.70,0.20,1),
+            size_hint_y=None, height=26, halign='left', valign='middle', font_size='12sp',
+        )
+        hero_hdr.bind(size=hero_hdr.setter('text_size'))
+        root.add_widget(hero_hdr)
+
+        _ROLE_NAMES = {
+            'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
+            'partial_support': 'Sup 4', 'full_support': 'Sup 5',
+        }
+        _HERO_SEL = (0.55, 0.40, 0.05, 1)
+        _HERO_UNS = (0.20, 0.20, 0.28, 1)
+
+        for role in ROLE_ORDER:
+            pool = HEROES[role]
+            # Default: random pick
+            if role not in self._hero_picks:
+                import random as _r
+                self._hero_picks[role] = _r.choice(pool)
+
+            row = BoxLayout(size_hint_y=None, height=34, spacing=3)
+            rl = Label(
+                text=f'[b]{_ROLE_NAMES[role]}[/b]', markup=True, color=(0.75,0.85,1,1),
+                size_hint_x=None, width=58, halign='center', valign='middle', font_size='10sp',
+            )
+            rl.bind(size=rl.setter('text_size'))
+            row.add_widget(rl)
+            for hero in pool[:6]:   # show up to 6 heroes per role
+                hname = hero[0]
+                is_sel = self._hero_picks.get(role, (None,))[0] == hname
+                hbtn = Button(
+                    text=hname, font_size='9sp', background_normal='',
+                    background_color=_HERO_SEL if is_sel else _HERO_UNS,
+                )
+                hbtn.bind(on_press=lambda _, r=role, h=hero: self._pick_hero(r, h))
+                self._hero_btns[(role, hname)] = hbtn
+                row.add_widget(hbtn)
+            root.add_widget(row)
+
+        start_btn = Button(
+            text='▶  Начать матч',
+            size_hint_y=None, height=50,
+            background_color=(0.15, 0.60, 0.22, 1),
+            background_normal='', font_size='14sp',
+        )
+        start_btn.bind(on_press=self._confirm_strategy)
+        root.add_widget(start_btn)
+        return root
+
+    def _pick_hero(self, role, hero):
+        prev = self._hero_picks.get(role)
+        if prev:
+            k = (role, prev[0])
+            if k in self._hero_btns:
+                self._hero_btns[k].background_color = (0.20, 0.20, 0.28, 1)
+        self._hero_picks[role] = hero
+        k2 = (role, hero[0])
+        if k2 in self._hero_btns:
+            self._hero_btns[k2].background_color = (0.55, 0.40, 0.05, 1)
+
+    def _pre_select(self, phase, key):
+        _PHASE_META = {'early': 'safe_farm', 'mid': 'map_control', 'late': 'teamfight'}
+        from logic.dota.strategies import EARLY_STRATEGIES, MID_STRATEGIES, LATE_STRATEGIES
+        _ALL = {'early': EARLY_STRATEGIES, 'mid': MID_STRATEGIES, 'late': LATE_STRATEGIES}
+        prev = self._pre_strats.get(phase, _PHASE_META[phase])
+        if (phase, prev) in self._pre_strat_btns:
+            self._pre_strat_btns[(phase, prev)].background_color = (0.22, 0.22, 0.30, 1)
+        self._pre_strats[phase] = key
+        if (phase, key) in self._pre_strat_btns:
+            self._pre_strat_btns[(phase, key)].background_color = (0.10, 0.45, 0.18, 1)
+
+    def _confirm_strategy(self, _):
+        import sqlite3 as _sq
+        try:
+            conn = _sq.connect(self._pre_match_db)
+            conn.execute(
+                "UPDATE teams SET strat_early=?, strat_mid=?, strat_late=? WHERE name=?",
+                (self._pre_strats.get('early', 'safe_farm'),
+                 self._pre_strats.get('mid',   'map_control'),
+                 self._pre_strats.get('late',  'teamfight'),
+                 self._pre_match_team),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+        # Simulate ONE map with chosen heroes + updated strategies
+        try:
+            opp_picks = random_picks(exclude=[h[0] for h in self._hero_picks.values()])
+            is_t1 = (self._pre_match_team == self._team1)
+            hero_picks = {
+                'team1': self._hero_picks if is_t1 else opp_picks,
+                'team2': opp_picks         if is_t1 else self._hero_picks,
+            }
+            map_winner, new_lines, new_snaps, new_stats = replay_match_with_heroes(
+                self._team1, self._team2, self._pre_match_db, hero_picks
+            )
+            # Save pre-game score so animation starts at 0-0/1-0/etc (no spoiler)
+            pre_w1 = self._map_wins.get(self._team1, 0)
+            pre_w2 = self._map_wins.get(self._team2, 0)
+            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
+            w1 = self._map_wins[self._team1]
+            w2 = self._map_wins[self._team2]
+            # Determine current match winner (may not be final yet)
+            self._winner      = self._team1 if w1 > w2 else (
+                                self._team2 if w2 > w1 else map_winner)
+            self._final_score = (w1, w2)
+            self._lines       = new_lines
+            self._snapshots   = new_snaps
+            self._match_stats = new_stats
+            self._schedule    = _build_log_schedule(new_lines)
+            self._sched_idx   = 0
+            self._elapsed     = 0.0
+            # Inject PRE-game score — score updates to w1/w2 only after _finish()
+            for snp in self._snapshots:
+                snp['game_score_t1'] = pre_w1
+                snp['game_score_t2'] = pre_w2
+                snp['best_of']       = self._best_of
+            # Rebuild match panel with fresh log area
+            self._build()
+        except Exception:
+            pass
+
+        self.content = self._match_content
+        Clock.schedule_once(lambda dt: self._start(), 0.15)
 
     def _start(self):
         self._interval = Clock.schedule_interval(self._tick, 0.05)
@@ -634,23 +1119,133 @@ class MatchLogPopup(Popup):
             return
         snap = self._snapshots[idx]
         self._map.apply_snap(snap)
-        kt1 = snap.get('kills_t1', 0)
-        kt2 = snap.get('kills_t2', 0)
+        kt1  = snap.get('kills_t1', 0)
+        kt2  = snap.get('kills_t2', 0)
+        tok1 = snap.get('tokens_t1', 0)
+        tok2 = snap.get('tokens_t2', 0)
         self._score_lbl.text = f'[b]{kt1}  —  {kt2}[/b]'
         m = snap.get('minute', 0)
         self._timer_lbl.text = f'{m}:00'
+        phase = snap.get('phase', 'laning')
+        self._phase_lbl.text = _PHASE_LABEL.get(phase, phase.upper())
+
+        # Gold advantage
+        gold_diff = tok1 - tok2
+        if gold_diff > 0:
+            self._gold_t1_lbl.text = f'[color=44dd66]+{gold_diff:,}g[/color]'
+            self._gold_t1_lbl.markup = True
+            self._gold_t2_lbl.text = ''
+        elif gold_diff < 0:
+            self._gold_t1_lbl.text = ''
+            self._gold_t2_lbl.text = f'[color=44dd66]+{-gold_diff:,}g[/color]'
+            self._gold_t2_lbl.markup = True
+        else:
+            self._gold_t1_lbl.text = ''
+            self._gold_t2_lbl.text = ''
+
+        # BO map score squares
+        bo = snap.get('best_of', self._best_of)
+        gs1 = snap.get('game_score_t1', 0)
+        gs2 = snap.get('game_score_t2', 0)
+        if bo and bo > 1:
+            needed = bo // 2 + 1
+            def _squares(wins, total, color_on):
+                parts = []
+                for i in range(total):
+                    if i < wins:
+                        parts.append(f'[color={color_on}]■[/color]')
+                    else:
+                        parts.append('[color=444444]□[/color]')
+                return ' '.join(parts)
+            self._bo_lbl.text = (
+                f'{_squares(gs1, needed, "44dd66")}  '
+                f'[color=666666]BO{bo}[/color]  '
+                f'{_squares(gs2, needed, "dd4444")}'
+            )
+            self._bo_lbl.markup = True
+        else:
+            self._bo_lbl.text = ''
 
     def _finish(self):
         if self._interval:
             self._interval.cancel()
             self._interval = None
         s1, s2 = self._final_score
+
+        # Per-map BO mode: check if more maps needed
+        if self._pre_match_team and self._pre_match_db and self._best_of > 1:
+            w1 = self._map_wins.get(self._team1, 0)
+            w2 = self._map_wins.get(self._team2, 0)
+            maps_played = w1 + w2
+            # BO2: always exactly 2 maps; BO3+: stop when someone clinches
+            if self._best_of == 2:
+                match_over = maps_played >= 2
+            else:
+                match_over = (w1 >= self._bo_needed or w2 >= self._bo_needed)
+            if not match_over:
+                # Match not decided — repurpose Skip button to go to next map
+                map_num = maps_played + 1
+                self._status_lbl.text = (
+                    f'Карта {maps_played} завершена  ·  '
+                    f'{self._team1} [{w1}:{w2}] {self._team2}'
+                )
+                self._status_lbl.color = _DIM
+                self._hero_picks     = {}
+                self._hero_btns      = {}
+                self._pre_strat_btns = {}
+                self._skip_btn.text             = f'Карта {map_num}: Драфт  →'
+                self._skip_btn.background_color = (0.15, 0.55, 0.25, 1)
+                self._skip_btn.unbind(on_press=self._skip)
+                self._skip_btn.bind(on_press=lambda _: self._next_map_draft())
+                return
+            # Match decided — set final winner
+            if self._best_of == 2:
+                import random as _r2
+                self._winner = (self._team1 if w1 > w2 else
+                                self._team2 if w2 > w1 else
+                                _r2.choice([self._team1, self._team2]))
+            else:
+                self._winner = self._team1 if w1 >= self._bo_needed else self._team2
+            self._final_score = (w1, w2)
+            s1, s2 = w1, w2
+            # Notify parent of final result
+            if self._on_result_update:
+                self._on_result_update(self._winner, s1, s2)
+
         bo_str = f'  BO{self._best_of}' if self._best_of > 1 else ''
         self._status_lbl.text = (
             f'Победитель:  {self._winner}  [{s1}:{s2}]{bo_str}'
         )
         self._status_lbl.color = _GREEN
         self._done_btn.disabled = False
+
+        # MVP summary card appended to log
+        st = self._match_stats
+        if st:
+            kt1 = st.get('kills_t1', 0)
+            kt2 = st.get('kills_t2', 0)
+            dur = st.get('duration', 0)
+            mvp = st.get('mvp_nick', '')
+            rol = st.get('mvp_role', '')
+            sep = '[color=444444]' + '─' * 44 + '[/color]'
+            card = (
+                f'\n{sep}'
+                f'\n  [color=55ccff][b]ИТОГИ МАТЧА[/b][/color]'
+                f'\n  Убийства:  [color=44ff88]{kt1}[/color]  —  [color=ff5555]{kt2}[/color]'
+                f'   Продолжительность: {dur} мин'
+                f'\n  [color=ffd700]MVP: {mvp}  ({rol})[/color]'
+            )
+            # Tactical analysis
+            tac_text = self._build_tactic_analysis()
+            if tac_text:
+                card += f'\n{sep}\n  [color=aaddff][b]ТАКТИЧЕСКИЙ РАЗБОР[/b][/color]\n{tac_text}'
+            card += f'\n{sep}'
+            self._log_lbl.text += card
+            Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.05)
+
+    def _next_map_draft(self):
+        """Show strategy/hero draft for the next map in a BO series."""
+        self.content = self._build_pre_match_content()
 
     def _skip(self, _):
         if self._interval:
@@ -663,347 +1258,938 @@ class MatchLogPopup(Popup):
         Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.02)
         self._finish()
 
+    def _build_tactic_analysis(self):
+        if not self._pre_match_db:
+            return ''
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(self._pre_match_db)
+            t1 = conn.execute(
+                "SELECT COALESCE(tactic,'balanced'), "
+                "COALESCE(carry,0)+COALESCE(mid,0)+COALESCE(offlane,0) FROM teams WHERE name=?",
+                (self._team1,)
+            ).fetchone()
+            t2 = conn.execute(
+                "SELECT COALESCE(tactic,'balanced'), "
+                "COALESCE(carry,0)+COALESCE(mid,0)+COALESCE(offlane,0) FROM teams WHERE name=?",
+                (self._team2,)
+            ).fetchone()
+            conn.close()
+            if not t1 or not t2:
+                return ''
+            tac1, tac2 = t1[0], t2[0]
+            _TAC_RU = {
+                'aggressive': 'Агрессия (бонус Micro)',
+                'farming':    'Фарм (бонус Macro)',
+                'teamplay':   'Командная игра (бонус Soft)',
+                'balanced':   'Сбалансированная',
+            }
+            _TAC_COUNTER = {
+                'aggressive': 'teamplay',
+                'farming':    'aggressive',
+                'teamplay':   'farming',
+            }
+            won1 = self._winner == self._team1
+            lines = [
+                f'  {self._team1}: {_TAC_RU.get(tac1, tac1)}',
+                f'  {self._team2}: {_TAC_RU.get(tac2, tac2)}',
+            ]
+            counter = _TAC_COUNTER.get(tac2)
+            if counter and tac1 == counter:
+                lines.append(f'  ✓ Тактика {self._team1} контрит стиль соперника.')
+            elif _TAC_COUNTER.get(tac1) == tac2:
+                lines.append(f'  ✗ Тактика {self._team2} контрит ваш стиль.')
+            else:
+                lines.append(f'  Нейтральный тактический матч-ап.')
+            st = self._match_stats
+            if st:
+                kt1, kt2 = st.get('kills_t1', 0), st.get('kills_t2', 0)
+                if kt1 > kt2 * 1.4:
+                    lines.append(f'  Доминация в убийствах ({kt1} vs {kt2}) дала преимущество.')
+                elif kt2 > kt1 * 1.4:
+                    lines.append(f'  Соперник доминировал ({kt2} vs {kt1}).')
+            return '\n'.join(lines)
+        except Exception:
+            return ''
+
     def _done(self, _):
         self.dismiss()
         if self._on_close:
             self._on_close()
 
 
+def _show_press_conference(db_name, player_team, winner, on_done):
+    """Post-match press conference popup. 3 responses with minor morale/rep effects."""
+    won = (winner.strip() == player_team.strip())
+    title_txt = '🏆  ПОБЕДА!' if won else '❌  ПОРАЖЕНИЕ'
+    title_color = (0.20, 0.90, 0.35, 1) if won else (0.90, 0.30, 0.20, 1)
+
+    _RESPONSES = [
+        ('Отличная работа команды!',
+         {'morale': +2, 'rep': +1},
+         (0.15, 0.50, 0.20, 1)),
+        ('Соперник был достоин уважения.',
+         {'morale': 0, 'rep': 0},
+         (0.25, 0.35, 0.50, 1)),
+        ('Нам не повезло сегодня.',
+         {'morale': -1, 'rep': 0},
+         (0.45, 0.30, 0.10, 1)),
+    ] if won else [
+        ('Мы проанализируем ошибки.',
+         {'morale': +1, 'rep': 0},
+         (0.15, 0.45, 0.25, 1)),
+        ('Соперник сыграл лучше.',
+         {'morale': 0, 'rep': +1},
+         (0.25, 0.35, 0.50, 1)),
+        ('Это была случайность.',
+         {'morale': -2, 'rep': -1},
+         (0.45, 0.20, 0.15, 1)),
+    ]
+
+    content = BoxLayout(orientation='vertical', spacing=8, padding=12)
+    title_lbl = Label(
+        text=f'[b]{title_txt}[/b]', markup=True, color=title_color,
+        size_hint_y=None, height=50, font_size='20sp',
+        halign='center', valign='middle',
+    )
+    title_lbl.bind(size=title_lbl.setter('text_size'))
+    content.add_widget(title_lbl)
+
+    prompt = Label(
+        text='Что скажете прессе?', color=(0.85, 0.85, 0.85, 1),
+        size_hint_y=None, height=32, font_size='13sp',
+        halign='center', valign='middle',
+    )
+    prompt.bind(size=prompt.setter('text_size'))
+    content.add_widget(prompt)
+
+    popup = Popup(content=content, title='', size_hint=(0.60, 0.48),
+                  auto_dismiss=False)
+
+    def _respond(effects):
+        popup.dismiss()
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(db_name)
+            dm = effects.get('morale', 0)
+            dr = effects.get('rep', 0)
+            if dm:
+                conn.execute(
+                    "UPDATE players SET morale=MAX(1,MIN(10,COALESCE(morale,5)+?)) "
+                    "WHERE id IN ("
+                    "  SELECT carry FROM teams WHERE player='yes' UNION ALL "
+                    "  SELECT mid FROM teams WHERE player='yes' UNION ALL "
+                    "  SELECT offlane FROM teams WHERE player='yes' UNION ALL "
+                    "  SELECT partial_support FROM teams WHERE player='yes' UNION ALL "
+                    "  SELECT full_support FROM teams WHERE player='yes'"
+                    ")",
+                    (dm,)
+                )
+            if dr:
+                conn.execute(
+                    "UPDATE characters SET reputation=COALESCE(reputation,0)+?",
+                    (dr,)
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if on_done:
+            on_done()
+
+    for txt, effects, color in _RESPONSES:
+        btn = Button(
+            text=txt, size_hint_y=None, height=46,
+            background_color=color, background_normal='', font_size='12sp',
+        )
+        btn.bind(on_press=lambda _, e=effects: _respond(e))
+        content.add_widget(btn)
+
+    popup.open()
+
+
+# ── PreMatch popup (strategy + hero picks) ───────────────────────────────────
+
+def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
+    """
+    Full-screen pre-match config: strategy selection + hero picks.
+    on_confirm(hero_picks, confirmed_play=True) called when player clicks Start.
+    on_confirm(None, False) if skipped.
+    """
+    import random as _rnd
+    from logic.dota.strategies import EARLY_STRATEGIES, MID_STRATEGIES, LATE_STRATEGIES
+    from logic.heroes import HEROES, ROLE_ORDER
+
+    # Load current strategies from DB
+    try:
+        _conn = sqlite3.connect(db_name)
+        _row = _conn.execute(
+            "SELECT COALESCE(strat_early,'safe_farm'), "
+            "COALESCE(strat_mid,'map_control'), "
+            "COALESCE(strat_late,'teamfight') FROM teams WHERE name=?",
+            (my_team,)
+        ).fetchone()
+        _conn.close()
+        cur_strats = {'early': _row[0], 'mid': _row[1], 'late': _row[2]} if _row else \
+                     {'early': 'safe_farm', 'mid': 'map_control', 'late': 'teamfight'}
+    except Exception:
+        cur_strats = {'early': 'safe_farm', 'mid': 'map_control', 'late': 'teamfight'}
+
+    # Default hero picks (random)
+    picks = {role: _rnd.choice(HEROES[role]) for role in ROLE_ORDER}
+
+    strat_btns  = {}   # (phase, key) → Button
+    hero_btns   = {}   # (role, name) → Button
+    strat_state = dict(cur_strats)
+
+    _BG   = (0.07, 0.09, 0.13, 1)
+    _SEL  = (0.10, 0.45, 0.18, 1)
+    _UNS  = (0.18, 0.20, 0.30, 1)
+    _HSEL = (0.55, 0.38, 0.05, 1)
+    _HUNS = (0.18, 0.20, 0.28, 1)
+    _ACC  = (0.35, 0.85, 1.00, 1)
+
+    root = BoxLayout(orientation='vertical', spacing=6, padding=10)
+    with root.canvas.before:
+        from kivy.graphics import Color as _C, Rectangle as _R
+        _c = _C(*_BG); _r = _R()
+    root.bind(pos=lambda w,_: setattr(_r,'pos',w.pos),
+              size=lambda w,_: setattr(_r,'size',w.size))
+
+    def _lbl(text, color=_ACC, fs='14sp', bold=True, height=30, halign='center'):
+        t = f'[b]{text}[/b]' if bold else text
+        l = Label(text=t, markup=True, color=color,
+                  size_hint_y=None, height=height,
+                  font_size=fs, halign=halign, valign='middle')
+        l.bind(size=l.setter('text_size'))
+        return l
+
+    # Header
+    root.add_widget(_lbl(
+        f'{my_team}  vs  {team2 if my_team == team1 else team1}  —  BO{best_of}',
+        color=(0.25, 1.00, 0.45, 1), fs='17sp', height=38,
+    ))
+
+    body = BoxLayout(orientation='horizontal', spacing=8, size_hint=(1, 1))
+
+    # ── LEFT: strategy ────────────────────────────────────────────────────────
+    left = BoxLayout(orientation='vertical', size_hint_x=0.38, spacing=4)
+    left.add_widget(_lbl('СТРАТЕГИЯ', height=26, fs='13sp'))
+
+    _PHASES = [
+        ('early', 'Ранняя игра',   EARLY_STRATEGIES, 'safe_farm'),
+        ('mid',   'Средняя игра',  MID_STRATEGIES,   'map_control'),
+        ('late',  'Поздняя игра',  LATE_STRATEGIES,  'teamfight'),
+    ]
+
+    def _sel_strat(phase, key):
+        prev = strat_state.get(phase)
+        if prev and (phase, prev) in strat_btns:
+            strat_btns[(phase, prev)].background_color = _UNS
+        strat_state[phase] = key
+        if (phase, key) in strat_btns:
+            strat_btns[(phase, key)].background_color = _SEL
+
+    for phase, label, strats, default in _PHASES:
+        left.add_widget(_lbl(label, color=(0.70, 0.85, 1.00, 1), fs='13sp',
+                             bold=False, height=24, halign='left'))
+        ph_row = BoxLayout(size_hint_y=None, height=40, spacing=3)
+        for key, s in strats.items():
+            is_sel = key == strat_state.get(phase, default)
+            btn = Button(text=s['name'], font_size='12sp', background_normal='',
+                         background_color=_SEL if is_sel else _UNS)
+            btn.bind(on_press=lambda _, p=phase, k=key: _sel_strat(p, k))
+            strat_btns[(phase, key)] = btn
+            ph_row.add_widget(btn)
+        left.add_widget(ph_row)
+
+    body.add_widget(left)
+
+    # ── RIGHT: hero picks ─────────────────────────────────────────────────────
+    right = BoxLayout(orientation='vertical', size_hint_x=0.62, spacing=3)
+    right.add_widget(_lbl('ГЕРОИ', height=26, fs='13sp'))
+
+    _ROLE_RU = {
+        'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
+        'partial_support': 'Sup 4', 'full_support': 'Sup 5',
+    }
+
+    def _pick_hero(role, hero):
+        prev = picks.get(role)
+        if prev and (role, prev[0]) in hero_btns:
+            hero_btns[(role, prev[0])].background_color = _HUNS
+        picks[role] = hero
+        if (role, hero[0]) in hero_btns:
+            hero_btns[(role, hero[0])].background_color = _HSEL
+
+    for role in ROLE_ORDER:
+        rrow = BoxLayout(size_hint_y=None, height=38, spacing=3)
+        rlbl = Label(text=f'[b]{_ROLE_RU[role]}[/b]', markup=True,
+                     color=(0.70, 0.85, 1.00, 1), size_hint_x=None, width=62,
+                     font_size='13sp', halign='center', valign='middle')
+        rlbl.bind(size=rlbl.setter('text_size'))
+        rrow.add_widget(rlbl)
+        for hero in HEROES[role][:7]:
+            hname = hero[0]
+            is_sel = picks.get(role, (None,))[0] == hname
+            hbtn = Button(text=hname, font_size='11sp', background_normal='',
+                          background_color=_HSEL if is_sel else _HUNS)
+            hbtn.bind(on_press=lambda _, r=role, h=hero: _pick_hero(r, h))
+            hero_btns[(role, hname)] = hbtn
+            rrow.add_widget(hbtn)
+        right.add_widget(rrow)
+
+    body.add_widget(right)
+    root.add_widget(body)
+
+    # ── Buttons ───────────────────────────────────────────────────────────────
+    btn_row = BoxLayout(size_hint_y=None, height=50, spacing=8)
+
+    popup = Popup(
+        title='', content=root,
+        size_hint=(1.0, 1.0), auto_dismiss=False,
+        background='', background_color=(0, 0, 0, 0),
+        separator_color=(0, 0, 0, 0),
+    )
+    popup.title_bar_height = 0
+
+    def _confirm(_):
+        # Save strategies to DB
+        try:
+            _c2 = sqlite3.connect(db_name)
+            _c2.execute(
+                "UPDATE teams SET strat_early=?, strat_mid=?, strat_late=? WHERE name=?",
+                (strat_state.get('early', 'safe_farm'),
+                 strat_state.get('mid',   'map_control'),
+                 strat_state.get('late',  'teamfight'),
+                 my_team),
+            )
+            _c2.commit(); _c2.close()
+        except Exception:
+            pass
+        popup.dismiss()
+        on_confirm(dict(picks), True)
+
+    def _skip(_):
+        popup.dismiss()
+        on_confirm(None, False)
+
+    start_btn = Button(text='Начать матч', font_size='15sp', background_normal='',
+                       background_color=(0.15, 0.60, 0.22, 1))
+    skip_btn  = Button(text='Авто', font_size='15sp', background_normal='',
+                       background_color=(0.35, 0.25, 0.10, 1), size_hint_x=0.3)
+    start_btn.bind(on_press=_confirm)
+    skip_btn.bind(on_press=_skip)
+    btn_row.add_widget(start_btn)
+    btn_row.add_widget(skip_btn)
+    root.add_widget(btn_row)
+
+    popup.open()
+
+
 # ── TournamentPopup ───────────────────────────────────────────────────────────
+
+def _bo_from_stage(stage):
+    """Infer best-of count from stage name string."""
+    if 'BO5' in stage or 'Гранд' in stage: return 5
+    if 'BO2' in stage or 'Группа' in stage: return 2
+    if 'BO1' in stage: return 1
+    return 3
+
+
+_BRACKET_ORDER = [
+    'LB — Раунд 1 (BO1)',
+    'UB — Раунд 1 (BO3)',
+    'LB — Раунд 2 (BO3)',
+    'LB — Раунд 3 (BO3)',
+    'UB — Полуфиналы (BO3)',
+    'LB — Четвертьфиналы (BO3)',
+    'UB — Финал (BO3)',
+    'LB — Полуфинал (BO3)',
+    'LB — Финал (BO3)',
+    'Гранд-финал (BO5)',
+    'Малый Т. — Швейцарка Р1 (BO1)',
+    'Малый Т. — Швейцарка Р2 (BO1)',
+    'Малый Т. — Швейцарка Р3 (BO1)',
+    'Малый Т. — Швейцарка Р4 (BO1)',
+    'Малый Т. Полуфинал',
+    'Малый Т. Финал',
+]
+
 
 class TournamentPopup(Popup):
 
-    _BTN_LABELS = {
-        'draw':               'Начать групповой этап',
-        'match_lineup':       'Сыграть матч  ▶',
-        'match_result':       'Следующий матч  →',
-        'groups_complete':    'Итоги групп  →',
-        'stage_header':       'Начать матчи',
-        'tournament_results': 'Завершить турнир',
-    }
+    _BTN_LABELS = {}  # kept for compatibility
 
     def __init__(self, db_name, on_finish=None, **kwargs):
         super().__init__(**kwargs)
-        self.db_name = db_name
-        self.size_hint = (0.96, 0.96)
-        self.auto_dismiss = False
-        self._results_saved = False
-        self._group_tables = []
-        self._on_finish = on_finish
-        self._season_over = False
-        self._season_year = None
+        self.db_name       = db_name
+        self.size_hint     = (0.96, 0.96)
+        self.auto_dismiss  = False
+        self._on_finish    = on_finish
+        self._season_over  = False
+        self._season_year  = None
+        self._player_teams = set()
+        self._seq          = []
+        self._seq_idx      = 0
+        self._feed_grid    = None
+        self._feed_sv      = None
+        self._clock_ev     = None
+        self._close_btn    = None
 
-        # Load logo map once
         conn = sqlite3.connect(db_name)
-        cur = conn.cursor()
-        cur.execute("SELECT id, name FROM tournaments WHERE place1 IS NULL ORDER BY start_date LIMIT 1")
+        cur  = conn.cursor()
+        cur.execute(
+            "SELECT id, name FROM tournaments WHERE place1 IS NULL ORDER BY start_date LIMIT 1"
+        )
         row = cur.fetchone()
         cur.execute("SELECT name, logo FROM teams")
         self._logo_map = {r[0].strip(): r[1] for r in cur.fetchall()}
         conn.close()
 
         if not row:
-            self.title = 'Нет турниров'
+            self.title   = 'Нет турниров'
             self.content = Label(text='Все турниры сезона сыграны.')
             return
 
         self.tournament_id, tournament_name = row
         self.title = tournament_name
 
-        self.events, self.placements, self.group_eliminated = \
-            generate_tournament_events(db_name, self.tournament_id)
-        self.event_idx = 0
+        events, _pl, _ge = generate_tournament_events(db_name, self.tournament_id)
+        self._build_state(events)
 
-        # ── layout ────────────────────────────────────────────
-        self._content_grid = _auto_grid()
+        # Minor without player: silent save + inbox
+        if self._minor_result_ev and not self._player_in_minor:
+            self._persist_minor_results(self._minor_result_ev)
+            champ = self._minor_result_ev.get('champion', '?')
+            _add_message(db_name,
+                         f"Малый турнир завершён. Чемпион: {champ}.", 'Новости')
+        # If player is in minor, persist main tournament silently
+        if self._player_in_minor and not self._player_qualified and self._tournament_ev:
+            pass  # main tournament was already persisted above; minor persisted after feed
 
-        # Tournament name banner
-        banner = _BgBox(bg=_BG_PANEL, orientation='horizontal',
-                        size_hint_y=None, height=48)
-        lbl = Label(text=f'[b]{tournament_name}[/b]', markup=True,
-                    color=_ACCENT, halign='center', valign='middle', font_size='16sp')
-        lbl.bind(size=lbl.setter('text_size'))
-        banner.add_widget(lbl)
-        self._content_grid.add_widget(banner)
+        self._build_ui(tournament_name)
 
-        self._scroll = ScrollView(size_hint=(1, 1))
-        self._scroll.add_widget(self._content_grid)
+    # ── state builder ─────────────────────────────────────────
 
-        self._next_btn = Button(
-            text='Показать жеребьёвку',
-            size_hint=(0.75, None), height=52,
-            background_color=(0.18, 0.55, 0.85, 1), background_normal='',
-        )
-        self._next_btn.bind(on_press=self._on_next)
-        close_btn = Button(
-            text='Закрыть', size_hint=(0.25, None), height=52,
-            background_color=(0.65, 0.18, 0.18, 1), background_normal='',
-        )
-        close_btn.bind(on_press=self.dismiss)
+    def _build_state(self, events):
+        self._qualifier_ev      = None
+        self._qualifier_header  = None
+        self._draw_ev           = None
+        self._groups_final      = []
+        self._bracket_rounds    = {}
+        self._player_matches    = []
+        self._tournament_ev     = None
+        self._minor_result_ev   = None
+        self._player_in_minor   = False
+        self._player_qualified  = True   # default: in main tournament
 
-        btn_row = BoxLayout(orientation='horizontal',
-                            size_hint_y=None, height=56, spacing=4)
-        btn_row.add_widget(self._next_btn)
-        btn_row.add_widget(close_btn)
+        player_teams = set()
+        for ev in events:
+            t = ev['type']
+            if t == 'qualifier_summary':
+                self._qualifier_ev = ev
+                self._player_qualified = ev.get('player_qualified', True)
+            elif t == 'qualifier_header':
+                self._qualifier_header = ev
+                player_teams = set(ev.get('player_teams', []))
+            elif t == 'qualifier_done':
+                self._player_qualified = ev.get('player_qualified', True)
+            elif t == 'draw':
+                self._draw_ev = ev
+                if not self._qualifier_header:
+                    player_teams = set(ev.get('player_teams', []))
+            elif t == 'match_result':
+                self._bracket_rounds.setdefault(ev['stage'], []).append(ev)
+            elif t == 'groups_complete':
+                self._groups_final = ev.get('group_standings', [])
+            elif t == 'match_lineup':
+                self._player_matches.append(ev)
+            elif t == 'tournament_results':
+                self._tournament_ev = ev
+            elif t == 'minor_results':
+                self._minor_result_ev = ev
+            elif t == 'minor_header':
+                self._player_in_minor = bool(
+                    set(ev.get('teams', [])) & player_teams
+                )
+        self._player_teams = player_teams
 
-        layout = BoxLayout(orientation='vertical', spacing=2, padding=4)
-        layout.add_widget(self._scroll)
-        layout.add_widget(btn_row)
-        self.content = layout
+    # ── UI builder ────────────────────────────────────────────
 
-    # ── stepping ──────────────────────────────────────────────
+    def _build_ui(self, name):
+        root = BoxLayout(orientation='vertical', spacing=4, padding=4)
 
-    def _on_next(self, _):
-        if self.event_idx >= len(self.events):
-            return
-        event = self.events[self.event_idx]
-        self.event_idx += 1
+        hdr = _BgBox(bg=_BG_PANEL, size_hint_y=None, height=42)
+        hl  = Label(text=f'[b]{name}[/b]', markup=True, color=_ACCENT,
+                    halign='center', valign='middle', font_size='15sp')
+        hl.bind(size=hl.setter('text_size'))
+        hdr.add_widget(hl)
+        root.add_widget(hdr)
 
-        block = self._render(event)
-        if block:
-            self._content_grid.add_widget(_divider(height=1))
-            self._content_grid.add_widget(block)
+        body = BoxLayout(orientation='horizontal', size_hint=(1, 1), spacing=6)
+        body.add_widget(self._make_left_panel())
+        body.add_widget(self._make_right_panel())
+        root.add_widget(body)
 
-        if event['type'] == 'tournament_results' and not self._results_saved:
-            self._persist_results(event)
-            self._results_saved = True
+        close = Button(text='Закрыть', size_hint_y=None, height=48,
+                       background_color=(0.65, 0.18, 0.18, 1), background_normal='')
+        close.disabled = bool(self._player_matches)
+        self._close_btn = close
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
 
-        if event['type'] == 'match_lineup' and event.get('match_log'):
-            self._next_btn.disabled = True
-            t1, t2 = event['team1'], event['team2']
-            bo = event.get('best_of', 1)
-            s1 = event.get('score_t1', 0)
-            s2 = event.get('score_t2', 0)
-            MatchLogPopup(
-                team1=t1, team2=t2,
-                winner=event['winner'],
-                log_lines=event['match_log'],
-                snapshots=event.get('match_snaps', []),
-                on_close=self._after_match_log,
-                t1_logo=self._logo_map.get(t1),
-                t2_logo=self._logo_map.get(t2),
-                best_of=bo, final_score=(s1, s2),
-            ).open()
-            Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.05)
-            return
+        self.content = root
+        self.bind(on_dismiss=self._on_dismissed)
+        Clock.schedule_once(self._start_feed, 0.4)
 
-        self._update_btn()
-        Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.05)
+    # ── left: qualifier + groups + bracket ────────────────────
 
-    def _after_match_log(self):
-        self._next_btn.disabled = False
-        self._on_next(None)
+    def _make_left_panel(self):
+        sv   = ScrollView(size_hint=(0.58, 1))
+        grid = _auto_grid()
+        pt   = self._player_teams
 
-    def _update_btn(self):
-        if self.event_idx >= len(self.events):
-            self._next_btn.disabled = True
-            self._next_btn.text = 'Завершено'
-            return
-        nxt = self.events[self.event_idx]['type']
-        self._next_btn.text = self._BTN_LABELS.get(nxt, 'Далее')
+        self._left_grid           = grid
+        self._pending_groups      = None   # set below if groups exist
 
-    # ── rendering ─────────────────────────────────────────────
+        # Groups — built now but added to grid lazily (after qualifiers)
+        self._group_tables = {}
+        self._group_played = {}
+        self._group_total  = {}
+        if self._draw_ev:
+            _groups = self._draw_ev.get('groups', [])
+            _max_teams = max((len(g) for g in _groups), default=8)
+            _row_h = 28 + 22 + (_max_teams * GroupTableWidget._ROW_H) + 26 + 6
+            groups_row = BoxLayout(orientation='horizontal',
+                                   size_hint_y=None, height=_row_h,
+                                   spacing=6, padding=(2, 2))
+            _ratings_map = {}
+            try:
+                import sqlite3 as _sq3
+                _rc = _sq3.connect(self.db_name)
+                for _rn, _rv in _rc.execute(
+                    "SELECT name, COALESCE(rating,0) FROM teams"
+                ).fetchall():
+                    _ratings_map[_rn.strip()] = int(_rv)
+                _rc.close()
+            except Exception:
+                pass
+            for gi, group in enumerate(_groups):
+                gtw = GroupTableWidget(gi, group, pt, logo_map=self._logo_map,
+                                       ratings_map=_ratings_map)
+                stage_key = f'Группа {gi + 1} (BO2)'
+                self._group_tables[stage_key] = gtw
+                self._group_played[stage_key] = 0
+                self._group_total[stage_key]  = len(self._bracket_rounds.get(stage_key, []))
+                groups_row.add_widget(gtw)
 
-    def _render(self, ev):
-        t = ev['type']
-        if t == 'draw':              return self._render_draw(ev)
-        if t == 'match_lineup':      return self._render_lineup(ev)
-        if t == 'match_result':      return self._render_match_result(ev)
-        if t == 'groups_complete':   return self._render_groups_complete(ev)
-        if t == 'stage_header':      return self._render_stage_header(ev)
-        if t == 'tournament_results': return self._render_results(ev)
-        return None
-
-    # ── draw ──────────────────────────────────────────────────
-
-    def _render_draw(self, ev):
-        player_teams = set(ev.get('player_teams', []))
-        block = _auto_grid()
-        block.add_widget(_section_title('ЖЕРЕБЬЁВКА'))
-
-        # 4 GroupTableWidgets side by side
-        groups_row = BoxLayout(orientation='horizontal',
-                               size_hint_y=None, height=220,
-                               spacing=6, padding=(4, 4))
-        self._group_tables = []
-        for i, group in enumerate(ev['groups']):
-            gtw = GroupTableWidget(
-                group_idx=i,
-                teams=group,
-                player_teams=player_teams,
-                logo_map=self._logo_map,
-            )
-            self._group_tables.append(gtw)
-            groups_row.add_widget(gtw)
-
-        block.add_widget(groups_row)
-        return block
-
-    # ── lineup ────────────────────────────────────────────────
-
-    def _render_lineup(self, ev):
-        t1, t2 = ev['team1'], ev['team2']
-        stage  = ev.get('stage', '')
-        l1, l2 = ev.get('t1_lineup', []), ev.get('t2_lineup', [])
-
-        block = _auto_grid()
-        block.add_widget(_section_title(f'МАТЧ  [{stage}]', color=_YELLOW))
-
-        # Team header with logos
-        name_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=48, spacing=4)
-        for team in [t1, t2]:
-            nb = _BgBox(bg=_BG_PANEL, orientation='horizontal',
-                        size_hint_y=None, height=48, padding=(8, 4), spacing=6)
-            logo = self._logo_map.get(team)
-            if logo:
-                nb.add_widget(_team_logo_widget(logo, size=38))
-            lbl = Label(text=f'[b]{team}[/b]', markup=True,
-                        color=_PLAYER, halign='center', valign='middle')
-            lbl.bind(size=lbl.setter('text_size'))
-            nb.add_widget(lbl)
-            name_row.add_widget(nb)
-        block.add_widget(name_row)
-
-        # Column header
-        hdr = _BgBox(bg=_BG_HEAD, orientation='horizontal',
-                     size_hint_y=None, height=26, spacing=2)
-        for txt in ['  Роль', f'  {t1[:18]}', f'  {t2[:18]}']:
-            hdr.add_widget(_lbl(txt, color=_ACCENT, bold=True, height=26))
-        block.add_widget(hdr)
-
-        for i in range(max(len(l1), len(l2))):
-            p1 = l1[i] if i < len(l1) else {}
-            p2 = l2[i] if i < len(l2) else {}
-            role = (p1 or p2).get('role', '')
-            bg = (0.12, 0.12, 0.16, 1) if i % 2 == 0 else _BG_MED
-            rrow = _BgBox(bg=bg, orientation='horizontal',
-                          size_hint_y=None, height=34, spacing=2)
-
-            def _pt(p):
-                return f"{p['nick']}  ({p['micro']}/{p['macro']})" if p else '—'
-
-            rrow.add_widget(_lbl(f'  {role}', color=_DIM, height=34))
-            rrow.add_widget(_lbl(f'  {_pt(p1)}', color=_WHITE, height=34))
-            rrow.add_widget(_lbl(f'  {_pt(p2)}', color=_WHITE, height=34))
-            block.add_widget(rrow)
-
-        return block
-
-    # ── match result ──────────────────────────────────────────
-
-    def _render_match_result(self, ev):
-        t1, t2, winner, loser = ev['team1'], ev['team2'], ev['winner'], ev['loser']
-        stage    = ev.get('stage', '')
-        is_player = ev.get('is_player_match', False)
-        s1, s2   = ev.get('score_t1', 0), ev.get('score_t2', 0)
-        score_str = f' [{s1}:{s2}]' if (s1 or s2) else ''
-
-        # Group stage: update live table silently for bots
-        is_draw = (not winner and not loser) or (winner == '' and loser == '')
-        if 'standings' in ev:
-            gi = ev.get('group_idx', -1)
-            last = None if is_draw else (winner, loser)
-            if 0 <= gi < len(self._group_tables):
-                self._group_tables[gi].update_standings(ev['standings'], last_match=last)
-            if not is_player:
-                return None
-            if is_draw:
-                rbox = _BgBox(bg=_BG_MED, orientation='horizontal',
-                              size_hint_y=None, height=34)
-                rbox.add_widget(_lbl(
-                    f'  ★  {t1}  —  {t2}  Ничья{score_str}  [{stage}]',
-                    color=_YELLOW, height=34,
-                ))
+            # If no qualifiers, show groups immediately; else defer
+            has_qualifiers = bool(self._qualifier_ev or self._qualifier_header)
+            if has_qualifiers:
+                self._pending_groups = [
+                    _section_title('ГРУППОВОЙ ЭТАП', color=_ACCENT),
+                    groups_row,
+                ]
             else:
-                rbox = _BgBox(bg=_BG_WIN, orientation='horizontal',
-                              size_hint_y=None, height=34)
-                rbox.add_widget(_lbl(
-                    f'  ★  {winner}  побеждает  {loser}{score_str}  [{stage}]',
-                    color=_GREEN, height=34,
-                ))
-            return rbox
+                grid.add_widget(_section_title('ГРУППОВОЙ ЭТАП', color=_ACCENT))
+                grid.add_widget(groups_row)
 
-        if is_draw:
-            bg, color = _BG_MED, _YELLOW
-            text = f'  ★  {t1}  —  {t2}  Ничья{score_str}  [{stage}]'
-        elif is_player:
-            bg, color = _BG_WIN, _GREEN
-            text = f'  ★  {winner}  побеждает  {loser}{score_str}  [{stage}]'
-        else:
-            score_part = f'  {s1}:{s2}' if (s1 or s2) else ''
-            text = f'  {stage}:  {t1}  vs  {t2}  →  {winner}{score_part}'
-            bg, color = _BG_MED, _WHITE
-        rbox = _BgBox(bg=bg, orientation='horizontal',
-                      size_hint_y=None, height=34)
-        rbox.add_widget(_lbl(text, color=color, height=34))
-        return rbox
+        sv.add_widget(grid)
+        return sv
 
-    # ── groups complete ───────────────────────────────────────
+    # ── right: live match feed ────────────────────────────────
 
-    def _render_groups_complete(self, ev):
-        for gt in self._group_tables:
-            gt.finalize()
+    def _make_right_panel(self):
+        outer = BoxLayout(orientation='vertical', size_hint=(0.42, 1), spacing=4)
 
-        block = _auto_grid()
-        block.add_widget(_section_title('ПЛЕЙ-ОФФ — КВАЛИФИЦИРОВАВШИЕСЯ', color=_GREEN))
-        top = ev.get('top_teams', [])
-        for i in range(0, len(top), 4):
-            row = BoxLayout(orientation='horizontal',
-                            size_hint_y=None, height=36, spacing=4)
-            for team in top[i:i+4]:
-                tbox = _BgBox(bg=_BG_WIN, orientation='horizontal',
-                              size_hint_y=None, height=36, padding=(6, 0), spacing=4)
-                logo = self._logo_map.get(team)
-                if logo:
-                    tbox.add_widget(_team_logo_widget(logo, size=28))
-                tbox.add_widget(_lbl(team, color=_GREEN, height=36))
-                row.add_widget(tbox)
-            block.add_widget(row)
-        return block
+        hl = Label(text='[b]Матчи турнира[/b]', markup=True,
+                   size_hint_y=None, height=34,
+                   color=_PLAYER, halign='center', valign='middle', font_size='14sp')
+        hl.bind(size=hl.setter('text_size'))
+        outer.add_widget(hl)
 
-    # ── stage header ──────────────────────────────────────────
+        sv = ScrollView(size_hint=(1, 1))
+        self._feed_sv = sv
+        grid = _auto_grid()
+        self._feed_grid = grid
+        sv.add_widget(grid)
+        outer.add_widget(sv)
+        return outer
 
-    def _render_stage_header(self, ev):
-        stage = ev['stage']
-        pairs = ev['pairs']
-        block = _auto_grid()
-        block.add_widget(_section_title(stage.upper()))
+    # ── feed sequence ─────────────────────────────────────────
 
-        for t1, t2 in pairs:
-            prow = _BgBox(bg=_BG_MED, orientation='horizontal',
-                          size_hint_y=None, height=44,
-                          padding=(8, 4), spacing=8)
-            for team in [t1, t2]:
-                tbox = BoxLayout(orientation='horizontal', spacing=6)
-                logo = self._logo_map.get(team)
-                if logo:
-                    tbox.add_widget(_team_logo_widget(logo, size=32))
-                tbox.add_widget(_lbl(team, color=_WHITE, height=34))
-                prow.add_widget(tbox)
-            prow.add_widget(_lbl('VS', color=_YELLOW, height=34,
-                                 halign='center', font_size='14sp'))
-            # fix order: t1 | VS | t2
-            prow.clear_widgets()
-            for team in [t1]:
-                tbox = BoxLayout(orientation='horizontal', spacing=6)
-                logo = self._logo_map.get(team)
-                if logo:
-                    tbox.add_widget(_team_logo_widget(logo, size=32))
-                tbox.add_widget(_lbl(team, color=_WHITE, height=34))
-                prow.add_widget(tbox)
-            prow.add_widget(_lbl('  VS  ', color=_YELLOW, height=34,
-                                 halign='center', font_size='14sp'))
-            for team in [t2]:
-                tbox = BoxLayout(orientation='horizontal', spacing=6)
-                logo = self._logo_map.get(team)
-                if logo:
-                    tbox.add_widget(_team_logo_widget(logo, size=32))
-                tbox.add_widget(_lbl(team, color=_WHITE, height=34))
-                prow.add_widget(tbox)
-            block.add_widget(prow)
-        return block
+    def _build_sequence(self):
+        lineup_map = {}
+        for pm in self._player_matches:
+            lineup_map[(pm['stage'], pm['team1'], pm['team2'])] = pm
 
-    # ── tournament results ────────────────────────────────────
+        seq = []
+
+        # Qualifier stages first (always show to player)
+        qual_stages = [s for s in self._bracket_rounds if 'Квалификац' in s]
+        for stage in qual_stages:
+            matches = self._bracket_rounds.get(stage, [])
+            if not matches:
+                continue
+            seq.append(('header', stage, None, None))
+            for m in matches:
+                is_p   = m.get('is_player_match', False)
+                lineup = lineup_map.get((stage, m['team1'], m['team2'])) if is_p else None
+                seq.append(('player' if is_p else 'auto', stage, m, lineup))
+
+        # If player not qualified → show minor matches; skip main tournament stages
+        if not self._player_qualified and self._player_in_minor:
+            minor_stages = [s for s in self._bracket_rounds if 'Малый' in s]
+            for stage in minor_stages:
+                matches = self._bracket_rounds.get(stage, [])
+                if not matches:
+                    continue
+                seq.append(('header', stage, None, None))
+                for m in matches:
+                    is_p   = m.get('is_player_match', False)
+                    lineup = lineup_map.get((stage, m['team1'], m['team2'])) if is_p else None
+                    seq.append(('player' if is_p else 'auto', stage, m, lineup))
+            return seq
+
+        # Normal flow: groups + playoffs (filter out minor)
+        group_stages  = sorted(s for s in self._bracket_rounds if 'Группа' in s)
+        playoff_order = [s for s in _BRACKET_ORDER if s in self._bracket_rounds]
+        rest = [s for s in self._bracket_rounds
+                if 'Группа' not in s and s not in playoff_order
+                and 'Квалификац' not in s]
+
+        for stage in group_stages + playoff_order + rest:
+            if 'Малый' in stage:
+                continue
+            matches = self._bracket_rounds.get(stage, [])
+            if not matches:
+                continue
+            seq.append(('header', stage, None, None))
+            for m in matches:
+                is_p   = m.get('is_player_match', False)
+                lineup = lineup_map.get((stage, m['team1'], m['team2'])) if is_p else None
+                seq.append(('player' if is_p else 'auto', stage, m, lineup))
+
+        return seq
+
+    def _start_feed(self, *_):
+        self._seq     = self._build_sequence()
+        self._seq_idx = 0
+        self._next_step()
+
+    def _step_delay(self, stage):
+        if 'Группа' in stage: return 0.35
+        if 'Малый'  in stage: return 1.2
+        return 2.0
+
+    def _next_step(self, *_):
+        self._clock_ev = None
+        while self._seq_idx < len(self._seq):
+            kind, stage, ev, lineup_ev = self._seq[self._seq_idx]
+
+            if kind == 'header':
+                self._feed_add_header(stage)
+                self._seq_idx += 1
+                continue
+
+            if kind == 'auto':
+                self._feed_add_result(ev)
+                self._seq_idx += 1
+                self._scroll_feed()
+                self._clock_ev = Clock.schedule_once(
+                    self._next_step, self._step_delay(stage))
+                return
+
+            if kind == 'player':
+                self._feed_add_player_card(ev, lineup_ev)
+                self._scroll_feed()
+                return   # paused — buttons will call _next_step when done
+
+        # Sequence finished
+        if self._tournament_ev:
+            self._persist_results(self._tournament_ev)
+        if self._player_in_minor and self._minor_result_ev:
+            self._persist_minor_results(self._minor_result_ev)
+        if self._close_btn:
+            self._close_btn.disabled = False
+
+    # ── feed widget helpers ───────────────────────────────────
+
+    @staticmethod
+    def _fl(text, color=_WHITE, fs='11sp', bold=False, halign='left'):
+        t = f'[b]{text}[/b]' if bold else text
+        lbl = Label(text=t, markup=True, color=color,
+                    size_hint_y=None, height=22,
+                    halign=halign, valign='middle', font_size=fs)
+        lbl.bind(size=lbl.setter('text_size'))
+        return lbl
+
+    def _feed_add_header(self, stage):
+        is_minor = 'Малый' in stage
+        is_group = 'Группа' in stage
+        color = _YELLOW if is_minor else (_DIM if is_group else _ACCENT)
+        h = _BgBox(bg=_BG_HEAD, size_hint_y=None, height=24)
+        h.add_widget(self._fl(f'  {stage}', color=color,
+                               fs='11sp', bold=True, halign='left'))
+        self._feed_grid.add_widget(h)
+
+        # Reveal group tables in left panel on first group stage header
+        if is_group and getattr(self, '_pending_groups', None):
+            for w in self._pending_groups:
+                self._left_grid.add_widget(w)
+            self._pending_groups = None
+
+    def _feed_add_result(self, ev):
+        t1, t2 = ev['team1'], ev['team2']
+        winner = ev['winner']
+        s1, s2 = ev.get('score_t1', 0), ev.get('score_t2', 0)
+
+        def _tl(name, won):
+            isp = name.strip() in self._player_teams
+            c = _PLAYER if isp else (_WHITE if won else _DIM)
+            lbl = Label(text=name, color=c, halign='left', valign='middle',
+                        font_size='11sp')
+            lbl.bind(size=lbl.setter('text_size'))
+            return lbl
+
+        row = _BgBox(bg=_BG_DARK, orientation='horizontal',
+                     size_hint_y=None, height=26, padding=(4, 0), spacing=4)
+        row.add_widget(_tl(t1, winner == t1))
+        sc = Label(text=f'{s1}:{s2}', color=_YELLOW,
+                   size_hint_x=None, width=34,
+                   halign='center', valign='middle', font_size='11sp')
+        sc.bind(size=sc.setter('text_size'))
+        row.add_widget(sc)
+        row.add_widget(_tl(t2, winner == t2))
+        self._feed_grid.add_widget(row)
+
+        stage = ev.get('stage', '')
+        if 'Группа' in stage:
+            gtw = self._group_tables.get(stage)
+            if gtw:
+                self._group_played[stage] = self._group_played.get(stage, 0) + 1
+                gtw.update_standings(
+                    ev.get('standings', {}),
+                    last_match=(t1, t2, winner),
+                )
+                if self._group_played[stage] >= self._group_total.get(stage, 999):
+                    gtw.finalize()
+
+    def _feed_add_player_card(self, ev, lineup_ev):
+        t1, t2 = ev['team1'], ev['team2']
+        is_t1_p = t1.strip() in self._player_teams
+        my_team = t1 if is_t1_p else t2
+        opp     = t2 if is_t1_p else t1
+        log_ev  = lineup_ev or ev
+        bo      = log_ev.get('best_of') or _bo_from_stage(ev.get('stage', ''))
+
+        # Show match card immediately — draft happens per-map inside MatchLogPopup
+        card = _BgBox(bg=_BG_HEAD, orientation='vertical',
+                      size_hint_y=None, height=96,
+                      padding=(8, 6), spacing=4)
+        card.add_widget(self._fl(
+            f'{my_team}  vs  {opp}', _PLAYER, '14sp', bold=True, halign='center'))
+        card.add_widget(self._fl(
+            f'BO{bo}  —  выберите тактику и героев', _DIM, '12sp', halign='center'))
+
+        btn_row = BoxLayout(size_hint_y=None, height=42, spacing=6)
+
+        def _watch(_):
+            self._feed_grid.remove_widget(card)
+            pre_winner = ev.get('winner', t1)
+
+            def _on_done():
+                actual_winner = ev.get('winner', t1)
+                if actual_winner != pre_winner:
+                    self._apply_result_swap(self._seq_idx + 1, t1, t2)
+                self._feed_add_result(ev)
+                self._seq_idx += 1
+                self._scroll_feed()
+                Clock.schedule_once(self._next_step, 0.5)
+
+            self._open_match_log(
+                log_ev, on_close=_on_done,
+                pre_match_team=my_team,
+                on_result_update=lambda w, s1, s2: ev.update({
+                    'winner': w, 'score_t1': s1, 'score_t2': s2,
+                    'loser': (t2 if w == t1 else t1),
+                }),
+            )
+
+        def _skip(_):
+            self._feed_grid.remove_widget(card)
+            self._feed_add_result(ev)
+            self._seq_idx += 1
+            self._scroll_feed()
+            Clock.schedule_once(self._next_step, 0.5)
+
+        watch_btn = Button(
+            text='Начать матч',
+            background_color=(0.18, 0.55, 0.20, 1),
+            background_normal='', font_size='13sp',
+        )
+        skip_btn = Button(
+            text='Пропустить',
+            background_color=(0.35, 0.25, 0.10, 1),
+            background_normal='', font_size='13sp',
+        )
+        watch_btn.bind(on_press=_watch)
+        skip_btn.bind(on_press=_skip)
+        btn_row.add_widget(watch_btn)
+        btn_row.add_widget(skip_btn)
+        card.add_widget(btn_row)
+        self._feed_grid.add_widget(card)
+        self._scroll_feed()
+
+    def _scroll_feed(self):
+        if self._feed_sv:
+            Clock.schedule_once(
+                lambda dt: setattr(self._feed_sv, 'scroll_y', 0), 0.05)
+
+    def _apply_result_swap(self, from_idx, team_a, team_b):
+        """Propagate a different-than-pre-calc result through subsequent bracket events.
+        Swaps all occurrences of team_a and team_b in events at from_idx onwards.
+        """
+        def _sw(name):
+            if name == team_a: return team_b
+            if name == team_b: return team_a
+            return name
+
+        for i in range(from_idx, len(self._seq)):
+            kind, stage, ev, lineup_ev = self._seq[i]
+            if ev is None:
+                continue
+            ev['team1']  = _sw(ev.get('team1', ''))
+            ev['team2']  = _sw(ev.get('team2', ''))
+            ev['winner'] = _sw(ev.get('winner', ''))
+            ev['loser']  = _sw(ev.get('loser', ''))
+            if 'standings' in ev:
+                ev['standings'] = {_sw(k): v for k, v in ev['standings'].items()}
+            is_p = (ev['team1'] in self._player_teams or
+                    ev['team2'] in self._player_teams)
+            ev['is_player_match'] = is_p
+            if lineup_ev:
+                lineup_ev['team1']  = _sw(lineup_ev.get('team1', ''))
+                lineup_ev['team2']  = _sw(lineup_ev.get('team2', ''))
+                lineup_ev['winner'] = _sw(lineup_ev.get('winner', ''))
+            new_kind = kind if kind == 'header' else ('player' if is_p else 'auto')
+            self._seq[i] = (new_kind, stage, ev, lineup_ev)
+
+        if self._tournament_ev:
+            pl = self._tournament_ev.get('placements', {})
+            self._tournament_ev['placements'] = {_sw(t): p for t, p in pl.items()}
+            self._tournament_ev['champion'] = _sw(
+                self._tournament_ev.get('champion', ''))
+            ge = self._tournament_ev.get('group_eliminated', [])
+            self._tournament_ev['group_eliminated'] = [(_sw(t), p) for t, p in ge]
+
+    def _open_match_log(self, ev, on_close=None, pre_match_team=None,
+                        on_result_update=None):
+        """Open MatchLogPopup without dismissing TournamentPopup."""
+        t1, t2 = ev['team1'], ev['team2']
+        popup = MatchLogPopup(
+            team1=t1, team2=t2,
+            winner=ev.get('winner', t1),
+            log_lines=ev.get('match_log', []),
+            snapshots=ev.get('match_snaps', []),
+            on_close=on_close or (lambda: None),
+            t1_logo=self._logo_map.get(t1),
+            t2_logo=self._logo_map.get(t2),
+            best_of=ev.get('best_of') or _bo_from_stage(ev.get('stage', '')),
+            final_score=(ev.get('score_t1', 0), ev.get('score_t2', 0)),
+            match_stats=ev.get('match_stats', {}),
+            pre_match_team=pre_match_team,
+            db_name=self.db_name if pre_match_team else None,
+            on_result_update=on_result_update,
+        )
+        popup.size_hint = (1.0, 1.0)
+        popup.background = ''
+        popup.background_color = (0, 0, 0, 0)
+        popup.separator_color  = (0, 0, 0, 0)
+        popup.title_bar_height = 0
+        popup.open()
+
+    def _watch(self, ev):
+        self._open_match_log(ev)
+
+    # ── on dismiss ────────────────────────────────────────────
+
+    def _on_dismissed(self, _):
+        if self._clock_ev:
+            self._clock_ev.cancel()
+            self._clock_ev = None
+        if self._tournament_ev:
+            self._persist_results(self._tournament_ev)
+        if getattr(self, '_season_over', False):
+            from ingame_interface.season_end import SeasonEndPopup
+            SeasonEndPopup(
+                self.db_name, self._season_year,
+                on_confirmed=self._on_finish,
+            ).open()
+        elif self._on_finish:
+            self._on_finish()
+
+    # ── persistence ───────────────────────────────────────────
+
+
+    def _persist_minor_results(self, event):
+        places = event.get('placements', {})
+        _MINOR_PRIZES = {1: 80_000, 2: 40_000, 3: 20_000, 4: 10_000}
+        _MINOR_RATING = {1: 150, 2: 75, 3: 35, 4: 20}
+
+        conn = sqlite3.connect(self.db_name)
+        cur  = conn.cursor()
+        for team, place in places.items():
+            prize  = _MINOR_PRIZES.get(place, 0)
+            rating = _MINOR_RATING.get(place, 0)
+            if prize:
+                cur.execute("UPDATE teams SET budget=budget+? WHERE name=?", (prize, team))
+            if rating:
+                cur.execute(
+                    "UPDATE teams SET rating=COALESCE(rating,0)+? WHERE name=?",
+                    (rating, team),
+                )
+
+        # Record history for all players in minor
+        gd = cur.execute("SELECT date FROM save WHERE id=1").fetchone()
+        season = int(gd[0][:4]) if gd else 0
+        id_map = {r[0].strip(): r[1] for r in cur.execute("SELECT name, id FROM teams")}
+        for team, place in places.items():
+            tid = id_map.get(team)
+            if not tid:
+                continue
+            pids_row = cur.execute(
+                "SELECT carry, mid, offlane, partial_support, full_support FROM teams WHERE id=?",
+                (tid,)
+            ).fetchone()
+            if not pids_row:
+                continue
+            for pid in [p for p in pids_row if p]:
+                nick = (cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+                        .fetchone() or ('',))[0]
+                try:
+                    cur.execute(
+                        "INSERT INTO player_history "
+                        "(player_id, player_nick, season, tournament_name, place, team_name) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (pid, nick, season, 'Малый турнир', place, team),
+                    )
+                except Exception:
+                    pass
+
+        conn.commit()
+        conn.close()
+
+        # reputation for player if in minor
+        player_t = event.get('player_teams', [])
+        for pt in player_t:
+            place = places.get(pt)
+            if place:
+                from ingame_interface.tournaments import _update_reputation
+                rep = (3 if place == 1 else 2 if place <= 3 else 0)
+                if rep:
+                    _update_reputation(self.db_name, rep)
 
     def _render_results(self, ev):
         champion   = ev['champion']
@@ -1048,7 +2234,62 @@ class TournamentPopup(Popup):
 
     # ── DB persistence ────────────────────────────────────────
 
+    def _record_player_history(self, event):
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+        c.execute("SELECT start_date FROM tournaments WHERE id=?",
+                  (event.get('tournament_id', 0),))
+        row = c.fetchone()
+        season = int(row[0][:4]) if row else 0
+        t_name = self.title
+
+        all_places = dict(event.get('placements', {}))
+        for i, (team, _) in enumerate(
+            sorted(event.get('group_eliminated', []), key=lambda x: x[1], reverse=True)
+        ):
+            all_places[team] = 9 + i
+
+        for team, place in all_places.items():
+            c.execute("SELECT id, carry, mid, offlane, partial_support, full_support "
+                      "FROM teams WHERE name=?", (team,))
+            tr = c.fetchone()
+            if not tr:
+                continue
+            pids = [p for p in tr[1:] if p]
+            for pid in pids:
+                nick = (c.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+                        .fetchone() or ('',))[0]
+                c.execute(
+                    "INSERT INTO player_history "
+                    "(player_id, player_nick, season, tournament_name, place, team_name) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (pid, nick, season, t_name, place, team),
+                )
+        conn.commit()
+        conn.close()
+
+    def _release_temp_players(self):
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+        c.execute("SELECT id FROM players WHERE is_temp=1 AND team_id!=0")
+        for (pid,) in c.fetchall():
+            for col in ('carry','mid','offlane','partial_support','full_support'):
+                c.execute(f"UPDATE teams SET {col}=NULL WHERE {col}=?", (pid,))
+            c.execute("UPDATE players SET team_id=0, is_temp=0, wage=0 WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+
     def _persist_results(self, event):
+        # Guard: skip if results already saved (safe reopen)
+        _tid = event.get('tournament_id')
+        if _tid:
+            _c = sqlite3.connect(self.db_name)
+            _row = _c.execute("SELECT place1 FROM tournaments WHERE id=?", (_tid,)).fetchone()
+            _c.close()
+            if _row and _row[0] is not None:
+                return
+        self._release_temp_players()
+        self._record_player_history(event)
         save_tournament_results(
             event['tournament_id'],
             event['placements'],
@@ -1058,20 +2299,38 @@ class TournamentPopup(Popup):
         update_morale_after_tournament(
             self.db_name, event['placements'], event['group_eliminated'],
         )
-        apply_training_from_games(self.db_name, event.get('games_played', {}))
-        ai_transfers(
+        try:
+            _gd = sqlite3.connect(self.db_name).execute(
+                "SELECT date FROM save WHERE id=1"
+            ).fetchone()
+            _season = int(_gd[0][:4]) if _gd else 2024
+            _game_date = _gd[0] if _gd else None
+        except Exception:
+            _season = 2024
+            _game_date = None
+        apply_training_from_games(
             self.db_name,
-            placements=event['placements'],
-            group_eliminated=event['group_eliminated'],
+            event.get('games_played', {}),
+            season=_season,
+            placements=event.get('placements', {}),
+            champion_name=event.get('champion'),
         )
+        update_form_after_tournament(
+            self.db_name,
+            event.get('placements', {}),
+            event.get('group_eliminated', []),
+        )
+        if _is_transfer_window(_game_date or ''):
+            ai_transfers(
+                self.db_name,
+                placements=event['placements'],
+                group_eliminated=event['group_eliminated'],
+            )
 
         # Season-end check
         self._season_over, self._season_year = self._check_season_over(
             event['tournament_id']
         )
-        if not self._season_over and self._on_finish:
-            self._on_finish()
-        self.bind(on_dismiss=self._maybe_show_season_end)
 
         conn = sqlite3.connect(self.db_name)
         cur = conn.cursor()
@@ -1093,8 +2352,37 @@ class TournamentPopup(Popup):
             _add_message(
                 self.db_name,
                 f"{self.title} завершён. {my_team} заняла {place}-е место.",
-                'Спортивный директор',
+                'Новости',
             )
+            # Reputation update
+            rep = (5 if place == 1 else
+                   3 if place <= 3 else
+                   1 if place <= 8 else -1)
+            _update_reputation(self.db_name, rep)
+
+            # Goals update
+            from logic.goals import update_goal, year_from_date
+            try:
+                conn_g = sqlite3.connect(self.db_name)
+                gd = conn_g.execute("SELECT date FROM save WHERE id=1").fetchone()
+                conn_g.close()
+                year = year_from_date(gd[0] if gd else '2024')
+                update_goal(self.db_name, year, 'best_finish', place)
+                if place == 1:
+                    update_goal(self.db_name, year, 'win_tournament', 1)
+                # estimate prize from tournament prizepool for place
+                try:
+                    from logic.tournaments.prizepool import get_prizepool_worldcup_system
+                    prizes = get_prizepool_worldcup_system(
+                        event.get('tournament_id', 0), self.db_name
+                    )
+                    prize = prizes.get(place, 0)
+                    if prize:
+                        update_goal(self.db_name, year, 'earn_prize', prize)
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
     def _check_season_over(self, tournament_id):
         conn = sqlite3.connect(self.db_name)
@@ -1124,6 +2412,8 @@ class TournamentPopup(Popup):
 
 
 # ── TournamentsViewPopup ──────────────────────────────────────────────────────
+
+
 
 class TournamentsViewPopup(Popup):
 

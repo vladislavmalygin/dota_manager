@@ -9,14 +9,9 @@ import sqlite3
 def migrate(db_name):
     conn = sqlite3.connect(db_name)
     c = conn.cursor()
-    # Idempotency check: if 'rue' already exists as a player, migration was applied
-    c.execute("SELECT COUNT(*) FROM players WHERE nickname='rue' AND name='Alexandr'")
-    if c.fetchone()[0] > 0:
-        conn.close()
-        return
-    conn.close()
-    conn = sqlite3.connect(db_name)
-    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)")
+    if c.execute("SELECT 1 FROM _migrations WHERE name='migrate3'").fetchone():
+        conn.close(); return
 
     # ── 1. Fix player names / countries ──────────────────────────────────────
 
@@ -308,6 +303,7 @@ def migrate(db_name):
     # Actually Mira (id=4) should now have team_id=13 (Aurora) — set above. Verify:
     # (migration already set it via move_player)
 
+    c.execute("INSERT OR IGNORE INTO _migrations (name) VALUES ('migrate3')")
     conn.commit()
     conn.close()
     print(f"[migrate3] Roster update applied to {db_name}")
