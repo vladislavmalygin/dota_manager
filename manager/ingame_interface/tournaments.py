@@ -2384,6 +2384,41 @@ class TournamentPopup(Popup):
             except Exception:
                 pass
 
+        # Save player match logs to match_history
+        if getattr(self, '_player_matches', None):
+            import json as _json
+            try:
+                _conn = sqlite3.connect(self.db_name)
+                _conn.execute("""
+                    CREATE TABLE IF NOT EXISTS match_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        played_date TEXT, tournament TEXT, stage TEXT,
+                        team1 TEXT, team2 TEXT, winner TEXT,
+                        score_t1 INTEGER DEFAULT 0, score_t2 INTEGER DEFAULT 0,
+                        best_of INTEGER DEFAULT 1, log_json TEXT
+                    )
+                """)
+                for _ev in self._player_matches:
+                    _conn.execute("""
+                        INSERT INTO match_history
+                        (played_date, tournament, stage, team1, team2, winner,
+                         score_t1, score_t2, best_of, log_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        _game_date or '',
+                        self.title,
+                        _ev.get('stage', ''),
+                        _ev.get('team1', ''), _ev.get('team2', ''),
+                        _ev.get('winner', ''),
+                        _ev.get('score_t1', 0), _ev.get('score_t2', 0),
+                        _ev.get('best_of', 1),
+                        _json.dumps(_ev.get('match_log', [])),
+                    ))
+                _conn.commit()
+                _conn.close()
+            except Exception:
+                pass
+
     def _check_season_over(self, tournament_id):
         conn = sqlite3.connect(self.db_name)
         cur = conn.cursor()

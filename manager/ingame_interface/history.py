@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from kivy.uix.popup import Popup
@@ -13,12 +14,16 @@ _BRONZE = (0.78, 0.52, 0.25, 1)
 _WHITE  = (0.92, 0.92, 0.92, 1)
 _DIM    = (0.55, 0.55, 0.55, 1)
 _ACCENT = (0.35, 0.85, 1.00, 1)
+_WIN    = (0.25, 0.90, 0.42, 1)
+_LOSE   = (0.95, 0.30, 0.22, 1)
+_BG     = (0.07, 0.09, 0.13, 1)
+_BG_ROW = (0.10, 0.13, 0.18, 1)
 
 
-def _lbl(text, sw=1.0, color=_WHITE, bold=False):
+def _lbl(text, sw=1.0, color=_WHITE, bold=False, height=36, halign='center'):
     t = f'[b]{text}[/b]' if bold else text
-    lbl = Label(text=t, markup=True, size_hint_x=sw,
-                color=color, halign='center', valign='middle')
+    lbl = Label(text=t, markup=True, size_hint_x=sw, size_hint_y=None, height=height,
+                color=color, halign=halign, valign='middle')
     lbl.bind(size=lbl.setter('text_size'))
     return lbl
 
@@ -38,12 +43,94 @@ def _place_medal(place):
     return str(place)
 
 
+def _sec_header(text):
+    lbl = Label(
+        text=f'[b]{text}[/b]', markup=True,
+        size_hint_y=None, height=32,
+        color=_ACCENT, halign='left', valign='middle', font_size='13sp',
+    )
+    lbl.bind(size=lbl.setter('text_size'))
+    return lbl
+
+
+class MatchReplayPopup(Popup):
+    """Scrollable log for a past match."""
+
+    def __init__(self, team1, team2, winner, score_t1, score_t2,
+                 best_of, tournament, stage, log_lines, **kw):
+        super().__init__(**kw)
+        self.title = ''
+        self.size_hint = (0.90, 0.92)
+        self.background = ''
+        self.background_color = _BG
+        self.separator_color = (0.15, 0.30, 0.50, 1)
+
+        root = BoxLayout(orientation='vertical', spacing=4, padding=(6, 6))
+
+        # Header
+        w_color = _WIN if winner == team1 else _LOSE
+        l_color = _LOSE if winner == team1 else _WIN
+        score_txt = (
+            f'[b][color=#{_hex(w_color)}]{team1}[/color]  '
+            f'{score_t1} — {score_t2}  '
+            f'[color=#{_hex(l_color)}]{team2}[/color][/b]'
+        )
+        hdr_lbl = Label(
+            text=score_txt, markup=True,
+            size_hint_y=None, height=40,
+            color=_WHITE, halign='center', valign='middle', font_size='15sp',
+        )
+        hdr_lbl.bind(size=hdr_lbl.setter('text_size'))
+        root.add_widget(hdr_lbl)
+
+        meta_lbl = Label(
+            text=f'{tournament}  ·  {stage}  ·  BO{best_of}',
+            size_hint_y=None, height=22,
+            color=_DIM, halign='center', valign='middle', font_size='11sp',
+        )
+        meta_lbl.bind(size=meta_lbl.setter('text_size'))
+        root.add_widget(meta_lbl)
+
+        # Log
+        scroll = ScrollView(size_hint=(1, 1))
+        log_grid = GridLayout(cols=1, size_hint_y=None, spacing=1)
+        log_grid.bind(minimum_height=log_grid.setter('height'))
+
+        for line in log_lines:
+            lbl = Label(
+                text=line, markup=True,
+                size_hint_y=None, height=22,
+                color=_WHITE, halign='left', valign='middle',
+                font_size='12sp',
+            )
+            lbl.bind(size=lbl.setter('text_size'))
+            log_grid.add_widget(lbl)
+
+        scroll.add_widget(log_grid)
+        root.add_widget(scroll)
+
+        close = Button(
+            text='Закрыть', size_hint_y=None, height=44,
+            background_color=(0.55, 0.18, 0.18, 1), background_normal='',
+        )
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+
+def _hex(rgba):
+    r, g, b = int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255)
+    return f'{r:02x}{g:02x}{b:02x}'
+
+
 class HistoryPopup(Popup):
     def __init__(self, db_name, **kwargs):
         super().__init__(**kwargs)
         self.title = ''
-        self.size_hint = (0.88, 0.88)
-        self.background_color = (1, 1, 1, 0)
+        self.size_hint = (0.88, 0.92)
+        self.background = ''
+        self.background_color = _BG
+        self.separator_color = (0.15, 0.30, 0.50, 1)
 
         layout = BoxLayout(orientation='vertical', padding=6, spacing=6)
         scroll = ScrollView(size_hint=(1, 1))
@@ -55,10 +142,10 @@ class HistoryPopup(Popup):
         scroll.add_widget(grid)
         layout.add_widget(scroll)
         close = Button(text='Закрыть', size_hint_y=None, height=50,
-                       background_color=(0.8, 0.2, 0.2, 0.8))
+                       background_color=(0.8, 0.2, 0.2, 1), background_normal='')
         close.bind(on_press=self.dismiss)
         layout.add_widget(close)
-        self.add_widget(layout)
+        self.content = layout
 
     def _build(self, db_name, grid):
         conn = sqlite3.connect(db_name)
@@ -71,22 +158,14 @@ class HistoryPopup(Popup):
             return
         team_id, team_name = row[0], row[1].strip()
 
-        # Header
-        hdr = Label(
-            text=f'[b]История результатов: {team_name}[/b]',
-            markup=True, size_hint_y=None, height=44,
-            color=_ACCENT, halign='center', valign='middle',
-        )
-        hdr.bind(size=hdr.setter('text_size'))
-        grid.add_widget(hdr)
+        # ── Tournament results ────────────────────────────────────
+        grid.add_widget(_sec_header(f'История турниров: {team_name}'))
 
-        # Column headers
-        hrow = BoxLayout(size_hint_y=None, height=28)
+        hrow = BoxLayout(size_hint_y=None, height=26)
         for txt, sw in [('Турнир', 0.45), ('Дата', 0.18), ('Место', 0.17), ('Приз', 0.20)]:
-            hrow.add_widget(_lbl(f'[b]{txt}[/b]', sw=sw, color=_ACCENT, bold=False))
+            hrow.add_widget(_lbl(f'[b]{txt}[/b]', sw=sw, color=_ACCENT, bold=False, height=26))
         grid.add_widget(hrow)
 
-        # Collect results
         c.execute("""
             SELECT name, start_date,
                    place1,  place2,  place3,  place4,
@@ -108,31 +187,92 @@ class HistoryPopup(Popup):
                     results.append((t_name, t_date, i, prize))
                     break
 
-        conn.close()
-
         if not results:
             grid.add_widget(_lbl('Ещё нет сыгранных турниров.', color=_DIM))
+        else:
+            for t_name, t_date, place, prize in results:
+                color = _place_color(place)
+                r = BoxLayout(size_hint_y=None, height=34)
+                r.add_widget(_lbl(t_name, sw=0.45, color=color, height=34, halign='left'))
+                r.add_widget(_lbl(t_date[:7] if t_date else '—', sw=0.18, color=color, height=34))
+                r.add_widget(_lbl(_place_medal(place), sw=0.17, color=color, height=34))
+                prize_txt = f'${prize:,}' if prize else '—'
+                r.add_widget(_lbl(prize_txt, sw=0.20, color=color, height=34))
+                grid.add_widget(r)
+
+            wins        = sum(1 for _, _, p, _ in results if p == 1)
+            top4        = sum(1 for _, _, p, _ in results if p <= 4)
+            total_prize = sum(pr for _, _, _, pr in results)
+            grid.add_widget(_lbl(
+                f'Турниров: {len(results)}  |  Побед: {wins}  |  Топ-4: {top4}  |  '
+                f'Призовых: ${total_prize:,}',
+                color=_ACCENT, height=30,
+            ))
+
+        # ── Match replays ─────────────────────────────────────────
+        matches = []
+        try:
+            matches = c.execute("""
+                SELECT id, played_date, tournament, stage,
+                       team1, team2, winner, score_t1, score_t2, best_of, log_json
+                FROM match_history
+                ORDER BY id DESC
+                LIMIT 50
+            """).fetchall()
+        except Exception:
+            pass
+
+        conn.close()
+
+        if not matches:
             return
 
-        for t_name, t_date, place, prize in results:
-            color = _place_color(place)
-            row = BoxLayout(size_hint_y=None, height=36)
-            row.add_widget(_lbl(t_name, sw=0.45, color=color))
-            row.add_widget(_lbl(t_date[:7] if t_date else '—', sw=0.18, color=color))
-            row.add_widget(_lbl(_place_medal(place), sw=0.17, color=color))
-            prize_txt = f'${prize:,}' if prize else '—'
-            row.add_widget(_lbl(prize_txt, sw=0.20, color=color))
-            grid.add_widget(row)
+        # spacer
+        grid.add_widget(_lbl('', height=12))
+        grid.add_widget(_sec_header('История матчей'))
 
-        # Summary
-        wins   = sum(1 for _, _, p, _ in results if p == 1)
-        top4   = sum(1 for _, _, p, _ in results if p <= 4)
-        total_prize = sum(pr for _, _, _, pr in results)
-        grid.add_widget(_lbl(
-            f'Турниров: {len(results)}  |  Побед: {wins}  |  Топ-4: {top4}  |  '
-            f'Призовых: ${total_prize:,}',
-            color=_ACCENT,
-        ))
+        hrow2 = BoxLayout(size_hint_y=None, height=26)
+        for txt, sw in [('Дата', 0.14), ('Турнир', 0.28), ('Этап', 0.18),
+                        ('Матч', 0.28), ('Счёт', 0.12)]:
+            hrow2.add_widget(_lbl(f'[b]{txt}[/b]', sw=sw, color=_ACCENT, bold=False, height=26))
+        grid.add_widget(hrow2)
+
+        for (mid, date, tourn, stage, t1, t2, winner, s1, s2, bo, log_json) in matches:
+            won = (winner == team_name)
+            result_color = _WIN if won else _LOSE
+
+            r = BoxLayout(size_hint_y=None, height=34, spacing=2)
+            r.add_widget(_lbl(date[:10] if date else '—', sw=0.14, color=_DIM, height=34))
+            r.add_widget(_lbl(tourn or '—', sw=0.28, color=_WHITE, height=34, halign='left'))
+            r.add_widget(_lbl(stage or '—', sw=0.18, color=_DIM, height=34))
+            match_txt = f'[b]{t1}[/b] vs {t2}'
+            r.add_widget(_lbl(match_txt, sw=0.28, color=result_color, height=34, halign='left'))
+            r.add_widget(_lbl(f'{s1}:{s2}', sw=0.12, color=result_color, height=34))
+
+            replay_btn = Button(
+                text='▶', size_hint=(None, None), width=36, height=30,
+                background_color=(0.12, 0.30, 0.55, 1), background_normal='',
+                font_size='14sp',
+            )
+            _log = log_json
+            _t1, _t2, _w, _s1, _s2, _bo = t1, t2, winner, s1, s2, bo
+            _tourn, _stage = tourn, stage
+
+            def _open(_, log=_log, team1=_t1, team2=_t2, w=_w, sc1=_s1,
+                      sc2=_s2, best=_bo, tr=_tourn, st=_stage):
+                try:
+                    lines = json.loads(log) if log else []
+                except Exception:
+                    lines = []
+                MatchReplayPopup(
+                    team1=team1, team2=team2, winner=w,
+                    score_t1=sc1, score_t2=sc2, best_of=best,
+                    tournament=tr, stage=st, log_lines=lines,
+                ).open()
+
+            replay_btn.bind(on_press=_open)
+            r.add_widget(replay_btn)
+            grid.add_widget(r)
 
 
 def show_history_popup(db_name):
