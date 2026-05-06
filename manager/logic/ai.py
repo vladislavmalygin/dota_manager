@@ -3,7 +3,7 @@ import random
 
 ROLES = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
 _SKILL_MAX    = 100
-_BASE_XP_PER_GAME = 0.3
+_BASE_XP_PER_GAME = 0.5
 
 _PER_SKILL_CAP = {
     'micro_skills': 'micro_cap',
@@ -713,7 +713,7 @@ def apply_age_decline(db_name):
 
 def decay_ratings_season_end(db_name):
     conn = sqlite3.connect(db_name)
-    conn.execute("UPDATE teams SET rating = ROUND(COALESCE(rating, 0) * 0.3)")
+    conn.execute("UPDATE teams SET rating = ROUND(COALESCE(rating, 0) * 0.75)")
     conn.commit()
     conn.close()
 

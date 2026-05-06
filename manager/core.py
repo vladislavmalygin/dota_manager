@@ -205,8 +205,8 @@ def _pay_streaming_income(db_name, game_date_str):
         ).fetchone()
         reputation = rep_row[0] if rep_row else 0
 
-        income = max(500, int(rating * 40 + reputation * 80))
-        income = round(income / 500) * 500   # round to $500
+        income = max(2_000, int(rating * 120 + reputation * 200))
+        income = round(income / 500) * 500
 
         conn.execute("UPDATE teams SET budget=budget+? WHERE id=?", (income, team_id))
         conn.execute(
@@ -738,7 +738,7 @@ class MainWindow(BoxLayout):
             sp = c.execute("SELECT monthly_income FROM sponsors WHERE is_active=1 LIMIT 1").fetchone()
             if sp:
                 sponsor_income = sp[0] or 0
-            streaming = int(rating * 40)
+            streaming = int(rating * 120)
             monthly_in = sponsor_income + streaming
             balance = monthly_in - total_wage
 
