@@ -47,6 +47,9 @@ from db_migrate18_fix import migrate as _migrate18_fix
 from db_migrate19 import migrate as _migrate19
 from db_migrate20 import migrate as _migrate20
 from db_migrate21 import migrate as _migrate21
+from db_migrate22 import migrate as _migrate22
+from db_migrate23 import migrate as _migrate23
+from db_migrate24 import migrate as _migrate24
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -166,7 +169,7 @@ def _get_menu_badges(db_name):
         # AI offers pending
         offers = conn.execute("SELECT COUNT(*) FROM ai_offers").fetchone()
         if offers and offers[0] > 0:
-            badges['Трансферы'] = f' 📨{offers[0]}'
+            badges['Трансферы'] = f' [+]{offers[0]}'
 
         # Состав: active conflict or wants_to_leave
         team = conn.execute(
@@ -181,7 +184,7 @@ def _get_menu_badges(db_name):
                 ).fetchone()
                 has_conflict = leaving and leaving[0] > 0
             if has_conflict:
-                badges['Состав'] = ' ⚡'
+                badges['Состав'] = ' [!]'
 
         conn.close()
     except Exception as _e:
@@ -525,7 +528,7 @@ class MainWindow(BoxLayout):
 
         # ── Home button ───────────────────────────────────────────────────────
         _home_sidebar_btn = Button(
-            text='⌂  Главная', size_hint_y=None, height=_BTN_H + 4,
+            text='Главная', size_hint_y=None, height=_BTN_H + 4,
             background_color=T.NAV_ACTIVE, background_normal='',
             font_size='14sp', bold=True,
         )
@@ -624,7 +627,7 @@ class MainWindow(BoxLayout):
                           halign='left', valign='middle')
         title_lbl.bind(size=title_lbl.setter('text_size'))
 
-        home_btn = Button(text='⌂  Главная',
+        home_btn = Button(text='Главная',
                           size_hint=(None, 1), width=115,
                           background_color=T.NAV_IDLE, background_normal='',
                           font_size=T.FS_SMALL)
@@ -787,6 +790,19 @@ class MainWindow(BoxLayout):
             if cohesion < 25:
                 actions.append(('warn', f'Сыгранность критически низкая: {cohesion}/100'))
 
+            # Rating / budget trend (last 6 monthly snapshots)
+            rating_trend = None
+            budget_trend = None
+            if my_id:
+                snaps = c.execute(
+                    "SELECT rating, budget FROM team_snapshots "
+                    "WHERE team_id=? ORDER BY snap_date DESC LIMIT 6",
+                    (my_id[0],)
+                ).fetchall()
+                if len(snaps) >= 2:
+                    rating_trend = int(snaps[0][0]) - int(snaps[-1][0])
+                    budget_trend = snaps[0][1] - snaps[-1][1]
+
             conn.close()
         except Exception as _e:
             T.log_err('_show_dashboard', _e)
@@ -840,13 +856,23 @@ class MainWindow(BoxLayout):
         row1 = BoxLayout(size_hint_y=None, spacing=10)
         row1.bind(minimum_height=row1.setter('height'))
 
+        def _trend_suffix(delta, is_money=False):
+            if delta is None or delta == 0:
+                return ''
+            arrow = '↑' if delta > 0 else '↓'
+            col   = _mc(T.POSITIVE) if delta > 0 else _mc(T.NEGATIVE)
+            val   = f'${abs(delta):,}' if is_money else str(abs(delta))
+            return f'  [color={col}]{arrow}{val}[/color]'
+
         c1 = _card(T.BG_CARD)
         c1.add_widget(_title(t_name.strip()))
         bc = T.budget_color(budget)
         c1.add_widget(_row('Бюджет',
-                           f'[color={_mc(bc)}][b]${budget:,}[/b][/color]'))
+                           f'[color={_mc(bc)}][b]${budget:,}[/b][/color]'
+                           + _trend_suffix(budget_trend, is_money=True)))
         c1.add_widget(_row('Место в рейтинге',
-                           f'[b]#{my_rank}[/b]  ({int(rating)} pts)'))
+                           f'[b]#{my_rank}[/b]  ({int(rating)} pts)'
+                           + _trend_suffix(rating_trend)))
         coh_c = T.cohesion_color(cohesion)
         c1.add_widget(_row('Сыгранность',
                            f'[color={_mc(coh_c)}]{cohesion}/100[/color]'))
@@ -934,6 +960,16 @@ class MainWindow(BoxLayout):
                 conn.execute(ddl)
             except Exception:
                 pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS team_snapshots (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id   INTEGER NOT NULL,
+                snap_date TEXT NOT NULL,
+                rating    REAL DEFAULT 0,
+                budget    INTEGER DEFAULT 0,
+                UNIQUE(team_id, snap_date)
+            )
+        """)
         conn.commit()
         conn.close()
         _migrate2(db_name)
@@ -957,6 +993,8 @@ class MainWindow(BoxLayout):
         _migrate19(db_name)
         _migrate20(db_name)
         _migrate21(db_name)
+        _migrate22(db_name)
+        _migrate23(db_name)
         _fix_orphans(db_name)
         _fix_team_regions(db_name)
         _fix_contracts(db_name)
@@ -1142,6 +1180,17 @@ class MainWindow(BoxLayout):
                     "UPDATE teams SET budget=MAX(0, budget-?) WHERE id=?",
                     (ai_wages, ai_tid),
                 )
+
+        # Monthly team snapshot for dashboard trend
+        snap_row = cursor.execute(
+            "SELECT id, COALESCE(rating,0), COALESCE(budget,0) FROM teams WHERE player='yes'"
+        ).fetchone()
+        if snap_row:
+            cursor.execute(
+                "INSERT OR IGNORE INTO team_snapshots (team_id, snap_date, rating, budget) "
+                "VALUES (?, ?, ?, ?)",
+                (snap_row[0], str(self.date_object), int(snap_row[1]), snap_row[2]),
+            )
 
         self._expire_contracts(conn)
         self._notify_expiring_contracts(conn)
@@ -1647,7 +1696,7 @@ class MainWindow(BoxLayout):
     def get_next_tournament(self):
         current = self.get_current_tournament()
         if current:
-            return f'⚔ {current}'
+            return f'{current}'
         date_object = self.get_date_from_db(1)
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()

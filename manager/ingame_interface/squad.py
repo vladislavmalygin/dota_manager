@@ -219,7 +219,7 @@ class SetPriorityPopup(Popup):
             ('soft_skills',  'Soft',  soft),
         ]:
             is_active = (priority == skill_col)
-            prefix = '✓  ' if is_active else '      '
+            prefix = 'OK ' if is_active else '      '
             btn = Button(
                 text=f'{prefix}{label}: {val}',
                 size_hint_y=None, height=46,
@@ -232,7 +232,7 @@ class SetPriorityPopup(Popup):
 
         none_active = not priority
         none_btn = Button(
-            text='✓  Нет приоритета' if none_active else '      Нет приоритета',
+            text='OK Нет приоритета' if none_active else '      Нет приоритета',
             size_hint_y=None, height=46,
             background_color=(0.40, 0.18, 0.18, 1) if none_active else (0.22, 0.22, 0.22, 1),
             background_normal='',
@@ -350,7 +350,7 @@ class SquadPopup(Popup):
                 if r:
                     conflict_names.append(r[0])
             grid.add_widget(_lbl(
-                f'⚡ РАСКОЛ: команда требует уволить {", ".join(conflict_names)}. '
+                f'[!] РАСКОЛ: команда требует уволить {", ".join(conflict_names)}. '
                 f'Сыгранность заморожена.',
                 color=(1.0, 0.30, 0.20, 1), height=30,
             ))
@@ -361,7 +361,7 @@ class SquadPopup(Popup):
         ).fetchall()
         for (lnick,) in leaving_players:
             grid.add_widget(_lbl(
-                f'🚪 {lnick} хочет покинуть команду. Мораль заморожена на 1.',
+                f'{lnick} хочет покинуть команду. Мораль заморожена на 1.',
                 color=(1.0, 0.75, 0.15, 1), height=26,
             ))
 
@@ -382,7 +382,8 @@ class SquadPopup(Popup):
         hrow.add_widget(_ch('Мораль', 0.13))
         hrow.add_widget(_ch('Зарплата', 0.13))
         hrow.add_widget(_ch('Трен.', 0.10))
-        hrow.add_widget(_ch('', 0.08))
+        hrow.add_widget(_ch('↓', 0.07))
+        hrow.add_widget(_ch('', 0.07))
         grid.add_widget(hrow)
 
         # ── Player rows ──────────────────────────────────────────
@@ -593,9 +594,18 @@ class SquadPopup(Popup):
                         train_btn.bind(on_press=lambda _, p=pid: self._open_priority(p))
                         row.add_widget(train_btn)
 
+                    # ── Bench button ──────────────────────────────
+                    bench_btn = Button(
+                        text='↓', size_hint_x=0.07,
+                        background_color=(0.28, 0.22, 0.10, 1),
+                        background_normal='', font_size='16sp',
+                    )
+                    bench_btn.bind(on_press=lambda _, p=pid, c=col: self._bench_player(p, c))
+                    row.add_widget(bench_btn)
+
                     # ── Detail button ─────────────────────────────
                     det_btn = Button(
-                        text='▶', size_hint_x=0.08,
+                        text='>', size_hint_x=0.07,
                         background_color=(0.15, 0.25, 0.45, 1),
                         background_normal='', font_size='16sp',
                     )
@@ -643,7 +653,7 @@ class SquadPopup(Popup):
                         is_away = _date.fromisoformat(bvac) >= game_today
                     except Exception:
                         pass
-                vac_txt = f'  🏖до {bvac[5:]}' if is_away else ''
+                vac_txt = f'  до {bvac[5:]}' if is_away else ''
                 brow = BoxLayout(size_hint_y=None, height=44, spacing=4)
                 role_lbl = ROLE_SHORT.get(brole, brole or '?')
                 brow.add_widget(_lbl(
@@ -680,6 +690,13 @@ class SquadPopup(Popup):
         cur.execute(f"SELECT {role_col} FROM teams WHERE player='yes'")
         row = cur.fetchone()
         cur.execute(f"UPDATE teams SET {role_col}=? WHERE player='yes'", (bench_pid,))
+        conn.commit()
+        conn.close()
+        self._rebuild()
+
+    def _bench_player(self, player_id, role_col):
+        conn = sqlite3.connect(self.db_name)
+        conn.execute(f"UPDATE teams SET {role_col}=NULL WHERE player='yes'")
         conn.commit()
         conn.close()
         self._rebuild()
@@ -751,7 +768,7 @@ class PlayerHistoryPopup(Popup):
                     hdr.bind(size=hdr.setter('text_size'))
                     grid.add_widget(hdr)
                     last_season = season
-                medals = {1: '🥇', 2: '🥈', 3: '🥉'}
+                medals = {1: '[1]', 2: '[2]', 3: '[3]'}
                 m = medals.get(place, f'{place}.')
                 c_color = (
                     (1.0, 0.85, 0.25, 1) if place == 1 else
@@ -1112,7 +1129,7 @@ class PlayerDetailPopup(Popup):
                 right_scroll_content.add_widget(sl)
 
         if history:
-            medals = {1: '🥇', 2: '🥈', 3: '🥉'}
+            medals = {1: '[1]', 2: '[2]', 3: '[3]'}
             for season, t_name, place, team in history:
                 pc    = T.place_color(place)
                 medal = medals.get(place, f'{place}.')
@@ -1136,7 +1153,7 @@ class PlayerDetailPopup(Popup):
 
         if on_priority_changed:
             train_btn = Button(
-                text='🎯  Тренировка',
+                text='Тренировка',
                 background_color=T.BTN_PRIMARY, background_normal='',
                 font_size='13sp',
             )
@@ -1148,7 +1165,7 @@ class PlayerDetailPopup(Popup):
             btn_row.add_widget(train_btn)
 
         hist_btn = Button(
-            text='📋  История',
+            text='История',
             background_color=(0.18, 0.28, 0.48, 1), background_normal='',
             font_size='13sp',
         )

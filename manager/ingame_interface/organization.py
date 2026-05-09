@@ -117,7 +117,7 @@ class OrganizationPopup(Popup):
         ).fetchone()
         if loan_row and loan_row[0] > 0:
             grid.add_widget(self._row(
-                f"  💳 Долг: ${loan_row[0]:,}  (погашение: ${loan_row[1]:,}/мес)",
+                f"  Долг: ${loan_row[0]:,}  (погашение: ${loan_row[1]:,}/мес)",
                 height=36,
             ))
 
@@ -146,13 +146,13 @@ class OrganizationPopup(Popup):
         # Bootcamp
         if bootcamp_days_left > 0:
             grid.add_widget(Label(
-                text=f'⛺ Буткемп недоступен — кулдаун {bootcamp_days_left} дн.',
+                text=f'Буткемп недоступен — кулдаун {bootcamp_days_left} дн.',
                 color=(0.6, 0.6, 0.6, 1), size_hint_y=None, height=36,
                 halign='center', valign='middle',
             ))
         for cost, coh_gain, morale_gain, label in [
-            (15_000, 10, 0, '⛺ Буткемп лёгкий  ($15,000 → +10 сыгранности)'),
-            (25_000, 15, 1, '⛺ Буткемп серьёзный  ($25,000 → +15 сыгр. +1 мораль)'),
+            (15_000, 10, 0, 'Буткемп лёгкий  ($15,000 → +10 сыгранности)'),
+            (25_000, 15, 1, 'Буткемп серьёзный  ($25,000 → +15 сыгр. +1 мораль)'),
         ]:
             can = budget >= cost and bootcamp_days_left == 0
             btn = Button(
@@ -168,7 +168,7 @@ class OrganizationPopup(Popup):
         # Loan button — only if budget < 2 months wages
         if total_wage > 0 and budget < total_wage * 2:
             loan_btn = Button(
-                text='💳 Взять кредит  ($50,000 / погашение $10,000×6 мес)',
+                text='Взять кредит  ($50,000 / погашение $10,000×6 мес)',
                 size_hint_y=None, height=50,
                 background_color=(0.55, 0.35, 0.08, 1), background_normal='',
             )

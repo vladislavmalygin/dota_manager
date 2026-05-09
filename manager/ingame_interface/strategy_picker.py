@@ -24,9 +24,9 @@ _BG_SEL = (0.10, 0.28, 0.14, 1)
 _BG_HDR = (0.10, 0.22, 0.32, 1)
 
 _PHASE_LABEL = {
-    'early': '🌅 РАННЯЯ ИГРА',
-    'mid':   '⚔  СРЕДНЯЯ ИГРА',
-    'late':  '🌙 ПОЗДНЯЯ ИГРА',
+    'early': 'РАННЯЯ ИГРА',
+    'mid':   'СРЕДНЯЯ ИГРА',
+    'late':  'ПОЗДНЯЯ ИГРА',
 }
 _PHASE_STRATS = {
     'early': EARLY_STRATEGIES,
@@ -127,7 +127,7 @@ class StrategyPickerPopup(Popup):
                 # Name row
                 best_c = _BEST_COLOR.get(s.get('best_skill', 'micro'), _WHITE)
                 name_row = BoxLayout(size_hint_y=None, height=26, spacing=6)
-                sel_mark = '✓ ' if is_sel else '   '
+                sel_mark = 'OK ' if is_sel else '   '
                 name_row.add_widget(_lbl(f'{sel_mark}[b]{s["name"]}[/b]',
                                          best_c, height=26, fs='13sp'))
                 best_tag = {'micro': 'Micro', 'macro': 'Macro', 'soft': 'Soft'}.get(
@@ -140,7 +140,7 @@ class StrategyPickerPopup(Popup):
                 card.add_widget(_lbl(f'− {s["cons"]}', _RED,   height=20, fs='10sp'))
 
                 btn = Button(
-                    text='✓ Выбрано' if is_sel else 'Выбрать',
+                    text='OK Выбрано' if is_sel else 'Выбрать',
                     size_hint_y=None, height=26,
                     background_color=(0.12, 0.50, 0.18, 1) if is_sel else (0.28, 0.28, 0.38, 1),
                     background_normal='', font_size='11sp',
@@ -153,7 +153,7 @@ class StrategyPickerPopup(Popup):
         sv.add_widget(grid)
         root.add_widget(sv)
 
-        confirm = Button(text='✓ Подтвердить стратегию', size_hint_y=None, height=50,
+        confirm = Button(text='OK Подтвердить стратегию', size_hint_y=None, height=50,
                          background_color=(0.15, 0.55, 0.20, 1), background_normal='',
                          font_size='14sp')
         confirm.bind(on_press=self._confirm)
@@ -171,7 +171,7 @@ class StrategyPickerPopup(Popup):
         self._selected[phase] = key
         card, btn = self._btn_groups[phase][key]
         card.set_bg(_BG_SEL)
-        btn.text = '✓ Выбрано'
+        btn.text = 'OK Выбрано'
         btn.background_color = (0.12, 0.50, 0.18, 1)
 
     def _confirm(self, _):

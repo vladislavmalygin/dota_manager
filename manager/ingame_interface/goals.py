@@ -84,7 +84,7 @@ class GoalsPopup(Popup):
                     cur_disp = f'{current:,}' if gtype == 'earn_prize' else str(current)
 
                 color = _GREEN if completed else _ORANGE
-                status = '✓ Выполнено' if completed else cur_disp
+                status = 'OK Выполнено' if completed else cur_disp
 
                 title_lbl = Label(
                     text=f'[b]{desc}[/b]',

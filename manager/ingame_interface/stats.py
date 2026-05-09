@@ -204,8 +204,8 @@ class StatsPopup(Popup):
         for t_name, t_date, place, prize in reversed(results):
             color = (_GOLD if place==1 else _SILVER if place==2 else
                      _BRONZE if place<=4 else _WHITE if place<=8 else _DIM)
-            medal = ('🥇' if place==1 else '🥈' if place==2 else
-                     '🥉' if place==3 else str(place))
+            medal = ('[1]' if place==1 else '[2]' if place==2 else
+                     '[3]' if place==3 else str(place))
             row = BoxLayout(size_hint_y=None, height=30, padding=(6,0))
             for txt, sw in [(t_name, 0.44), (t_date[:7] if t_date else '—', 0.19),
                             (medal, 0.17), (f'${prize:,}' if prize else '—', 0.20)]:
@@ -230,7 +230,7 @@ class StatsPopup(Popup):
             is_my = (is_player == 'yes')
             color = _GOLD if is_my else (_WHITE if rank <= 8 else _DIM)
             row = BoxLayout(size_hint_y=None, height=28, padding=(6,0))
-            prefix = '★ ' if is_my else ''
+            prefix = '* ' if is_my else ''
             for txt, sw in [
                 (str(rank),              0.08),
                 (f'{prefix}{name}',      0.50),

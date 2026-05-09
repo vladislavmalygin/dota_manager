@@ -82,6 +82,25 @@ class NegotiationPopup(Popup):
             their_rating = (cur.execute(
                 "SELECT COALESCE(rating,0) FROM teams WHERE id=?", (player_team_id,)
             ).fetchone() or (0,))[0]
+
+        # Competing AI interest for T2+ players (skill >= 120)
+        competitors = []
+        skill_sum = ((p[3] or 0) + (p[4] or 0)) if p else 0
+        if skill_sum >= 120:
+            interest_chance = min(0.75, (skill_sum - 100) / 160)
+            cur.execute(
+                f"SELECT t.name FROM teams t "
+                f"WHERE t.player != 'yes' "
+                f"AND (t.{self._role} IS NULL OR t.{self._role} = 0) "
+                f"AND COALESCE(t.budget, 0) >= ? "
+                f"ORDER BY t.rating DESC LIMIT 8",
+                (self._demanded * 8,)
+            )
+            candidate_teams = [r[0] for r in cur.fetchall()]
+            if candidate_teams and random.random() < interest_chance:
+                n_comp = random.randint(1, min(2, len(candidate_teams)))
+                competitors = random.sample(candidate_teams, n_comp)
+
         conn.close()
         if not p:
             self.content = Label(text='Игрок не найден')
@@ -95,6 +114,13 @@ class NegotiationPopup(Popup):
         rating_factor = max(-0.20, min(0.20, rating_delta / 500))  # ±20% wage effect
 
         demanded = max(1000, int(self._demanded * (1.0 - rating_factor)))
+
+        # Apply competing bid premium
+        bid_premium = 0
+        if competitors:
+            bid_premium = random.randint(6, 16)
+            demanded = int(demanded * (1 + bid_premium / 100))
+
         low_wage  = max(1000, int(demanded * 0.80))
         high_wage = int(demanded * 1.15)
 
@@ -119,16 +145,27 @@ class NegotiationPopup(Popup):
         card.add_widget(_lbl(f'Мораль: {morale}/10\nЛет контракта: {self._years}', _WHITE))
         root.add_widget(card)
 
+        # ── competing bid banner ──────────────────────────────────
+        if competitors:
+            comp_names = ' и '.join(competitors)
+            comp_lbl = Label(
+                text=f'[b][!] Конкуренция:[/b] {comp_names} тоже интересуются  (+{bid_premium}% к запросу)',
+                markup=True, color=_YELLOW, halign='center', valign='middle',
+                size_hint_y=None, height=30, font_size='12sp',
+            )
+            comp_lbl.bind(size=comp_lbl.setter('text_size'))
+            root.add_widget(comp_lbl)
+
         # ── divider ──────────────────────────────────────────────
         root.add_widget(Label(text='─' * 44, color=_DIM,
                               size_hint_y=None, height=16, font_size='12sp'))
         # Rating effect hint
         if abs(rating_factor) >= 0.03:
             if rating_factor > 0:
-                hint = f'▲ Мы рейтингом выше — игрок снизил запрос на {int(rating_factor*100)}%'
+                hint = f'+  Мы рейтингом выше — игрок снизил запрос на {int(rating_factor*100)}%'
                 hint_c = _GREEN
             else:
-                hint = f'▼ Мы рейтингом ниже — игрок завысил запрос на {int(-rating_factor*100)}%'
+                hint = f'-  Мы рейтингом ниже — игрок завысил запрос на {int(-rating_factor*100)}%'
                 hint_c = _RED
             root.add_widget(_lbl(hint, hint_c, halign='center'))
         root.add_widget(_lbl(f'Запрошенная зарплата:  ${demanded:,}/мес',
@@ -555,18 +592,18 @@ class TransferPopup(Popup):
                 WHERE p.team_id = ?
             """, (team_id,)).fetchall()
             if offers:
-                grid.add_widget(_header("  📨 Входящие предложения", height=34))
+                grid.add_widget(_header("  [+] Входящие предложения", height=34))
                 for o_pid, o_tid, o_fee, o_nick, o_buyer in offers:
                     orow = BoxLayout(size_hint_y=None, height=42, spacing=4)
                     orow.add_widget(_lbl(
                         f"  {o_buyer} хочет {o_nick} за ${o_fee:,}",
                         color=(1.0, 0.85, 0.25, 1), height=42,
                     ))
-                    acc = Button(text='✓ Принять', size_hint=(None, None),
+                    acc = Button(text='OK Принять', size_hint=(None, None),
                                  width=90, height=36,
                                  background_color=(0.15, 0.55, 0.20, 1),
                                  background_normal='')
-                    dec = Button(text='✗ Отказ', size_hint=(None, None),
+                    dec = Button(text='X  Отказ', size_hint=(None, None),
                                  width=80, height=36,
                                  background_color=(0.55, 0.15, 0.15, 1),
                                  background_normal='')
@@ -677,7 +714,50 @@ class TransferPopup(Popup):
                 grid.add_widget(_lbl(f"  [{role_label}]  — свободно —",
                                      color=(0.6, 0.6, 0.6, 1)))
 
+        # ── Bench ────────────────────────────────────────────────
+        active_ids = set(s for s in slot_ids if s)
+        ph = ','.join('?' * len(active_ids)) if active_ids else '0'
+        cur.execute(
+            f"SELECT id, nickname, role, micro_skills, macro_skills, wage, contract_end "
+            f"FROM players WHERE team_id=? AND id NOT IN ({ph}) ORDER BY role",
+            [team_id] + list(active_ids),
+        )
+        bench_players = cur.fetchall()
         conn.close()
+
+        conn.close()
+
+        if bench_players:
+            grid.add_widget(_header("  Скамейка", height=32))
+            for bpid, bnick, brole, bmic, bmac, bwage, bcend in bench_players:
+                bmic = bmic or 0; bmac = bmac or 0; bwage = bwage or 0
+                bavg = (bmic + bmac) // 2
+                bfee = _transfer_fee(bmic, bmac, bcend or str(today), str(today))
+                role_lbl = ROLE_LABELS.get(brole, brole or '?')
+                brow = BoxLayout(size_hint_y=None, height=46, spacing=3)
+                brow.add_widget(_lbl(
+                    f"  [{role_lbl}]  {bnick}   скилл {bavg}   ${bwage:,}/мес",
+                    height=46, color=(0.85, 0.85, 0.55, 1),
+                ))
+                brel = Button(
+                    text='Отпустить', size_hint=(None, None), width=84, height=38,
+                    background_color=(0.8, 0.3, 0.1, 1), background_normal='',
+                )
+                brel.bind(on_press=lambda _, p=bpid: self._release(p, None))
+                brow.add_widget(brel)
+                bsell = Button(
+                    text=f'Продать\n${bfee//1000}k', size_hint=(None, None),
+                    width=80, height=38,
+                    background_color=(0.55, 0.35, 0.05, 1) if in_window else (0.3, 0.3, 0.3, 1),
+                    background_normal='', font_size='12sp',
+                )
+                if in_window:
+                    bsell.bind(on_press=lambda _, p=bpid, f=bfee, r=brole:
+                               self._sell_player(p, None, f, player_role=r))
+                else:
+                    bsell.bind(on_press=lambda _: _show_window_popup())
+                brow.add_widget(bsell)
+                grid.add_widget(brow)
 
         sv = ScrollView(size_hint=(0.38, 1))
         sv.add_widget(grid)
@@ -861,7 +941,7 @@ class TransferPopup(Popup):
                 if not scouted:
                     can_scout = budget >= scout_cost
                     sc_btn = Button(
-                        text=f'🔍 ${scout_cost//1000}k',
+                        text=f'${scout_cost//1000}k',
                         size_hint=(None, None), width=72, height=40,
                         background_color=(0.30, 0.20, 0.55, 1) if can_scout else (0.28, 0.28, 0.28, 1),
                         background_normal='', font_size='13sp',
@@ -897,10 +977,10 @@ class TransferPopup(Popup):
         # ── window banner ──────────────────────────────────────
         next_window = 'Август' if game_d.month < 8 else 'Январь'
         if in_window:
-            banner_txt = f'🟢  ТРАНСФЕРНОЕ ОКНО ОТКРЫТО ({game_d.strftime("%B").capitalize()})'
+            banner_txt = f'ТРАНСФЕРНОЕ ОКНО ОТКРЫТО ({game_d.strftime("%B").capitalize()})'
             banner_color = _GREEN
         else:
-            banner_txt = f'🔴  Трансферное окно закрыто  (следующее: {next_window})'
+            banner_txt = f'Трансферное окно закрыто  (следующее: {next_window})'
             banner_color = (0.7, 0.3, 0.2, 1)
         grid.add_widget(_lbl(banner_txt, height=28, color=banner_color, bold=True))
 
@@ -917,7 +997,7 @@ class TransferPopup(Popup):
                 # color: white if slot free, yellow warning if slot occupied
                 color = _WHITE if slot_free else _YELLOW
                 row = BoxLayout(size_hint_y=None, height=44, spacing=4)
-                slot_note = '' if slot_free else ' ⚠ слот занят'
+                slot_note = '' if slot_free else ' [!] слот занят'
                 row.add_widget(_lbl(
                     f"  {nick}  [{ROLE_LABELS.get(role,role)}]  скилл {avg}"
                     f"  возр.{age}  {ai_team}  —  {days_left} дн.{slot_note}",
@@ -1014,20 +1094,30 @@ class TransferPopup(Popup):
 
     # ── actions ───────────────────────────────────────────────
 
-    def _sell_player(self, pid, role_col, fee):
+    def _sell_player(self, pid, role_col, fee, player_role=None):
         conn = sqlite3.connect(self.db_name)
         cur  = conn.cursor()
 
-        cur.execute("SELECT nickname, micro_skills, macro_skills FROM players WHERE id=?", (pid,))
+        cur.execute("SELECT nickname, micro_skills, macro_skills, role FROM players WHERE id=?", (pid,))
         p_row = cur.fetchone()
         nick = p_row[0] if p_row else '?'
         seller_skill = (p_row[1] or 0) + (p_row[2] or 0) if p_row else 0
+        # For bench players role_col is None — use the player's own role for buyer search
+        buy_role = role_col or player_role or (p_row[3] if p_row else None)
+
+        if not buy_role:
+            conn.close()
+            Popup(
+                content=Label(text='Роль игрока не определена.', halign='center'),
+                size_hint=(0.45, 0.22),
+            ).open()
+            return
 
         # 1) Prefer buyer with empty slot
         cur.execute(f"""
             SELECT id, name, budget FROM teams
             WHERE player != 'yes'
-              AND {role_col} IS NULL
+              AND {buy_role} IS NULL
               AND COALESCE(budget, 0) >= ?
             ORDER BY RANDOM() LIMIT 1
         """, (fee,))
@@ -1037,9 +1127,9 @@ class TransferPopup(Popup):
         if not buyer:
             # 2) Fallback: buyer with occupied slot but weaker player there
             cur.execute(f"""
-                SELECT t.id, t.name, t.budget, t.{role_col}
+                SELECT t.id, t.name, t.budget, t.{buy_role}
                 FROM teams t
-                JOIN players p ON p.id = t.{role_col}
+                JOIN players p ON p.id = t.{buy_role}
                 WHERE t.player != 'yes'
                   AND COALESCE(t.budget, 0) >= ?
                   AND (COALESCE(p.micro_skills,0) + COALESCE(p.macro_skills,0)) < ?
@@ -1076,8 +1166,9 @@ class TransferPopup(Popup):
             # Move money
             cx.execute("UPDATE teams SET budget=budget+? WHERE id=?", (fee, my))
             cx.execute("UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (fee, buyer_id))
-            # Clear our slot
-            cx.execute(f"UPDATE teams SET {role_col}=NULL WHERE id=?", (my,))
+            # Clear our slot (bench players have no slot to clear)
+            if role_col:
+                cx.execute(f"UPDATE teams SET {role_col}=NULL WHERE id=?", (my,))
             # Release displaced AI player if slot was occupied
             if displaced_pid:
                 exp_wage_row = cx.execute(
@@ -1085,13 +1176,13 @@ class TransferPopup(Popup):
                     (displaced_pid,)
                 ).fetchone()
                 exp_w = int(exp_wage_row[0]) if exp_wage_row else 5000
-                cx.execute(f"UPDATE teams SET {role_col}=NULL WHERE id=?", (buyer_id,))
+                cx.execute(f"UPDATE teams SET {buy_role}=NULL WHERE id=?", (buyer_id,))
                 cx.execute(
                     "UPDATE players SET team_id=0, wage=0, expected_wage=? WHERE id=?",
                     (exp_w, displaced_pid),
                 )
             # Set buyer slot
-            cx.execute(f"UPDATE teams SET {role_col}=? WHERE id=?", (pid, buyer_id))
+            cx.execute(f"UPDATE teams SET {buy_role}=? WHERE id=?", (pid, buyer_id))
             # Update player
             gd = cx.execute("SELECT date FROM save WHERE id=1").fetchone()
             gd = gd[0] if gd else str(date.today())
@@ -1306,7 +1397,8 @@ class TransferPopup(Popup):
         else:
             expected = 0
 
-        cur.execute(f"UPDATE teams SET {role_col}=NULL WHERE id=?", (team_id,))
+        if role_col:
+            cur.execute(f"UPDATE teams SET {role_col}=NULL WHERE id=?", (team_id,))
         cur.execute(
             "UPDATE players SET team_id=0, wage=0, expected_wage=?, wants_to_leave=0 WHERE id=?",
             (expected, player_id),

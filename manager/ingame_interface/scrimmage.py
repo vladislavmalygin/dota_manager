@@ -67,6 +67,67 @@ def _award_xp(db_name, team_name, xp_amount):
     conn.close()
 
 
+def _flush_scrim_xp(db_name, team_name):
+    """Apply any accumulated train_xp >= 1.0 immediately after a scrimmage.
+    Uses train_priority if set, otherwise weakest skill."""
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+    c.execute(
+        "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE name=?",
+        (team_name,)
+    )
+    row = c.fetchone()
+    if not row:
+        conn.close(); return
+    for pid in row:
+        if not pid:
+            continue
+        c.execute(
+            "SELECT train_priority, COALESCE(train_xp,0), "
+            "micro_skills, macro_skills, soft_skills, "
+            "COALESCE(skill_cap,300), COALESCE(learning_rate,5), "
+            "COALESCE(micro_cap,100), COALESCE(macro_cap,100), COALESCE(soft_cap,100) "
+            "FROM players WHERE id=?", (pid,)
+        )
+        p = c.fetchone()
+        if not p:
+            continue
+        priority, xp, micro, macro, soft, cap, lr, mc, xc, sc = p
+        if xp < 1.0:
+            continue
+        micro = micro or 0; macro = macro or 0; soft = soft or 0
+        # Pick skill to train
+        if not priority:
+            candidates = [
+                ('micro_skills', micro, mc),
+                ('macro_skills', macro, xc),
+                ('soft_skills',  soft,  sc),
+            ]
+            candidates = [(col, v, cv) for col, v, cv in candidates if v < cv]
+            if not candidates:
+                continue
+            priority = min(candidates, key=lambda x: x[1])[0]
+        col_cap = {'micro_skills': mc, 'macro_skills': xc, 'soft_skills': sc}.get(priority, 100)
+        cur_val = {'micro_skills': micro, 'macro_skills': macro, 'soft_skills': soft}.get(priority, 0)
+        total   = micro + macro + soft
+        gained  = 0
+        lr_f    = lr / 5.0
+        while (xp >= 1.0 / max(0.1, lr_f)
+               and total + gained < cap
+               and cur_val + gained < col_cap):
+            xp -= 1.0 / max(0.1, lr_f)
+            gained += 1
+        if gained:
+            c.execute(
+                f"UPDATE players SET {priority}={priority}+?, train_xp=? WHERE id=?",
+                (gained, max(0.0, xp), pid)
+            )
+        else:
+            c.execute("UPDATE players SET train_xp=? WHERE id=?", (xp, pid))
+    conn.commit()
+    conn.close()
+
+
 def _boost_morale(db_name, team_name, delta):
     conn = sqlite3.connect(db_name)
     c = conn.cursor()
@@ -131,7 +192,7 @@ class ScrimmagePopup(Popup):
 
         if self._already_played_today:
             root.add_widget(_lbl(
-                '✗  Уже сыграли клан вар сегодня. Завтра можно снова.',
+                'X  Уже сыграли клан вар сегодня. Завтра можно снова.',
                 color=(1.0, 0.4, 0.3, 1), height=34, halign='center',
             ))
         else:
@@ -156,7 +217,7 @@ class ScrimmagePopup(Popup):
                 height=44,
             ))
             btn = Button(
-                text='▶ Сыграть', size_hint=(None, None), width=110, height=36,
+                text='> Сыграть', size_hint=(None, None), width=110, height=36,
                 background_color=(0.18, 0.50, 0.22, 1) if not self._already_played_today
                                  else (0.3, 0.3, 0.3, 1),
                 background_normal='', font_size='14sp',
@@ -191,6 +252,7 @@ class ScrimmagePopup(Popup):
 
         # XP + morale + cohesion + daily limit
         _award_xp(self._db, self._my_team, _XP_WIN if won else _XP_LOSS)
+        _flush_scrim_xp(self._db, self._my_team)
         if won:
             _boost_morale(self._db, self._my_team, 1)
         try:

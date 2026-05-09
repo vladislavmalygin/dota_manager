@@ -126,8 +126,8 @@ class ExitScreenPopup(Popup):
             for t_name, t_date, place, prize in results[-5:]:
                 color = (_GOLD if place == 1 else _SILVER if place == 2 else
                          _BRONZE if place <= 4 else _WHITE)
-                medal = ('🥇' if place == 1 else '🥈' if place == 2 else
-                         '🥉' if place == 3 else f'{place}.')
+                medal = ('[1]' if place == 1 else '[2]' if place == 2 else
+                         '[3]' if place == 3 else f'{place}.')
                 row = BoxLayout(size_hint_y=None, height=28)
                 row.add_widget(_lbl(f'  {medal} {t_name}',
                                     color=color, halign='left', height=28))

@@ -37,9 +37,9 @@ def _place_color(place):
 
 
 def _place_medal(place):
-    if place == 1:  return '🥇 1'
-    if place == 2:  return '🥈 2'
-    if place == 3:  return '🥉 3'
+    if place == 1:  return '[1] 1'
+    if place == 2:  return '[2] 2'
+    if place == 3:  return '[3] 3'
     return str(place)
 
 
@@ -250,7 +250,7 @@ class HistoryPopup(Popup):
             r.add_widget(_lbl(f'{s1}:{s2}', sw=0.12, color=result_color, height=34))
 
             replay_btn = Button(
-                text='▶', size_hint=(None, None), width=36, height=30,
+                text='>', size_hint=(None, None), width=36, height=30,
                 background_color=(0.12, 0.30, 0.55, 1), background_normal='',
                 font_size='14sp',
             )

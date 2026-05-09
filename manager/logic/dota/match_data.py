@@ -143,6 +143,26 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
         'early': team2_data[7], 'mid': team2_data[8], 'late': team2_data[9],
     }
 
+    # Chemistry multiplier
+    try:
+        from logic.chemistry import chemistry_score, chemistry_mult
+        t1id = cursor.execute("SELECT id FROM teams WHERE name=?", (team1,)).fetchone()
+        t2id = cursor.execute("SELECT id FROM teams WHERE name=?", (team2,)).fetchone()
+        if t1id:
+            m1 = chemistry_mult(chemistry_score(db_name, t1id[0]))
+            for role_key in skills['team1']:
+                for sk in ('micro_skills', 'macro_skills', 'soft_skills'):
+                    if sk in skills['team1'][role_key]:
+                        skills['team1'][role_key][sk] = max(1, int(skills['team1'][role_key][sk] * m1))
+        if t2id:
+            m2 = chemistry_mult(chemistry_score(db_name, t2id[0]))
+            for role_key in skills['team2']:
+                for sk in ('micro_skills', 'macro_skills', 'soft_skills'):
+                    if sk in skills['team2'][role_key]:
+                        skills['team2'][role_key][sk] = max(1, int(skills['team2'][role_key][sk] * m2))
+    except Exception:
+        pass
+
     conn.close()
     return skills
 

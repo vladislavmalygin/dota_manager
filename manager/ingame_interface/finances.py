@@ -124,6 +124,11 @@ class FinancesPopup(Popup):
         my_team_id = my_team_id_row[0] if my_team_id_row else None
         team_rating   = my_team_id_row[1] if my_team_id_row else 0
 
+        rep_row = c.execute(
+            "SELECT COALESCE(reputation,0) FROM characters LIMIT 1"
+        ).fetchone()
+        reputation = rep_row[0] if rep_row else 0
+
         conn.close()
 
         # ── UI ────────────────────────────────────────────────
@@ -145,15 +150,21 @@ class FinancesPopup(Popup):
         ))
         grid.add_widget(budget_box)
 
-        # Monthly balance & runway
+        # Monthly balance & runway  (matches _pay_streaming_income formula)
         sponsor_income = sponsor[1] if sponsor else 0
-        streaming = int(team_rating * 40)
+        streaming = max(2_000, round(int(team_rating * 120 + reputation * 200) / 500) * 500)
         monthly_income = sponsor_income + streaming
         balance = monthly_income - total_wage
         bal_color = _GREEN if balance >= 0 else _RED
 
         grid.add_widget(_row(
-            'Ежемесячный доход  (спонсор + стриминг)',
+            f'Стриминг/мерч  (рейтинг {int(team_rating)}, репутация {reputation})',
+            f'+${streaming:,}/мес', color_r=_GREEN,
+        ))
+        if sponsor_income:
+            grid.add_widget(_row('Спонсор', f'+${sponsor_income:,}/мес', color_r=_GREEN))
+        grid.add_widget(_row(
+            'Итого доход/мес',
             f'+${monthly_income:,}/мес', color_r=_GREEN,
         ))
         grid.add_widget(_row(
@@ -171,7 +182,7 @@ class FinancesPopup(Popup):
             months_left = budget // abs(balance)
             runway_color = _GREEN if months_left > 6 else (_GOLD if months_left > 3 else _RED)
             grid.add_widget(_row(
-                '⚠ Бюджет иссякнет через',
+                '[!] Бюджет иссякнет через',
                 f'~{months_left} мес.',
                 bg=(0.20, 0.12, 0.05, 1), color_r=runway_color,
             ))

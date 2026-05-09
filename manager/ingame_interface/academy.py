@@ -24,7 +24,7 @@ _ROLE_SHORT = {
     'partial_support': 'Soft', 'full_support': 'Hard',
 }
 _ROLES_ALL = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
-_POTENTIAL_STARS = [(270, '★★★★★'), (230, '★★★★'), (190, '★★★'), (0, '★★')]
+_POTENTIAL_STARS = [(270, '*****'), (230, '****'), (190, '***'), (0, '**')]
 
 
 def _lbl(text, color=_WHITE, height=28, halign='left', bold=False):
@@ -46,7 +46,7 @@ def _potential(cap):
     for threshold, stars in _POTENTIAL_STARS:
         if (cap or 0) >= threshold:
             return stars
-    return '★'
+    return '*'
 
 
 class AcademyPopup(Popup):

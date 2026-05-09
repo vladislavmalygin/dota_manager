@@ -125,34 +125,41 @@ class NewGamePopup(Popup):
         shutil.copy('start_database.db', new_db_name)
 
         # Миграции запускаем на КОПИИ, не на шаблоне
-        from db_migrate2 import migrate as _m2
-        from db_migrate3 import migrate as _m3
-        from db_migrate4 import migrate as _m4
-        from db_migrate5 import migrate as _m5
-        from db_migrate6 import migrate as _m6
-        from db_migrate7 import migrate as _m7
-        from db_migrate8 import migrate as _m8
-        from db_migrate9  import migrate as _m9
-        from db_migrate15 import migrate as _m15
-        from db_migrate18 import migrate as _m18
-        from db_migrate18_fix import migrate as _m18fix
-        from db_migrate19 import migrate as _m19
-        from db_migrate20 import migrate as _m20
-        from db_fix_orphans import fix as _fix
-        _m2(new_db_name)
-        _m3(new_db_name)
-        _m4(new_db_name)
-        _m5(new_db_name)
-        _m6(new_db_name)
-        _m7(new_db_name)
-        _m8(new_db_name)
-        _m9(new_db_name)
-        _m15(new_db_name)
-        _m18(new_db_name)
-        _m18fix(new_db_name)
-        _m19(new_db_name)
-        _m20(new_db_name)
+        from db_migrate2        import migrate as _m2
+        from db_migrate3        import migrate as _m3
+        from db_migrate4        import migrate as _m4
+        from db_migrate5        import migrate as _m5
+        from db_migrate6        import migrate as _m6
+        from db_migrate7        import migrate as _m7
+        from db_migrate8        import migrate as _m8
+        from db_migrate9        import migrate as _m9
+        from db_migrate10       import migrate as _m10
+        from db_migrate11       import migrate as _m11
+        from db_migrate12       import migrate as _m12
+        from db_migrate13       import migrate as _m13
+        from db_migrate14       import migrate as _m14
+        from db_migrate15       import migrate as _m15
+        from db_migrate16       import migrate as _m16
+        from db_migrate17       import migrate as _m17
+        from db_migrate18       import migrate as _m18
+        from db_migrate18_fix   import migrate as _m18fix
+        from db_migrate19       import migrate as _m19
+        from db_migrate20       import migrate as _m20
+        from db_migrate21       import migrate as _m21
+        from db_fix_orphans     import fix as _fix
+        from core               import _fix_contracts, _fix_team_regions
+        from logic.sponsors     import ensure_sponsors_table
+        _m2(new_db_name);  _m3(new_db_name);  _m4(new_db_name)
+        _m5(new_db_name);  _m6(new_db_name);  _m7(new_db_name)
+        _m8(new_db_name);  _m9(new_db_name);  _m10(new_db_name)
+        _m11(new_db_name); _m12(new_db_name); _m13(new_db_name)
+        _m14(new_db_name); _m15(new_db_name); _m16(new_db_name)
+        _m17(new_db_name); _m18(new_db_name); _m18fix(new_db_name)
+        _m19(new_db_name); _m20(new_db_name); _m21(new_db_name)
         _fix(new_db_name)
+        _fix_contracts(new_db_name)
+        _fix_team_regions(new_db_name)
+        ensure_sponsors_table(new_db_name)
 
         # Рандомизация skill_cap для новых игроков (пропускаем у кого уже задано)
         _randomize_skill_caps(new_db_name)

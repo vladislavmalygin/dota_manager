@@ -276,7 +276,7 @@ class GroupTableWidget(BoxLayout):
             rating = self._ratings_map.get(team)
             rating_suffix = f'  [{int(rating)}]' if rating is not None else ''
             name_lbl = Label(
-                text=('★ ' if is_p else '') + team + rating_suffix,
+                text=('* ' if is_p else '') + team + rating_suffix,
                 color=_PLAYER if is_p else _WHITE,
                 halign='left', valign='middle', font_size='11sp',
             )
@@ -884,7 +884,7 @@ class MatchLogPopup(Popup):
                                background_color=(0.45, 0.45, 0.15, 1),
                                background_normal='')
         self._skip_btn.bind(on_press=self._skip)
-        self._done_btn = Button(text='Закрыть матч  ✓',
+        self._done_btn = Button(text='Закрыть матч  OK',
                                 background_color=(0.12, 0.55, 0.20, 1),
                                 background_normal='', disabled=True)
         self._done_btn.bind(on_press=self._done)
@@ -901,9 +901,9 @@ class MatchLogPopup(Popup):
         from logic.dota.strategies import EARLY_STRATEGIES, MID_STRATEGIES, LATE_STRATEGIES
 
         _PHASE_META = [
-            ('early', '🌅  Ранняя игра',   EARLY_STRATEGIES, 'strat_early', 'safe_farm'),
-            ('mid',   '⚔  Средняя игра',  MID_STRATEGIES,   'strat_mid',   'map_control'),
-            ('late',  '🌙  Поздняя игра',  LATE_STRATEGIES,  'strat_late',  'teamfight'),
+            ('early', 'Ранняя игра',   EARLY_STRATEGIES, 'strat_early', 'safe_farm'),
+            ('mid',   'Средняя игра',  MID_STRATEGIES,   'strat_mid',   'map_control'),
+            ('late',  'Поздняя игра',  LATE_STRATEGIES,  'strat_late',  'teamfight'),
         ]
 
         try:
@@ -1006,7 +1006,7 @@ class MatchLogPopup(Popup):
             root.add_widget(row)
 
         start_btn = Button(
-            text='▶  Начать матч',
+            text='> Начать матч',
             size_hint_y=None, height=50,
             background_color=(0.15, 0.60, 0.22, 1),
             background_normal='', font_size='14sp',
@@ -1212,6 +1212,10 @@ class MatchLogPopup(Popup):
             if self._on_result_update:
                 self._on_result_update(self._winner, s1, s2)
 
+        elif self._pre_match_team and self._on_result_update:
+            # BO1 re-simulation: update bracket with actual result
+            self._on_result_update(self._winner, s1, s2)
+
         bo_str = f'  BO{self._best_of}' if self._best_of > 1 else ''
         self._status_lbl.text = (
             f'Победитель:  {self._winner}  [{s1}:{s2}]{bo_str}'
@@ -1296,9 +1300,9 @@ class MatchLogPopup(Popup):
             ]
             counter = _TAC_COUNTER.get(tac2)
             if counter and tac1 == counter:
-                lines.append(f'  ✓ Тактика {self._team1} контрит стиль соперника.')
+                lines.append(f'  OK Тактика {self._team1} контрит стиль соперника.')
             elif _TAC_COUNTER.get(tac1) == tac2:
-                lines.append(f'  ✗ Тактика {self._team2} контрит ваш стиль.')
+                lines.append(f'  X  Тактика {self._team2} контрит ваш стиль.')
             else:
                 lines.append(f'  Нейтральный тактический матч-ап.')
             st = self._match_stats
@@ -1321,7 +1325,7 @@ class MatchLogPopup(Popup):
 def _show_press_conference(db_name, player_team, winner, on_done):
     """Post-match press conference popup. 3 responses with minor morale/rep effects."""
     won = (winner.strip() == player_team.strip())
-    title_txt = '🏆  ПОБЕДА!' if won else '❌  ПОРАЖЕНИЕ'
+    title_txt = 'ПОБЕДА!' if won else 'ПОРАЖЕНИЕ'
     title_color = (0.20, 0.90, 0.35, 1) if won else (0.90, 0.30, 0.20, 1)
 
     _RESPONSES = [
@@ -2140,11 +2144,17 @@ class TournamentPopup(Popup):
 
         conn = sqlite3.connect(self.db_name)
         cur  = conn.cursor()
+        my_team_name = (cur.execute("SELECT name FROM teams WHERE player='yes'").fetchone() or (None,))[0]
+        if my_team_name:
+            my_team_name = my_team_name.strip()
+        player_prize = 0
         for team, place in places.items():
             prize  = _MINOR_PRIZES.get(place, 0)
             rating = _MINOR_RATING.get(place, 0)
             if prize:
                 cur.execute("UPDATE teams SET budget=budget+? WHERE name=?", (prize, team))
+                if my_team_name and team.strip() == my_team_name:
+                    player_prize = prize
             if rating:
                 cur.execute(
                     "UPDATE teams SET rating=COALESCE(rating,0)+? WHERE name=?",
@@ -2181,6 +2191,15 @@ class TournamentPopup(Popup):
         conn.commit()
         conn.close()
 
+        # earn_prize goal for player team
+        if player_prize:
+            try:
+                from logic.goals import update_goal, year_from_date
+                update_goal(self.db_name, year_from_date(gd[0] if gd else '2024'),
+                            'earn_prize', player_prize)
+            except Exception:
+                pass
+
         # reputation for player if in minor
         player_t = event.get('player_teams', [])
         for pt in player_t:
@@ -2200,7 +2219,7 @@ class TournamentPopup(Popup):
         block.add_widget(_section_title(
             f'ИТОГИ ТУРНИРА  —  ЧЕМПИОН: {champion}', color=_GOLD))
 
-        medals = {1: '🥇', 2: '🥈', 3: '🥉', 4: ' 4.'}
+        medals = {1: '[1]', 2: '[2]', 3: '[3]', 4: ' 4.'}
         for team, place in sorted(placements.items(), key=lambda x: x[1]):
             medal = medals.get(place, f'{place:2}.')
             if place == 1:
@@ -2513,7 +2532,7 @@ class TournamentsViewPopup(Popup):
                           size_hint_y=None, height=36, padding=(6, 2), spacing=6)
             if logo:
                 rrow.add_widget(_team_logo_widget(logo, size=28))
-            mark = ' ★' if is_p else '  '
+            mark = ' *' if is_p else '  '
             rrow.add_widget(_lbl(f'  {rank+1:2}.{mark}  {name}',
                                  color=color, height=32))
             rrow.add_widget(_lbl(f'{int(rating):>5} pts  ',
@@ -2535,7 +2554,7 @@ class TournamentsViewPopup(Popup):
             done = bool(place1 and winner)
             hdr_color = _GREEN if done else _YELLOW
             bg = (0.06, 0.18, 0.06, 1) if done else (0.14, 0.14, 0.06, 1)
-            status = f'✓  {winner.strip()}' if done else '→  Предстоит'
+            status = f'OK {winner.strip()}' if done else '→  Предстоит'
 
             trow = _BgBox(bg=_BG_HEAD, orientation='horizontal',
                           size_hint_y=None, height=36, padding=(8, 0))

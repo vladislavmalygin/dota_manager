@@ -160,7 +160,7 @@ class PlayerPickerPopup(Popup):
                       orientation='horizontal', size_hint_y=None, height=40,
                       padding=(6, 2), spacing=6)
             row.add_widget(_lbl(
-                f'{"★  " if is_cur else ""}{nick}  ({country})',
+                f'{"*  " if is_cur else ""}{nick}  ({country})',
                 color=_GOLD if is_cur else _WHITE, height=36,
             ))
             row.add_widget(_lbl(f'{total}', color=_ACC, height=36, halign='right'))
@@ -279,7 +279,7 @@ class TeamEditorPanel(BoxLayout):
         spin_row.add_widget(tac_spin)
         self.add_widget(spin_row)
 
-        save_btn = _btn('💾  Сохранить команду', color=_SAVE_CLR, height=38)
+        save_btn = _btn('Сохранить команду', color=_SAVE_CLR, height=38)
         save_btn.bind(on_press=lambda _: self.flush())
         self.add_widget(save_btn)
 
@@ -471,7 +471,7 @@ class PlayerEditorPanel(BoxLayout):
         sv.add_widget(grid)
         self.add_widget(sv)
 
-        save_btn = _btn('💾  Сохранить игрока', color=_SAVE_CLR, height=38)
+        save_btn = _btn('Сохранить игрока', color=_SAVE_CLR, height=38)
         save_btn.bind(on_press=lambda _: self.flush())
         self.add_widget(save_btn)
 
@@ -563,12 +563,24 @@ class TeamsTab(BoxLayout):
 
     def _add_team(self, _):
         conn = sqlite3.connect(DB)
-        conn.execute("""
-            INSERT INTO teams (name, budget, player, rating, cohesion)
-            VALUES ('Новая команда', 1000000, 'no', 0, 0)
-        """)
+        conn.execute(
+            "INSERT INTO teams (name, budget, player, rating, cohesion) "
+            "VALUES ('Новая команда', 1000000, 'no', 0, 0)"
+        )
         conn.commit()
+        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.close()
+        for db in get_all_dbs()[1:]:
+            try:
+                c = sqlite3.connect(db)
+                c.execute(
+                    "INSERT OR IGNORE INTO teams (id, name, budget, player, rating, cohesion) "
+                    "VALUES (?, 'Новая команда', 1000000, 'no', 0, 0)",
+                    (new_id,)
+                )
+                c.commit(); c.close()
+            except Exception as e:
+                print(f'[db_editor] {db}: {e}')
         self._refresh_list()
 
 
@@ -692,17 +704,32 @@ class PlayersTab(BoxLayout):
 
     def _add_player(self, _):
         conn = sqlite3.connect(DB)
-        conn.execute("""
-            INSERT INTO players
-              (nickname, name, surname, country, role, team_id,
-               micro_skills, macro_skills, soft_skills, skill_cap,
-               competence, morale, wage, expected_wage, fame, character)
-            VALUES ('Новый', 'Имя', 'Фамилия', 'Russia', 'carry', 0,
-                    60, 60, 60, 200, 5, 5, 5000, 5000, 40, 'balanced')
-        """)
+        conn.execute(
+            "INSERT INTO players "
+            "(nickname, name, surname, country, role, team_id, "
+            " micro_skills, macro_skills, soft_skills, skill_cap, "
+            " competence, morale, wage, expected_wage, fame, character) "
+            "VALUES ('Новый','Имя','Фамилия','Russia','carry',0, "
+            "60,60,60,200, 5,5,5000,5000,40,'balanced')"
+        )
         conn.commit()
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.close()
+        for db in get_all_dbs()[1:]:
+            try:
+                c = sqlite3.connect(db)
+                c.execute(
+                    "INSERT OR IGNORE INTO players "
+                    "(id, nickname, name, surname, country, role, team_id, "
+                    " micro_skills, macro_skills, soft_skills, skill_cap, "
+                    " competence, morale, wage, expected_wage, fame, character) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (new_id, 'Новый', 'Имя', 'Фамилия', 'Russia', 'carry', 0,
+                     60, 60, 60, 200, 5, 5, 5000, 5000, 40, 'balanced')
+                )
+                c.commit(); c.close()
+            except Exception as e:
+                print(f'[db_editor] {db}: {e}')
 
         # Reset filters so the new player is visible, then auto-select it
         self._search.text = ''
@@ -747,7 +774,7 @@ class DBEditorPopup(Popup):
         root.add_widget(self._content)
 
         btn_row = BoxLayout(size_hint_y=None, height=46, spacing=4)
-        save_all_btn = _btn('💾  Сохранить все изменения', color=_SAVE_CLR, height=44)
+        save_all_btn = _btn('Сохранить все изменения', color=_SAVE_CLR, height=44)
         save_all_btn.bind(on_press=self._save_all)
         close = _btn('Закрыть', color=(0.50, 0.18, 0.18, 1), height=44)
         close.bind(on_press=self._save_all)

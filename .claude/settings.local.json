@@ -6,7 +6,28 @@
       "Bash(python3.11 -c \"print\\('hello'\\)\")",
       "Bash(python *)",
       "Bash(python3 *)",
-      "WebFetch(domain:liquipedia.net)"
+      "WebFetch(domain:liquipedia.net)",
+      "WebSearch",
+      "Bash(grep -E \"\\\\|NULL|$\")",
+      "Bash(awk -F'|' '{print $2}')",
+      "Bash(grep -rn \"except Exception:\\\\s*$\\\\|except Exception as e:\\\\s*$\\\\|pass$\" --include=\"*.py\")",
+      "Bash(grep \"pass$\")",
+      "Bash(sed -n '135,145p' /home/vlad/Dev/dota_manager/manager/ingame_interface/history.py)",
+      "Bash(sed -n '245,255p' /home/vlad/Dev/dota_manager/manager/ingame_interface/stats.py)",
+      "Bash(sed -n '119,130p' /home/vlad/Dev/dota_manager/manager/ingame_interface/goals.py)",
+      "Bash(sort -t/ -k1)",
+      "Bash(git commit *)",
+      "Bash(grep -rn \"TODO\\\\|FIXME\\\\|HACK\\\\|pass$\\\\|except.*pass\" --include=\"*.py\")",
+      "Read(//usr/bin/**)",
+      "Bash(pacman -Q python311)",
+      "Bash(yay -Q python311)",
+      "Read(//usr/**)",
+      "Bash(pacman -Ss python311)",
+      "Bash(pacman -Q)",
+      "Bash(pacman -Ss \"^python311\")",
+      "Bash(yay -Ss python311)",
+      "Bash(yay -Ss \"^python311-bin\")",
+      "Bash(yay -Ss \"^python311 \")"
     ]
   }
 }

@@ -279,8 +279,11 @@ def _apply(cur, event, team_id, player_ids, today=None):
         if not row:
             return None
         nick = row[0]
-        rivals = ['Team Spirit', 'Tundra', 'Falcons', 'Liquid', 'Aurora', 'OG']
-        rival = random.choice(rivals)
+        cur.execute(
+            "SELECT name FROM teams WHERE player!='yes' ORDER BY rating DESC LIMIT 10"
+        )
+        top_teams = [r[0] for r in cur.fetchall()]
+        rival = random.choice(top_teams) if top_teams else 'конкурирующая команда'
         return ('Интерес соперников',
                 f'{rival} интересуется {nick}. Продлите контракт, чтобы не потерять игрока.')
 
