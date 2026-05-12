@@ -1024,6 +1024,7 @@ class MainWindow(BoxLayout):
         _migrate21(db_name)
         _migrate22(db_name)
         _migrate23(db_name)
+        _migrate24(db_name)
         _fix_orphans(db_name)
         _fix_team_regions(db_name)
         _fix_contracts(db_name)
