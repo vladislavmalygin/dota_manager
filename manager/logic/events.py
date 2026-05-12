@@ -63,7 +63,25 @@ def random_event_monthly(db_name, game_date_str=None):
     except Exception:
         today = date.today()
 
-    event = random.choices(_EVENT_NAMES, weights=_EVENT_WEIGHTS, k=1)[0]
+    # Scale vacation weight by average team fatigue
+    weights = list(_EVENT_WEIGHTS)
+    vac_idx = _EVENT_NAMES.index('player_vacation')
+    try:
+        ph = ','.join('?' * len(player_ids))
+        avg_fatigue = cur.execute(
+            f"SELECT AVG(COALESCE(fatigue,0)) FROM players WHERE id IN ({ph})",
+            player_ids,
+        ).fetchone()[0] or 0
+        if avg_fatigue >= 70:
+            weights[vac_idx] = 40
+        elif avg_fatigue >= 50:
+            weights[vac_idx] = 25
+        elif avg_fatigue >= 30:
+            weights[vac_idx] = 16
+    except Exception:
+        pass
+
+    event = random.choices(_EVENT_NAMES, weights=weights, k=1)[0]
     result = _apply(cur, event, team_id, player_ids, today)
 
     conn.commit()

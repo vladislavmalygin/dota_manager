@@ -324,10 +324,6 @@ class NegotiationPopup(Popup):
         if bonus_morale:
             cur.execute("UPDATE players SET morale=MIN(10, COALESCE(morale,5)+1) WHERE id=?",
                         (self._pid,))
-        cur.execute(
-            "UPDATE teams SET cohesion=MAX(0, COALESCE(cohesion,0)-15) WHERE id=?",
-            (team_id,),
-        )
         cur.execute("SELECT nickname, micro_skills, macro_skills FROM players WHERE id=?",
                     (self._pid,))
         p_row = cur.fetchone()
@@ -1359,8 +1355,6 @@ class TransferPopup(Popup):
             "renewal_notified=0 WHERE id=?",
             (my_id, demanded_wage, contract_end, pid),
         )
-        cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?",
-                    (my_id,))
         nick  = (cur.execute("SELECT nickname FROM players WHERE id=?", (pid,)).fetchone() or ('?',))[0]
         aname = (cur.execute("SELECT name FROM teams WHERE id=?", (ai_team_id,)).fetchone() or ('?',))[0]
         conn.execute(
@@ -1510,11 +1504,6 @@ class TransferPopup(Popup):
         cur.execute(
             "UPDATE players SET team_id=?, wage=?, contract_end=? WHERE id=?",
             (team_id, wage, contract_end, player_id),
-        )
-        # Cohesion penalty for new signing
-        cur.execute(
-            "UPDATE teams SET cohesion=MAX(0, COALESCE(cohesion, 0)-15) WHERE id=?",
-            (team_id,),
         )
         conn.commit()
         conn.close()

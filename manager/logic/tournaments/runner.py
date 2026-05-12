@@ -335,6 +335,128 @@ def _dpc_region_filter(tournament_name):
     return None
 
 
+def generate_dpc_regional_events(db_name, tournament_id, region_filter):
+    """Round-robin league for DPC regional tournament — only regional teams, no padding."""
+    conn = sqlite3.connect(db_name)
+    cur = conn.cursor()
+    pt_row = cur.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+    player_team = pt_row[0].strip() if pt_row else None
+
+    cur.execute("""
+        SELECT name, COALESCE(rating, 0)
+        FROM teams
+        WHERE COALESCE(region, 'WEU') = ?
+          AND (player = 'yes'
+               OR (carry IS NOT NULL AND mid IS NOT NULL AND offlane IS NOT NULL
+                   AND partial_support IS NOT NULL AND full_support IS NOT NULL))
+        ORDER BY COALESCE(rating, 0) DESC
+    """, (region_filter,))
+    teams = [(r[0].strip(), r[1]) for r in cur.fetchall()]
+    id_map = {r[0].strip(): r[1] for r in cur.execute("SELECT name, id FROM teams").fetchall()}
+    conn.close()
+
+    if len(teams) < 2:
+        return [], {}, []
+
+    team_names = [t[0] for t in teams]
+    player_teams = {player_team} if player_team else set()
+    player_qualified = player_team in team_names if player_team else False
+
+    standings = {t: 0 for t in team_names}
+    events = []
+    games_played = {}
+
+    def _gp(t1, t2, n):
+        games_played[t1] = games_played.get(t1, 0) + n
+        games_played[t2] = games_played.get(t2, 0) + n
+
+    events.append({
+        'type': 'qualifier_summary',
+        'direct': team_names[:],
+        'qualified': [],
+        'minor': [],
+        'player_teams': list(player_teams),
+        'player_qualified': player_qualified,
+    })
+    events.append({
+        'type': 'draw',
+        'groups': [team_names[:]],
+        'player_teams': list(player_teams),
+    })
+
+    # Round-robin schedule
+    rr_list = list(team_names)
+    if len(rr_list) % 2:
+        rr_list.append(None)
+    n = len(rr_list)
+    fixed = rr_list[0]
+    rotating = rr_list[1:]
+
+    for _ in range(n - 1):
+        pairs = []
+        a, b = fixed, rotating[0]
+        if a is not None and b is not None:
+            pairs.append((a, b))
+        for k in range(1, n // 2):
+            a, b = rotating[k], rotating[n - 1 - k]
+            if a is not None and b is not None:
+                pairs.append((a, b))
+        rotating = [rotating[-1]] + rotating[:-1]
+
+        for t1, t2 in pairs:
+            is_player = t1 in player_teams or t2 in player_teams
+            if is_player:
+                pts1, pts2, s1, s2, lines, snaps = _play_bo2_logged(t1, t2, db_name)
+            else:
+                pts1, pts2, s1, s2 = _play_bo2(t1, t2, db_name)
+                lines, snaps = [], []
+            _gp(t1, t2, 2)
+            standings[t1] += pts1
+            standings[t2] += pts2
+            winner = t1 if s1 > s2 else (t2 if s2 > s1 else '')
+            loser  = t2 if winner == t1 else (t1 if winner == t2 else '')
+            if is_player:
+                events.append(_lineup_event(t1, t2, 'Лига (BO2)', lines, snaps,
+                                            winner or t1, s1, s2, db_name, 2))
+            events.append(_match_event(t1, t2, winner, loser, s1, s2, 'Лига (BO2)',
+                                       is_player, standings=dict(standings), group_idx=0))
+
+    sorted_teams = sorted(standings.items(), key=lambda x: x[1], reverse=True)
+    placements = {t: i + 1 for i, (t, _) in enumerate(sorted_teams)}
+
+    events.append({
+        'type': 'groups_complete',
+        'group_standings': [sorted_teams],
+        'top_teams': [t for t, _ in sorted_teams],
+        'groups': [team_names[:]],
+    })
+
+    champion = sorted_teams[0][0]
+    events.append({
+        'type':             'tournament_results',
+        'champion':          champion,
+        'placements':        placements,
+        'group_eliminated':  [],
+        'tournament_id':     tournament_id,
+        'games_played':      games_played,
+    })
+
+    # Cohesion for participants
+    conn2 = sqlite3.connect(db_name)
+    cur2 = conn2.cursor()
+    for t in team_names:
+        tid = id_map.get(t)
+        if tid:
+            cur2.execute(
+                "UPDATE teams SET cohesion = MIN(100, COALESCE(cohesion, 0) + 30) WHERE id=?",
+                (tid,),
+            )
+    conn2.commit()
+    conn2.close()
+
+    return events, placements, []
+
+
 def generate_tournament_events(db_name, tournament_id):
     conn_t = sqlite3.connect(db_name)
     t_row = conn_t.execute(
@@ -344,9 +466,12 @@ def generate_tournament_events(db_name, tournament_id):
     tournament_name = t_row[0] if t_row else ''
     region_filter = _dpc_region_filter(tournament_name)
 
+    if region_filter:
+        return generate_dpc_regional_events(db_name, tournament_id, region_filter)
+
     player_teams = get_teams_with_player_yes(db_name)
     qualified_16, qualifier_events, player_qualified = invites_with_events(
-        db_name, region_filter=region_filter
+        db_name, region_filter=None
     )
     qualified_16 = qualified_16[:16]
     direct_8     = qualified_16[:8]
@@ -674,7 +799,7 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
         tid = id_map.get(team_name.strip())
         if tid:
             cur.execute(
-                "UPDATE teams SET cohesion = MIN(100, COALESCE(cohesion, 0) + 10) WHERE id=?",
+                "UPDATE teams SET cohesion = MIN(100, COALESCE(cohesion, 0) + 30) WHERE id=?",
                 (tid,),
             )
 
@@ -765,7 +890,7 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
     conn.close()
 
 
-def increment_player_fatigue(db_name, team_name, amount=8):
+def increment_player_fatigue(db_name, team_name, amount=3):
     """Increase fatigue for all active players of a team after matches."""
     conn = sqlite3.connect(db_name)
     try:

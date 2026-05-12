@@ -102,12 +102,6 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
                         nick  = f'[отпуск]{nick}'
                 except Exception:
                     pass
-            # Fatigue penalty: heavy fatigue reduces form multiplier
-            fatigue = fatigue or 0
-            if fatigue >= 70:
-                form = max(1, (form or 5) - 2)
-            elif fatigue >= 50:
-                form = max(1, (form or 5) - 1)
             bonus = (morale - 5) * 2 + cohesion_b
             micro = max(1, (micro or 1) + bonus)
             macro = max(1, (macro or 1) + bonus)

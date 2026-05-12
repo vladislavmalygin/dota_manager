@@ -429,8 +429,7 @@ class AcademyPopup(Popup):
                             pass
 
                     cur.execute(
-                        "UPDATE teams SET budget=MAX(0,budget-?), "
-                        "cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?", (wage, tid),
+                        "UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (wage, tid),
                     )
                     nick = (cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
                             .fetchone() or ('?',))[0]

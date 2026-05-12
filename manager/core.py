@@ -55,6 +55,8 @@ from db_migrate26 import migrate as _migrate26
 from db_migrate27 import migrate as _migrate27
 from db_migrate28 import migrate as _migrate28
 from db_migrate29 import migrate as _migrate29
+from db_migrate30 import migrate as _migrate30
+from db_migrate31 import migrate as _migrate31
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -1034,6 +1036,8 @@ class MainWindow(BoxLayout):
         _migrate27(db_name)
         _migrate28(db_name)
         _migrate29(db_name)
+        _migrate30(db_name)
+        _migrate31(db_name)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""
@@ -1768,7 +1772,7 @@ class MainWindow(BoxLayout):
                 )
                 c.commit(); c.close()
             popup.dismiss()
-            self._refresh_ui()
+            self._refresh_menu_badges()
 
         def _reject(_):
             popup.dismiss()
@@ -1939,7 +1943,12 @@ class MainWindow(BoxLayout):
     def show_tournament_popup(self):
         popup = TournamentPopup(self.db_name,
                                 on_finish=self._refresh_tournament_btn)
-        popup.open()
+        self._show_inline(popup, 'Турнир')
+        # Override dismiss set by _show_inline to also run tournament cleanup
+        def _dismiss(*_):
+            popup._on_dismissed(None)
+            self._show_dashboard()
+        popup.dismiss = _dismiss
 
     def _refresh_tournament_btn(self):
         self.tournament_button.text = self.get_next_tournament()

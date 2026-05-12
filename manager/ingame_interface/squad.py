@@ -416,10 +416,7 @@ class SquadPopup(Popup):
                     wage  = wage  or 0; skill_cap = skill_cap or 300
                     total_wage += wage
 
-                    face_path = (
-                        f"images/{face}" if face and os.path.exists(f"images/{face}")
-                        else "images/players/generic.png"
-                    )
+                    face_path = T.face_path(face)
 
                     pid = int(sid)
                     is_conflict = pid in conflict_target_ids
@@ -513,13 +510,6 @@ class SquadPopup(Popup):
                         chips_row.add_widget(T.make_chip(
                             f'до {injured_until[5:]}', (0.15, 0.40, 0.70, 1),
                             (0.60, 0.85, 1.00, 1)))
-                    # Fatigue chip (Feature 3)
-                    if fatigue >= 70:
-                        chips_row.add_widget(T.make_chip(
-                            f'Уст.{fatigue}', (0.60, 0.15, 0.10, 1), (1.0, 0.5, 0.4, 1)))
-                    elif fatigue >= 50:
-                        chips_row.add_widget(T.make_chip(
-                            f'Уст.{fatigue}', (0.50, 0.35, 0.05, 1), (1.0, 0.8, 0.3, 1)))
                     if cend_txt:
                         chips_row.add_widget(T.make_chip(cend_txt, T.BG_ROW_A, cend_color))
 
@@ -910,10 +900,7 @@ class PlayerDetailPopup(Popup):
 
         self.title = ''
 
-        face_path = (
-            f"images/{face}" if face and os.path.exists(f"images/{face}")
-            else "images/players/generic.png"
-        )
+        face_path = T.face_path(face)
 
         is_injured = False
         if injured_until:

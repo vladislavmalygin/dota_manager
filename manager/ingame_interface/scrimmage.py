@@ -264,7 +264,7 @@ class ScrimmagePopup(Popup):
             has_conflict = conflict and conflict[0]
             if not has_conflict:
                 conn3.execute(
-                    "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+1) WHERE name=?",
+                    "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+3) WHERE name=?",
                     (self._my_team,))
             conn3.commit()
             conn3.close()

@@ -1,5 +1,19 @@
 """Centralized UI theme and utilities for dota_manager."""
+import os as _os
 import traceback as _tb
+
+# Base directory of the manager package (where images/ lives)
+_MANAGER_DIR = _os.path.dirname(_os.path.abspath(__file__))
+
+
+def face_path(face, default='images/default_face.png'):
+    """Return absolute path to player face image, falling back to default."""
+    if not face:
+        return _os.path.join(_MANAGER_DIR, default)
+    p = _os.path.join(_MANAGER_DIR, 'images', face)
+    if _os.path.exists(p):
+        return p
+    return _os.path.join(_MANAGER_DIR, default)
 
 
 def log_err(context: str, exc: Exception) -> None:

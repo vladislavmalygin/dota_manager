@@ -577,8 +577,8 @@ def update_morale_monthly(db_name):
             f"SELECT AVG(COALESCE(time_in_team,0)) FROM players WHERE id IN ({ph})",
             pids
         ).fetchone()[0] or 0
-        # +3/month if avg tenure > 6 months, +2 if > 3, +1 otherwise; cap 100
-        gain = 3 if avg_time >= 6 else (2 if avg_time >= 3 else 1)
+        # +9/month if avg tenure > 6 months, +6 if > 3, +3 otherwise; cap 100
+        gain = 9 if avg_time >= 6 else (6 if avg_time >= 3 else 3)
         conn.execute(
             "UPDATE teams SET cohesion=MIN(100, COALESCE(cohesion,0)+?) WHERE id=?",
             (gain, tid)
@@ -713,7 +713,7 @@ def apply_age_decline(db_name):
 
 def decay_ratings_season_end(db_name):
     conn = sqlite3.connect(db_name)
-    conn.execute("UPDATE teams SET rating = ROUND(COALESCE(rating, 0) * 0.75)")
+    conn.execute("UPDATE teams SET rating = ROUND(COALESCE(rating, 0) * 0.30)")
     conn.commit()
     conn.close()
 

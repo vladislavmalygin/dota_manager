@@ -745,7 +745,8 @@ class MatchLogPopup(Popup):
         self._bo_needed        = best_of // 2 + 1 if best_of > 1 else 1
         self._build()   # builds self._match_content and all live attrs
         if pre_match_team and db_name:
-            self.content = self._build_pre_match_content()
+            self.content = self._match_content  # placeholder until draft opens
+            Clock.schedule_once(lambda dt: self._launch_prematch_draft(), 0.1)
         else:
             self.content = self._match_content
             Clock.schedule_once(lambda dt: self._start(), 0.15)
@@ -1037,6 +1038,60 @@ class MatchLogPopup(Popup):
         if (phase, key) in self._pre_strat_btns:
             self._pre_strat_btns[(phase, key)].background_color = (0.10, 0.45, 0.18, 1)
 
+    def _launch_prematch_draft(self):
+        """Open CM draft popup; on confirm start the map."""
+        _open_prematch_popup(
+            self._pre_match_db,
+            self._team1, self._team2, self._pre_match_team,
+            self._best_of,
+            on_confirm=self._on_draft_confirmed,
+        )
+
+    def _on_draft_confirmed(self, hero_picks, confirmed):
+        if hero_picks and confirmed:
+            self._hero_picks = hero_picks
+        else:
+            import random as _r
+            from logic.heroes import HEROES, ROLE_ORDER as _RO
+            self._hero_picks = {role: _r.choice(HEROES[role]) for role in _RO}
+        self._run_simulation()
+
+    def _run_simulation(self):
+        """Simulate one map with self._hero_picks and start the match animation."""
+        try:
+            opp_picks = random_picks(exclude=[h[0] for h in self._hero_picks.values()])
+            is_t1 = (self._pre_match_team == self._team1)
+            hero_picks = {
+                'team1': self._hero_picks if is_t1 else opp_picks,
+                'team2': opp_picks         if is_t1 else self._hero_picks,
+            }
+            map_winner, new_lines, new_snaps, new_stats = replay_match_with_heroes(
+                self._team1, self._team2, self._pre_match_db, hero_picks
+            )
+            pre_w1 = self._map_wins.get(self._team1, 0)
+            pre_w2 = self._map_wins.get(self._team2, 0)
+            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
+            w1 = self._map_wins[self._team1]
+            w2 = self._map_wins[self._team2]
+            self._winner      = self._team1 if w1 > w2 else (
+                                self._team2 if w2 > w1 else map_winner)
+            self._final_score = (w1, w2)
+            self._lines       = new_lines
+            self._snapshots   = new_snaps
+            self._match_stats = new_stats
+            self._schedule    = _build_log_schedule(new_lines)
+            self._sched_idx   = 0
+            self._elapsed     = 0.0
+            for snp in self._snapshots:
+                snp['game_score_t1'] = pre_w1
+                snp['game_score_t2'] = pre_w2
+                snp['best_of']       = self._best_of
+            self._build()
+        except Exception:
+            pass
+        self.content = self._match_content
+        Clock.schedule_once(lambda dt: self._start(), 0.15)
+
     def _confirm_strategy(self, _):
         import sqlite3 as _sq
         try:
@@ -1052,46 +1107,7 @@ class MatchLogPopup(Popup):
             conn.close()
         except Exception:
             pass
-
-        # Simulate ONE map with chosen heroes + updated strategies
-        try:
-            opp_picks = random_picks(exclude=[h[0] for h in self._hero_picks.values()])
-            is_t1 = (self._pre_match_team == self._team1)
-            hero_picks = {
-                'team1': self._hero_picks if is_t1 else opp_picks,
-                'team2': opp_picks         if is_t1 else self._hero_picks,
-            }
-            map_winner, new_lines, new_snaps, new_stats = replay_match_with_heroes(
-                self._team1, self._team2, self._pre_match_db, hero_picks
-            )
-            # Save pre-game score so animation starts at 0-0/1-0/etc (no spoiler)
-            pre_w1 = self._map_wins.get(self._team1, 0)
-            pre_w2 = self._map_wins.get(self._team2, 0)
-            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
-            w1 = self._map_wins[self._team1]
-            w2 = self._map_wins[self._team2]
-            # Determine current match winner (may not be final yet)
-            self._winner      = self._team1 if w1 > w2 else (
-                                self._team2 if w2 > w1 else map_winner)
-            self._final_score = (w1, w2)
-            self._lines       = new_lines
-            self._snapshots   = new_snaps
-            self._match_stats = new_stats
-            self._schedule    = _build_log_schedule(new_lines)
-            self._sched_idx   = 0
-            self._elapsed     = 0.0
-            # Inject PRE-game score — score updates to w1/w2 only after _finish()
-            for snp in self._snapshots:
-                snp['game_score_t1'] = pre_w1
-                snp['game_score_t2'] = pre_w2
-                snp['best_of']       = self._best_of
-            # Rebuild match panel with fresh log area
-            self._build()
-        except Exception:
-            pass
-
-        self.content = self._match_content
-        Clock.schedule_once(lambda dt: self._start(), 0.15)
+        self._run_simulation()
 
     def _start(self):
         self._interval = Clock.schedule_interval(self._tick, 0.05)
@@ -1248,8 +1264,11 @@ class MatchLogPopup(Popup):
             Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.05)
 
     def _next_map_draft(self):
-        """Show strategy/hero draft for the next map in a BO series."""
-        self.content = self._build_pre_match_content()
+        """Show CM draft for the next map in a BO series."""
+        self._hero_picks     = {}
+        self._hero_btns      = {}
+        self._pre_strat_btns = {}
+        self._launch_prematch_draft()
 
     def _skip(self, _):
         if self._interval:
@@ -2612,7 +2631,7 @@ class TournamentPopup(Popup):
             for _pt in _ptms:
                 _n = _gp.get(_pt, 0)
                 if _n > 0:
-                    increment_player_fatigue(self.db_name, _pt, amount=_n * 5)
+                    increment_player_fatigue(self.db_name, _pt, amount=_n * 2)
         except Exception:
             pass
         update_form_after_tournament(
@@ -2820,9 +2839,10 @@ class TournamentsViewPopup(Popup):
                                  color=color, height=32, halign='right'))
             grid.add_widget(rrow)
 
-        # tournament schedule
-        grid.add_widget(_lbl('', height=10))
-        grid.add_widget(_section_title('═══  РАСПИСАНИЕ ТУРНИРОВ  ═══'))
+        # Build team_id lookup for player result highlighting
+        cur.execute("SELECT id FROM teams WHERE player='yes'")
+        pt_row = cur.fetchone()
+        player_team_id = pt_row[0] if pt_row else None
 
         cur.execute(
             """SELECT t.id, t.name, t.start_date, t.prizepool, t.ratingpool,
@@ -2831,45 +2851,91 @@ class TournamentsViewPopup(Popup):
                LEFT JOIN teams tm ON t.place1=tm.id
                ORDER BY t.start_date"""
         )
-        for tid, name, start, prize, rpool, place1, winner in cur.fetchall():
-            done = bool(place1 and winner)
-            hdr_color = _GREEN if done else _YELLOW
-            bg = (0.06, 0.18, 0.06, 1) if done else (0.14, 0.14, 0.06, 1)
-            status = f'OK {winner.strip()}' if done else '→  Предстоит'
+        all_rows = cur.fetchall()
+        done_rows     = [(r, True)  for r in all_rows if r[5]]
+        upcoming_rows = [(r, False) for r in all_rows if not r[5]]
 
-            trow = _BgBox(bg=_BG_HEAD, orientation='horizontal',
-                          size_hint_y=None, height=36, padding=(8, 0))
-            trow.add_widget(_lbl(f'  {start}  ─  {name}',
-                                 color=hdr_color, bold=True, height=36))
-            grid.add_widget(trow)
+        if done_rows:
+            grid.add_widget(_lbl('', height=10))
+            grid.add_widget(_section_title('═══  ИСТОРИЯ ТУРНИРОВ  ═══'))
+            for (tid, name, start, prize, rpool, place1, winner), _ in done_rows:
+                trow = _BgBox(bg=_BG_HEAD, orientation='horizontal',
+                              size_hint_y=None, height=36, padding=(8, 0))
+                trow.add_widget(_lbl(f'  {start}  ─  {name}',
+                                     color=_GREEN, bold=True, height=36))
+                grid.add_widget(trow)
 
-            irow = _BgBox(bg=bg, orientation='horizontal',
-                          size_hint_y=None, height=28, padding=(16, 0))
-            irow.add_widget(_lbl(
-                f'${prize:,}  |  {rpool or 0} pts  |  {status}',
-                color=_WHITE, height=28,
-            ))
-            grid.add_widget(irow)
-
-            if place1:
-                row = cur.execute(
+                # Get full top-8
+                places_row = cur.execute(
                     "SELECT place1,place2,place3,place4,place5,place6,place7,place8 "
                     "FROM tournaments WHERE id=?", (tid,)
                 ).fetchone()
-                if row:
-                    pnames = []
-                    for pid in row:
-                        if pid:
-                            n = cur.execute("SELECT name FROM teams WHERE id=?", (pid,)).fetchone()
-                            if n:
-                                pnames.append(n[0].strip())
-                    if pnames:
-                        prow = _BgBox(bg=_BG_DARK, orientation='horizontal',
-                                      size_hint_y=None, height=26, padding=(16, 0))
-                        prow.add_widget(_lbl(
-                            'Топ-8: ' + ', '.join(f'{i+1}.{n}' for i, n in enumerate(pnames)),
-                            color=(0.70, 0.90, 0.70, 1), height=26,
-                        ))
-                        grid.add_widget(prow)
+                player_place = None
+                pnames = []
+                if places_row:
+                    for idx, team_id_slot in enumerate(places_row):
+                        if not team_id_slot:
+                            continue
+                        n = cur.execute(
+                            "SELECT name FROM teams WHERE id=?", (team_id_slot,)
+                        ).fetchone()
+                        tname = n[0].strip() if n else '?'
+                        pnames.append((idx + 1, tname))
+                        if team_id_slot == player_team_id:
+                            player_place = idx + 1
+
+                # Player result row (highlighted)
+                if player_place is not None:
+                    place_color = (
+                        _GOLD   if player_place == 1 else
+                        _SILVER if player_place == 2 else
+                        _BRONZE if player_place == 3 else
+                        _PLAYER if player_place <= 8 else
+                        (0.8, 0.4, 0.4, 1)
+                    )
+                    place_bg = (0.10, 0.22, 0.10, 1) if player_place <= 4 else (0.12, 0.12, 0.18, 1)
+                    pres = _BgBox(bg=place_bg, orientation='horizontal',
+                                  size_hint_y=None, height=28, padding=(16, 0))
+                    medal = {1: '🥇', 2: '🥈', 3: '🥉'}.get(player_place, f'#{player_place}')
+                    pres.add_widget(_lbl(
+                        f'  Ваш результат: {medal}  место  •  Чемпион: {winner.strip() if winner else "?"}',
+                        color=place_color, height=28,
+                    ))
+                    grid.add_widget(pres)
+                else:
+                    irow = _BgBox(bg=(0.08, 0.10, 0.08, 1), orientation='horizontal',
+                                  size_hint_y=None, height=28, padding=(16, 0))
+                    irow.add_widget(_lbl(
+                        f'  Не участвовали  •  Чемпион: {winner.strip() if winner else "?"}',
+                        color=_DIM, height=28,
+                    ))
+                    grid.add_widget(irow)
+
+                if pnames:
+                    prow = _BgBox(bg=_BG_DARK, orientation='horizontal',
+                                  size_hint_y=None, height=24, padding=(16, 0))
+                    prow.add_widget(_lbl(
+                        '  ' + '  '.join(f'{i}.{n}' for i, n in pnames),
+                        color=(0.60, 0.80, 0.60, 1), height=24, font_size='11sp',
+                    ))
+                    grid.add_widget(prow)
+
+        if upcoming_rows:
+            grid.add_widget(_lbl('', height=10))
+            grid.add_widget(_section_title('═══  РАСПИСАНИЕ ТУРНИРОВ  ═══'))
+            for (tid, name, start, prize, rpool, place1, winner), _ in upcoming_rows:
+                trow = _BgBox(bg=_BG_HEAD, orientation='horizontal',
+                              size_hint_y=None, height=36, padding=(8, 0))
+                trow.add_widget(_lbl(f'  {start}  ─  {name}',
+                                     color=_YELLOW, bold=True, height=36))
+                grid.add_widget(trow)
+
+                irow = _BgBox(bg=(0.14, 0.14, 0.06, 1), orientation='horizontal',
+                              size_hint_y=None, height=28, padding=(16, 0))
+                irow.add_widget(_lbl(
+                    f'  ${prize:,}  |  {rpool or 0} pts  |  → Предстоит',
+                    color=_WHITE, height=28,
+                ))
+                grid.add_widget(irow)
 
         conn.close()

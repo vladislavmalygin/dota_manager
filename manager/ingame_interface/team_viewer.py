@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import ui_theme as T
 
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
@@ -207,7 +208,7 @@ class TeamViewerPopup(Popup):
                     wage = wage or 0
                     total_wage += wage
 
-                    face_p = f"images/{face}" if face and os.path.exists(f"images/{face}") else None
+                    face_p = T.face_path(face) if face else None
 
                     def _cell(t, sw, c=_WHITE):
                         l = Label(text=t, size_hint_x=sw, color=c,
