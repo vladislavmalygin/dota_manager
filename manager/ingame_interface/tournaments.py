@@ -1416,22 +1416,22 @@ def _show_press_conference(db_name, player_team, winner, on_done):
 
 def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     """
-    Full-screen pre-match config: strategy selection + hero picks.
-    on_confirm(hero_picks, confirmed_play=True) called when player clicks Start.
-    on_confirm(None, False) if skipped.
+    Full-screen pre-match: strategy + Captains Mode draft (5 bans + 5 picks each).
+    on_confirm(hero_picks, confirmed_play=True) / on_confirm(None, False) if skipped.
     """
     import random as _rnd
+    from kivy.clock import Clock as _Clock
     from logic.dota.strategies import EARLY_STRATEGIES, MID_STRATEGIES, LATE_STRATEGIES
-    from logic.heroes import HEROES, ROLE_ORDER
+    from logic.heroes import HEROES, ROLE_ORDER, ai_draft_picks, ai_draft_bans
 
-    # Load current strategies from DB
+    enemy_team = team2 if my_team == team1 else team1
+
+    # ── Strategies ───────────────────────────────────────────────────────────
     try:
         _conn = sqlite3.connect(db_name)
         _row = _conn.execute(
-            "SELECT COALESCE(strat_early,'safe_farm'), "
-            "COALESCE(strat_mid,'map_control'), "
-            "COALESCE(strat_late,'teamfight') FROM teams WHERE name=?",
-            (my_team,)
+            "SELECT COALESCE(strat_early,'safe_farm'),COALESCE(strat_mid,'map_control'),"
+            "COALESCE(strat_late,'teamfight') FROM teams WHERE name=?", (my_team,)
         ).fetchone()
         _conn.close()
         cur_strats = {'early': _row[0], 'mid': _row[1], 'late': _row[2]} if _row else \
@@ -1439,56 +1439,92 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     except Exception:
         cur_strats = {'early': 'safe_farm', 'mid': 'map_control', 'late': 'teamfight'}
 
-    # Default hero picks (random)
-    picks = {role: _rnd.choice(HEROES[role]) for role in ROLE_ORDER}
-
-    strat_btns  = {}   # (phase, key) → Button
-    hero_btns   = {}   # (role, name) → Button
-    ban_btns    = {}   # hero_name → Button
     strat_state = dict(cur_strats)
-    player_bans = []   # list of banned hero names (player picks up to 3)
-    ai_bans     = []   # AI bans (auto after player done)
-    _BAN_MAX    = 3
+    strat_btns  = {}
 
-    _BG   = (0.07, 0.09, 0.13, 1)
-    _SEL  = (0.10, 0.45, 0.18, 1)
-    _UNS  = (0.18, 0.20, 0.30, 1)
-    _HSEL = (0.55, 0.38, 0.05, 1)
-    _HUNS = (0.18, 0.20, 0.28, 1)
-    _ACC  = (0.35, 0.85, 1.00, 1)
+    # ── CM Draft sequence ────────────────────────────────────────────────────
+    # 20 steps: 5 player bans, 5 ai bans, 5 player picks (by role), 5 ai picks
+    DRAFT_SEQ = [
+        ('ban',  'player', None),
+        ('ban',  'ai',     None),
+        ('ban',  'player', None),
+        ('ban',  'ai',     None),
+        ('pick', 'player', 'carry'),
+        ('pick', 'ai',     None),
+        ('pick', 'ai',     None),
+        ('pick', 'player', 'mid'),
+        ('ban',  'ai',     None),
+        ('ban',  'player', None),
+        ('ban',  'ai',     None),
+        ('ban',  'player', None),
+        ('pick', 'player', 'offlane'),
+        ('pick', 'ai',     None),
+        ('pick', 'player', 'partial_support'),
+        ('pick', 'ai',     None),
+        ('ban',  'player', None),
+        ('ban',  'ai',     None),
+        ('pick', 'ai',     None),
+        ('pick', 'player', 'full_support'),
+    ]
+    # AI needs these roles for picks (5 picks total, same as player)
+    _AI_PICK_ROLES = [ROLE_ORDER[i] for i in range(5)]
+    _ai_pick_idx   = [0]   # mutable counter
 
-    root = BoxLayout(orientation='vertical', spacing=6, padding=10)
+    draft = {
+        'step':         0,
+        'player_bans':  [],
+        'ai_bans':      [],
+        'player_picks': {},   # role → hero_tuple
+        'ai_picks':     [],   # hero_tuples in order
+        'done':         False,
+    }
+
+    picks = draft['player_picks']   # alias
+
+    # ── Colors ───────────────────────────────────────────────────────────────
+    _BG    = (0.07, 0.09, 0.13, 1)
+    _SEL   = (0.10, 0.45, 0.18, 1)
+    _UNS   = (0.18, 0.20, 0.30, 1)
+    _PBANN = (0.55, 0.10, 0.10, 1)   # player ban
+    _AIBANN= (0.35, 0.05, 0.40, 1)   # ai ban
+    _PPICK = (0.12, 0.50, 0.20, 1)   # player picked
+    _AIPICK= (0.30, 0.10, 0.50, 1)   # ai picked
+    _AVAIL = (0.16, 0.18, 0.26, 1)   # available
+    _ACC   = (0.35, 0.85, 1.00, 1)
+
+    _ROLE_RU = {
+        'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
+        'partial_support': 'Sup4', 'full_support': 'Sup5',
+    }
+
+    # ── Root layout ───────────────────────────────────────────────────────────
+    root = BoxLayout(orientation='vertical', spacing=4, padding=8)
     with root.canvas.before:
         from kivy.graphics import Color as _C, Rectangle as _R
-        _c = _C(*_BG); _r = _R()
-    root.bind(pos=lambda w,_: setattr(_r,'pos',w.pos),
-              size=lambda w,_: setattr(_r,'size',w.size))
+        _bgc = _C(*_BG); _bgr = _R()
+    root.bind(pos=lambda w, _: setattr(_bgr, 'pos', w.pos),
+              size=lambda w, _: setattr(_bgr, 'size', w.size))
 
-    def _lbl(text, color=_ACC, fs='14sp', bold=True, height=30, halign='center'):
+    def _lbl(text, color=_ACC, fs='13sp', bold=False, height=26, halign='left'):
         t = f'[b]{text}[/b]' if bold else text
-        l = Label(text=t, markup=True, color=color,
-                  size_hint_y=None, height=height,
+        l = Label(text=t, markup=True, color=color, size_hint_y=None, height=height,
                   font_size=fs, halign=halign, valign='middle')
         l.bind(size=l.setter('text_size'))
         return l
 
     # Header
     root.add_widget(_lbl(
-        f'{my_team}  vs  {team2 if my_team == team1 else team1}  —  BO{best_of}',
-        color=(0.25, 1.00, 0.45, 1), fs='17sp', height=38,
+        f'  {my_team}  vs  {enemy_team}  •  BO{best_of}  •  Captains Mode',
+        color=(0.25, 1.00, 0.45, 1), fs='16sp', bold=True, height=34, halign='left',
     ))
 
     body = BoxLayout(orientation='horizontal', spacing=8, size_hint=(1, 1))
 
-    # ── LEFT: strategy ────────────────────────────────────────────────────────
-    left = BoxLayout(orientation='vertical', size_hint_x=0.38, spacing=4)
-    left.add_widget(_lbl('СТРАТЕГИЯ', height=26, fs='13sp'))
-
-    _PHASES = [
-        ('early', 'Ранняя игра',   EARLY_STRATEGIES, 'safe_farm'),
-        ('mid',   'Средняя игра',  MID_STRATEGIES,   'map_control'),
-        ('late',  'Поздняя игра',  LATE_STRATEGIES,  'teamfight'),
-    ]
+    # ══════════════════════════════════════════════════════════════════════════
+    # LEFT: strategy
+    # ══════════════════════════════════════════════════════════════════════════
+    left = BoxLayout(orientation='vertical', size_hint_x=0.28, spacing=3)
+    left.add_widget(_lbl('СТРАТЕГИЯ', bold=True, height=24, color=_ACC))
 
     def _sel_strat(phase, key):
         prev = strat_state.get(phase)
@@ -1498,14 +1534,16 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         if (phase, key) in strat_btns:
             strat_btns[(phase, key)].background_color = _SEL
 
-    for phase, label, strats, default in _PHASES:
-        left.add_widget(_lbl(label, color=(0.70, 0.85, 1.00, 1), fs='13sp',
-                             bold=False, height=24, halign='left'))
-        ph_row = BoxLayout(size_hint_y=None, height=40, spacing=3)
+    for phase, label, strats, default in [
+        ('early', 'Ранняя',   EARLY_STRATEGIES, 'safe_farm'),
+        ('mid',   'Средняя',  MID_STRATEGIES,   'map_control'),
+        ('late',  'Поздняя',  LATE_STRATEGIES,  'teamfight'),
+    ]:
+        left.add_widget(_lbl(label, color=(0.70, 0.85, 1.00, 1), height=20))
+        ph_row = BoxLayout(size_hint_y=None, height=36, spacing=2)
         for key, s in strats.items():
-            is_sel = key == strat_state.get(phase, default)
-            btn = Button(text=s['name'], font_size='12sp', background_normal='',
-                         background_color=_SEL if is_sel else _UNS)
+            btn = Button(text=s['name'], font_size='11sp', background_normal='',
+                         background_color=_SEL if key == strat_state.get(phase, default) else _UNS)
             btn.bind(on_press=lambda _, p=phase, k=key: _sel_strat(p, k))
             strat_btns[(phase, key)] = btn
             ph_row.add_widget(btn)
@@ -1513,122 +1551,249 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     body.add_widget(left)
 
-    # ── RIGHT: bans + hero picks ──────────────────────────────────────────────
-    right = BoxLayout(orientation='vertical', size_hint_x=0.62, spacing=3)
+    # ══════════════════════════════════════════════════════════════════════════
+    # RIGHT: CM draft
+    # ══════════════════════════════════════════════════════════════════════════
+    right = BoxLayout(orientation='vertical', size_hint_x=0.72, spacing=3)
 
-    _ROLE_RU = {
-        'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
-        'partial_support': 'Sup 4', 'full_support': 'Sup 5',
-    }
-    _BANNED  = (0.40, 0.08, 0.08, 1)
-    _AIBANNED = (0.22, 0.08, 0.22, 1)
+    # ── Draft board: bans row + picks row ─────────────────────────────────────
+    board = BoxLayout(orientation='vertical', size_hint_y=None, height=96, spacing=2)
 
-    ban_status_lbl = Label(
-        text=f'[b]БАН-ФАЗА[/b]  (выбрано 0/{_BAN_MAX})', markup=True,
-        color=(1.00, 0.45, 0.20, 1), size_hint_y=None, height=24,
-        font_size='12sp', halign='left', valign='middle',
+    def _slot_lbl(text='—', color=_AVAIL, w=68):
+        b = Button(text=text, font_size='9sp', background_normal='',
+                   background_color=color, size_hint_x=None, width=w, disabled=True)
+        return b
+
+    # bans row
+    bans_row = BoxLayout(size_hint_y=None, height=44, spacing=3)
+    bans_row.add_widget(_lbl(f'[b]{my_team[:12]}[/b]', color=(0.30, 1.00, 0.50, 1),
+                             fs='11sp', height=44, bold=False))
+    p_ban_slots = [_slot_lbl('БАН') for _ in range(5)]
+    for s in p_ban_slots:
+        bans_row.add_widget(s)
+    bans_row.add_widget(_lbl('  БН  ', color=(0.55, 0.55, 0.55, 1), height=44,
+                             halign='center', fs='10sp'))
+    ai_ban_slots = [_slot_lbl('БАН') for _ in range(5)]
+    for s in ai_ban_slots:
+        bans_row.add_widget(s)
+    bans_row.add_widget(_lbl(f'[b]{enemy_team[:12]}[/b]', color=(1.00, 0.45, 0.45, 1),
+                             fs='11sp', height=44, halign='right', bold=False))
+    board.add_widget(bans_row)
+
+    # picks row
+    picks_row = BoxLayout(size_hint_y=None, height=44, spacing=3)
+    picks_row.add_widget(_lbl('ПИКИ', color=(0.30, 1.00, 0.50, 1),
+                              fs='11sp', height=44, bold=True))
+    p_pick_slots = {role: _slot_lbl(_ROLE_RU[role], color=(0.15, 0.28, 0.18, 1))
+                    for role in ROLE_ORDER}
+    for role in ROLE_ORDER:
+        picks_row.add_widget(p_pick_slots[role])
+    picks_row.add_widget(_lbl('  ПК  ', color=(0.55, 0.55, 0.55, 1), height=44,
+                              halign='center', fs='10sp'))
+    ai_pick_slots = [_slot_lbl(_ROLE_RU[ROLE_ORDER[i]], color=(0.25, 0.10, 0.30, 1))
+                     for i in range(5)]
+    for s in ai_pick_slots:
+        picks_row.add_widget(s)
+    picks_row.add_widget(_lbl('ПИКИ', color=(1.00, 0.45, 0.45, 1),
+                              fs='11sp', height=44, halign='right', bold=True))
+    board.add_widget(picks_row)
+    right.add_widget(board)
+
+    # ── Instruction ───────────────────────────────────────────────────────────
+    instr_lbl = Label(
+        text='', markup=True, color=(1.00, 0.90, 0.30, 1),
+        size_hint_y=None, height=28, font_size='13sp',
+        halign='center', valign='middle',
     )
-    ban_status_lbl.bind(size=ban_status_lbl.setter('text_size'))
-    right.add_widget(ban_status_lbl)
+    instr_lbl.bind(size=instr_lbl.setter('text_size'))
+    right.add_widget(instr_lbl)
 
-    # Bans grid: all heroes flat, 2 rows × many cols
-    ban_sv = ScrollView(size_hint=(1, None), height=80, do_scroll_y=False)
-    ban_grid = GridLayout(cols=1, size_hint_y=None)
-    ban_grid.bind(minimum_height=ban_grid.setter('height'))
-    ban_row1 = BoxLayout(size_hint_y=None, height=36, spacing=2)
-    ban_row2 = BoxLayout(size_hint_y=None, height=36, spacing=2)
-    ban_grid.add_widget(ban_row1)
-    ban_grid.add_widget(ban_row2)
-    ban_sv.add_widget(ban_grid)
-    right.add_widget(ban_sv)
+    # ── Role filter ───────────────────────────────────────────────────────────
+    filter_state = {'role': None}
+    filter_row   = BoxLayout(size_hint_y=None, height=32, spacing=3)
+    filter_btns  = {}
+    _ROLE_CLR = (0.22, 0.50, 0.80, 1)
+    _ROLE_SEL = (0.10, 0.70, 0.40, 1)
 
-    _all_heroes = [(role, h) for role in ROLE_ORDER for h in HEROES[role][:5]]
-
-    def _refresh_hero_btns():
-        all_banned = set(player_bans) | set(ai_bans)
-        for (role, hname), hbtn in hero_btns.items():
-            if hname in all_banned:
-                hbtn.disabled = True
-                hbtn.background_color = _BANNED
-            else:
-                is_sel = picks.get(role, (None,))[0] == hname
-                hbtn.disabled = False
-                hbtn.background_color = _HSEL if is_sel else _HUNS
-            # if picked hero got banned, repick randomly
-            if picks.get(role, (None,))[0] in all_banned:
-                pool = [h for h in HEROES[role] if h[0] not in all_banned]
-                if pool:
-                    picks[role] = _rnd.choice(pool)
-
-    def _do_ai_bans():
-        all_names = [h[0] for _, h in _all_heroes]
-        pool = [n for n in all_names if n not in player_bans]
-        _rnd.shuffle(pool)
-        for hname in pool[:_BAN_MAX]:
-            ai_bans.append(hname)
-            if hname in ban_btns:
-                ban_btns[hname].background_color = _AIBANNED
-                ban_btns[hname].text = f'[s]{hname}[/s]'
-                ban_btns[hname].markup = True
-        ban_status_lbl.text = (f'[b]БАН-ФАЗА[/b]  Ваши: {len(player_bans)}  '
-                               f'AI: {len(ai_bans)}  ✓ пики открыты')
-        _refresh_hero_btns()
-
-    def _toggle_ban(hname, btn):
-        if hname in player_bans:
-            player_bans.remove(hname)
-            btn.background_color = (0.22, 0.22, 0.30, 1)
-        elif len(player_bans) < _BAN_MAX:
-            player_bans.append(hname)
-            btn.background_color = _BANNED
-        ban_status_lbl.text = f'[b]БАН-ФАЗА[/b]  (выбрано {len(player_bans)}/{_BAN_MAX})'
-        if len(player_bans) == _BAN_MAX and not ai_bans:
-            _do_ai_bans()
-
-    for i, (role, hero) in enumerate(_all_heroes):
-        hname = hero[0]
-        btn = Button(
-            text=hname, font_size='9sp', background_normal='',
-            background_color=(0.22, 0.22, 0.30, 1), size_hint_x=None, width=78,
-        )
-        btn.bind(on_press=lambda _, n=hname, b=btn: _toggle_ban(n, b))
-        ban_btns[hname] = btn
-        (ban_row1 if i < len(_all_heroes)//2 else ban_row2).add_widget(btn)
-
-    right.add_widget(_lbl('ГЕРОИ  (бан-героев недоступны)', height=24, fs='12sp'))
-
-    def _pick_hero(role, hero):
-        if hero[0] in set(player_bans) | set(ai_bans):
-            return
-        prev = picks.get(role)
-        if prev and (role, prev[0]) in hero_btns:
-            hero_btns[(role, prev[0])].background_color = _HUNS
-        picks[role] = hero
-        if (role, hero[0]) in hero_btns:
-            hero_btns[(role, hero[0])].background_color = _HSEL
+    def _set_filter(role, btn):
+        if filter_state['role'] == role:
+            filter_state['role'] = None
+            btn.background_color = _ROLE_CLR
+        else:
+            for r2, b2 in filter_btns.items():
+                b2.background_color = _ROLE_CLR
+            filter_state['role'] = role
+            btn.background_color = _ROLE_SEL
+        _rebuild_hero_grid()
 
     for role in ROLE_ORDER:
-        rrow = BoxLayout(size_hint_y=None, height=38, spacing=3)
-        rlbl = Label(text=f'[b]{_ROLE_RU[role]}[/b]', markup=True,
-                     color=(0.70, 0.85, 1.00, 1), size_hint_x=None, width=62,
-                     font_size='13sp', halign='center', valign='middle')
-        rlbl.bind(size=rlbl.setter('text_size'))
-        rrow.add_widget(rlbl)
-        for hero in HEROES[role][:7]:
-            hname = hero[0]
-            is_sel = picks.get(role, (None,))[0] == hname
-            hbtn = Button(text=hname, font_size='11sp', background_normal='',
-                          background_color=_HSEL if is_sel else _HUNS)
-            hbtn.bind(on_press=lambda _, r=role, h=hero: _pick_hero(r, h))
-            hero_btns[(role, hname)] = hbtn
-            rrow.add_widget(hbtn)
-        right.add_widget(rrow)
+        fb = Button(text=_ROLE_RU[role], font_size='11sp', background_normal='',
+                    background_color=_ROLE_CLR)
+        fb.bind(on_press=lambda _, r=role, b=fb: _set_filter(r, b))
+        filter_btns[role] = fb
+        filter_row.add_widget(fb)
+    right.add_widget(filter_row)
+
+    # ── Hero grid ─────────────────────────────────────────────────────────────
+    hero_sv   = ScrollView(size_hint=(1, 1))
+    hero_grid = GridLayout(cols=8, size_hint_y=None, spacing=2, padding=(2, 2))
+    hero_grid.bind(minimum_height=hero_grid.setter('height'))
+    hero_sv.add_widget(hero_grid)
+    right.add_widget(hero_sv)
+
+    # All hero buttons keyed by name
+    all_hero_btns = {}  # hero_name → Button
+
+    def _hero_color(hname):
+        if hname in draft['player_bans']:    return _PBANN
+        if hname in draft['ai_bans']:        return _AIBANN
+        if any(h[0] == hname for h in draft['player_picks'].values()):  return _PPICK
+        if any(h[0] == hname for h in draft['ai_picks']):               return _AIPICK
+        return _AVAIL
+
+    def _rebuild_hero_grid():
+        hero_grid.clear_widgets()
+        role_filter = filter_state['role']
+        roles_to_show = [role_filter] if role_filter else ROLE_ORDER
+        banned_or_picked = (set(draft['player_bans']) | set(draft['ai_bans']) |
+                            {h[0] for h in draft['player_picks'].values()} |
+                            {h[0] for h in draft['ai_picks']})
+        for role in roles_to_show:
+            for hero in HEROES[role]:
+                hname = hero[0]
+                if hname in all_hero_btns:
+                    # reuse existing button
+                    btn = all_hero_btns[hname]
+                else:
+                    btn = Button(text=hname, font_size='9sp', background_normal='',
+                                 size_hint_y=None, height=30)
+                    btn.bind(on_press=lambda _, h=hero, r=role: _on_hero_click(r, h))
+                    all_hero_btns[hname] = btn
+                btn.background_color = _hero_color(hname)
+                btn.disabled = hname in banned_or_picked
+                hero_grid.add_widget(btn)
+
+    _rebuild_hero_grid()
+
+    # ── Draft logic ───────────────────────────────────────────────────────────
+    start_btn_ref = [None]   # filled later
+
+    def _step_desc(step_idx):
+        if step_idx >= len(DRAFT_SEQ):
+            return '[b][color=44ff88]Драфт завершён — нажми Начать матч[/color][/b]'
+        action, who, role = DRAFT_SEQ[step_idx]
+        bans_done  = sum(1 for s in DRAFT_SEQ[:step_idx] if s[0]=='ban'  and s[1]=='player')
+        picks_done = sum(1 for s in DRAFT_SEQ[:step_idx] if s[0]=='pick' and s[1]=='player')
+        if who == 'player':
+            if action == 'ban':
+                return f'[b]ВАШ БАН  {bans_done+1}/5[/b]  — кликни героя для бана'
+            else:
+                return f'[b]ВАШ ПИК  {picks_done+1}/5  →  {_ROLE_RU[role]}[/b]  — выбери героя'
+        else:
+            return f'[color=aaaaaa]AI {"банит" if action=="ban" else "пикает"}...[/color]'
+
+    def _advance():
+        """Process next step(s). If AI — auto-execute with delay."""
+        step = draft['step']
+        if step >= len(DRAFT_SEQ):
+            draft['done'] = True
+            instr_lbl.text = _step_desc(step)
+            if start_btn_ref[0]:
+                start_btn_ref[0].disabled = False
+                start_btn_ref[0].background_color = (0.10, 0.65, 0.22, 1)
+            return
+
+        action, who, role = DRAFT_SEQ[step]
+        instr_lbl.text = _step_desc(step)
+
+        if who == 'ai':
+            _Clock.schedule_once(lambda dt: _do_ai_step(), 0.55)
+        # else: wait for player click
+
+    def _do_ai_step():
+        step = draft['step']
+        if step >= len(DRAFT_SEQ):
+            return
+        action, who, role = DRAFT_SEQ[step]
+        if who != 'ai':
+            return
+
+        all_banned_picked = (set(draft['player_bans']) | set(draft['ai_bans']) |
+                             {h[0] for h in draft['player_picks'].values()} |
+                             {h[0] for h in draft['ai_picks']})
+
+        if action == 'ban':
+            available = {h[0] for r in ROLE_ORDER for h in HEROES[r]
+                         if h[0] not in all_banned_picked}
+            banned = ai_draft_bans(available, 1, draft['player_picks'])
+            if banned:
+                hname = banned[0]
+                draft['ai_bans'].append(hname)
+                idx = len(draft['ai_bans']) - 1
+                if idx < 5:
+                    ai_ban_slots[idx].text = hname[:10]
+                    ai_ban_slots[idx].background_color = _AIBANN
+        else:
+            ai_roles_needed = ROLE_ORDER
+            already_ai = {h[0] for h in draft['ai_picks']}
+            # Pick for the next needed AI role
+            ai_role_idx = _ai_pick_idx[0]
+            if ai_role_idx < len(ai_roles_needed):
+                needed_role = ai_roles_needed[ai_role_idx]
+                result = ai_draft_picks(all_banned_picked, [needed_role])
+                if result and needed_role in result:
+                    h = result[needed_role]
+                    draft['ai_picks'].append(h)
+                    _ai_pick_idx[0] += 1
+                    idx = len(draft['ai_picks']) - 1
+                    if idx < 5:
+                        ai_pick_slots[idx].text = h[0][:10]
+                        ai_pick_slots[idx].background_color = _AIPICK
+
+        draft['step'] += 1
+        _rebuild_hero_grid()
+        _advance()
+
+    def _on_hero_click(role, hero):
+        if draft['done']:
+            return
+        step = draft['step']
+        if step >= len(DRAFT_SEQ):
+            return
+        action, who, role_needed = DRAFT_SEQ[step]
+        if who != 'player':
+            return
+
+        hname = hero[0]
+        all_used = (set(draft['player_bans']) | set(draft['ai_bans']) |
+                    {h[0] for h in draft['player_picks'].values()} |
+                    {h[0] for h in draft['ai_picks']})
+        if hname in all_used:
+            return
+
+        if action == 'ban':
+            draft['player_bans'].append(hname)
+            idx = len(draft['player_bans']) - 1
+            if idx < 5:
+                p_ban_slots[idx].text = hname[:10]
+                p_ban_slots[idx].background_color = _PBANN
+        else:
+            # role_needed comes from DRAFT_SEQ
+            actual_role = role_needed
+            # Also accept pick if hero is in that role's pool
+            draft['player_picks'][actual_role] = hero
+            p_pick_slots[actual_role].text = hname[:8]
+            p_pick_slots[actual_role].background_color = _PPICK
+
+        draft['step'] += 1
+        _rebuild_hero_grid()
+        _advance()
 
     body.add_widget(right)
     root.add_widget(body)
 
     # ── Buttons ───────────────────────────────────────────────────────────────
-    btn_row = BoxLayout(size_hint_y=None, height=50, spacing=8)
+    btn_row = BoxLayout(size_hint_y=None, height=48, spacing=8)
 
     popup = Popup(
         title='', content=root,
@@ -1639,37 +1804,43 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     popup.title_bar_height = 0
 
     def _confirm(_):
-        # Save strategies to DB
+        # Fill any unpicked roles with random available heroes
+        all_banned = set(draft['player_bans']) | set(draft['ai_bans'])
+        for role in ROLE_ORDER:
+            if role not in draft['player_picks']:
+                pool = [h for h in HEROES[role] if h[0] not in all_banned]
+                draft['player_picks'][role] = _rnd.choice(pool) if pool else HEROES[role][0]
         try:
             _c2 = sqlite3.connect(db_name)
             _c2.execute(
-                "UPDATE teams SET strat_early=?, strat_mid=?, strat_late=? WHERE name=?",
+                "UPDATE teams SET strat_early=?,strat_mid=?,strat_late=? WHERE name=?",
                 (strat_state.get('early', 'safe_farm'),
                  strat_state.get('mid',   'map_control'),
-                 strat_state.get('late',  'teamfight'),
-                 my_team),
+                 strat_state.get('late',  'teamfight'), my_team),
             )
             _c2.commit(); _c2.close()
         except Exception:
             pass
         popup.dismiss()
-        on_confirm(dict(picks), True)
+        on_confirm(dict(draft['player_picks']), True)
 
     def _skip(_):
         popup.dismiss()
         on_confirm(None, False)
 
-    start_btn = Button(text='Начать матч', font_size='15sp', background_normal='',
-                       background_color=(0.15, 0.60, 0.22, 1))
-    skip_btn  = Button(text='Авто', font_size='15sp', background_normal='',
-                       background_color=(0.35, 0.25, 0.10, 1), size_hint_x=0.3)
+    start_btn = Button(text='Начать матч', font_size='14sp', background_normal='',
+                       background_color=(0.25, 0.25, 0.28, 1), disabled=True)
+    skip_btn  = Button(text='Авто (пропустить)', font_size='13sp', background_normal='',
+                       background_color=(0.35, 0.25, 0.10, 1), size_hint_x=0.4)
     start_btn.bind(on_press=_confirm)
     skip_btn.bind(on_press=_skip)
+    start_btn_ref[0] = start_btn
     btn_row.add_widget(start_btn)
     btn_row.add_widget(skip_btn)
     root.add_widget(btn_row)
 
     popup.open()
+    _advance()  # kick off first step
 
 
 # ── TournamentPopup ───────────────────────────────────────────────────────────
