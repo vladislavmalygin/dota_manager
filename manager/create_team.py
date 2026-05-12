@@ -10,6 +10,7 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.spinner import Spinner
 from kivy.uix.label import Label
 
+import ui_theme as T
 from core import DotaPopup
 
 REGIONS = ['EEU', 'WEU', 'NA', 'SA', 'China', 'SEA']
@@ -18,10 +19,13 @@ REGIONS = ['EEU', 'WEU', 'NA', 'SA', 'China', 'SEA']
 class CreateTeamPopup(Popup):
     def __init__(self, **kwargs):
         super(CreateTeamPopup, self).__init__(**kwargs)
-        self.title = "Создание команды"
+        self.title = ''
         self.size_hint = (1, 1)
 
-        layout = BoxLayout(orientation='vertical', padding=10, spacing=6)
+        root = BoxLayout(orientation='vertical', padding=14, spacing=8)
+        root.add_widget(T.make_stepper(['Персонаж', 'Команда', 'Игра'], 1))
+
+        layout = BoxLayout(orientation='vertical', spacing=6)
 
         self.team_name_input = TextInput(hint_text='Название команды', size_hint_y=None, height=44)
         layout.add_widget(self.team_name_input)
@@ -59,7 +63,8 @@ class CreateTeamPopup(Popup):
                                on_press=self.create_team)
         layout.add_widget(create_button)
 
-        self.content = layout
+        root.add_widget(layout)
+        self.content = root
 
     def set_logo(self, instance):
         self.logo_display.source = instance.background_normal
@@ -87,7 +92,7 @@ class CreateTeamPopup(Popup):
               (name, logo, country, region, owner, manager,
                carry, mid, offlane, partial_support, full_support,
                budget, player)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2000000, 'yes')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 500000, 'yes')
         ''', (team_name, logo_filename, region, region,
               'rational', manager_nickname,
               '', '', '', '', ''))

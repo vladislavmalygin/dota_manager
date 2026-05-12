@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import datetime
 
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
@@ -11,6 +12,19 @@ from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.image import Image
 
 from core import DotaPopup
+
+
+def _relative_mtime(path):
+    """Real-world relative time since last save."""
+    try:
+        delta = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(path))).total_seconds()
+        if delta < 60:      return 'только что'
+        if delta < 3600:    return f'{int(delta // 60)} мин. назад'
+        if delta < 86400:   return f'{int(delta // 3600)} ч. назад'
+        if delta < 604800:  return f'{int(delta // 86400)} дн. назад'
+        return datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d.%m.%Y')
+    except Exception:
+        return '—'
 
 
 class LoadSavePopup(Popup):
@@ -78,8 +92,9 @@ class LoadSavePopup(Popup):
             else:
                 box.add_widget(Label(text='?', size_hint_x=None, width=80))
 
+            saved_ago = _relative_mtime(path)
             btn = ToggleButton(
-                text=f'[b]{name}[/b]\nДата: {game_date}  |  Рейтинг: {int(rating)}  |  Бюджет: ${budget:,}',
+                text=f'[b]{name}[/b]\nИгровая дата: {game_date}  |  Рейтинг: {int(rating)}  |  Бюджет: ${budget:,}\n[color=#888]Сохранено: {saved_ago}[/color]',
                 markup=True, group='saves', halign='left', valign='middle',
                 size_hint=(1, None), height=86,
             )

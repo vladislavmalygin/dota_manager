@@ -236,7 +236,7 @@ def _pad_to_16(result, db_name):
     conn.close()
 
 
-def _build_teams_and_pool(db_name):
+def _build_teams_and_pool(db_name, region_filter=None):
     """Shared setup for both invites() and invites_with_events()."""
     conn = sqlite3.connect(db_name)
     cur = conn.cursor()
@@ -253,17 +253,19 @@ def _build_teams_and_pool(db_name):
     """)
     all_teams = [(r[0].strip(), r[1], r[2] or 'WEU') for r in cur.fetchall()]
     conn.close()
+    if region_filter:
+        all_teams = [t for t in all_teams if t[2] == region_filter]
     return player_team, all_teams
 
 
-def invites(db_name):
+def invites(db_name, region_filter=None):
     """
     16 teams for a tournament:
       - Top 8 by rating → direct invites
       - 8 spots via regional qualifiers
     Player's team competes fairly — no guarantee.
     """
-    player_team, all_teams = _build_teams_and_pool(db_name)
+    player_team, all_teams = _build_teams_and_pool(db_name, region_filter)
 
     if len(all_teams) <= 16:
         result = [t[0] for t in all_teams]
@@ -293,11 +295,11 @@ def invites(db_name):
     return result[:16]
 
 
-def invites_with_events(db_name):
+def invites_with_events(db_name, region_filter=None):
     """Like invites() but also generates qualifier match events if player is in qualifier pool.
     Returns (qualified_16, qualifier_events, player_qualified_bool).
     """
-    player_team, all_teams = _build_teams_and_pool(db_name)
+    player_team, all_teams = _build_teams_and_pool(db_name, region_filter)
     player_teams = {player_team} if player_team else set()
 
     if len(all_teams) <= 16:

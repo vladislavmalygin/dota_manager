@@ -7,18 +7,26 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.image import Image
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, RoundedRectangle, Rectangle
+from kivy.clock import Clock
+
+import ui_theme as T
 from team_choice import TeamChoicePopup
+
+_PORTRAITS = [
+    'images/portrait4.png', 'images/portrait5.png', 'images/portrait6.png',
+    'images/portrait7.png', 'images/portrait8.png', 'images/portrait9.png',
+    'images/portrait10.png',
+]
 
 
 def _randomize_skill_caps(db_name):
     """Randomize skill_cap only for players that have the default/unset cap."""
     conn = sqlite3.connect(db_name)
     cur = conn.cursor()
-    # Only randomize players whose skill_cap matches the migration default (200)
-    # or is NULL — preserves values manually set in DB editor
     cur.execute(
         "SELECT id, micro_skills, macro_skills, soft_skills, skill_cap FROM players "
         "WHERE skill_cap IS NULL OR skill_cap = 200"
@@ -44,87 +52,176 @@ def _randomize_skill_caps(db_name):
 class NewGamePopup(Popup):
     nickname = 'nickname'
     new_db_name = 'new_db_name'
+
     def __init__(self, **kwargs):
-        super(NewGamePopup, self).__init__(**kwargs)
-        self.title = "Создание нового персонажа"
+        super().__init__(**kwargs)
+        self.title = ''
         self.size_hint = (1, 1)
+        self.selected_portrait = None
 
-        layout = BoxLayout(orientation='vertical', padding=10)
+        root = BoxLayout(orientation='vertical', padding=14, spacing=8)
 
-        # Поля для ввода имени и фамилии
-        self.name_input = TextInput(hint_text='Имя', multiline=False)
-        self.surname_input = TextInput(hint_text='Фамилия', multiline=False)
-        self.nickname_input = TextInput(hint_text='Никнейм', multiline=False)
+        # ── Step indicator ────────────────────────────────────
+        root.add_widget(T.make_stepper(['Персонаж', 'Команда', 'Игра'], 0))
 
-        layout.add_widget(Label(text='Введите ваше имя:'))
-        layout.add_widget(self.name_input)
-        layout.add_widget(Label(text='Введите вашу фамилию:'))
-        layout.add_widget(self.surname_input)
-        layout.add_widget(Label(text='Введите ваш никнейм:'))
-        layout.add_widget(self.nickname_input)
+        # ── Main split ────────────────────────────────────────
+        split = BoxLayout(orientation='horizontal', spacing=14)
 
-        # Выбор портрета
-        self.portrait_selector = BoxLayout(size_hint_y=None, height=100, spacing=10)
-        self.selected_portrait = None  # Для хранения выбранного портрета
+        # LEFT: inputs + portrait grid
+        left = BoxLayout(orientation='vertical', size_hint_x=0.55, spacing=8)
 
-        portraits = ['images/portrait4.png', 'images/portrait5.png', 'images/portrait6.png', 'images/portrait7.png',
-                     'images/portrait8.png','images/portrait9.png','images/portrait10.png']
-        for portrait in portraits:
-            img = Image(source=portrait, size_hint_x=None, width=100)
-            img.bind(on_touch_down=lambda instance, touch: self.select_portrait(instance, touch))
-            self.portrait_selector.add_widget(img)
+        self.name_input     = self._inp('Имя')
+        self.surname_input  = self._inp('Фамилия')
+        self.nickname_input = self._inp('Никнейм')
+        for inp in (self.name_input, self.surname_input, self.nickname_input):
+            inp.bind(text=self._update_preview)
+            left.add_widget(inp)
 
-        layout.add_widget(Label(text='Выберите портрет:'))
-        layout.add_widget(self.portrait_selector)
+        left.add_widget(Label(
+            text='Выберите портрет:', color=T.TEXT_LABEL,
+            size_hint_y=None, height=26, halign='left',
+        ))
 
-        # Кнопка создания персонажа
-        create_button = Button(text='Создать', on_press=self.create_character)
-        layout.add_widget(create_button)
+        portrait_grid = GridLayout(
+            cols=4, size_hint_y=None, spacing=6, padding=(0, 2),
+        )
+        portrait_grid.bind(minimum_height=portrait_grid.setter('height'))
+        for src in _PORTRAITS:
+            img = Image(source=src, size_hint=(None, None), size=(80, 80))
+            img.bind(on_touch_down=lambda inst, touch, p=img: self.select_portrait(p, touch))
+            portrait_grid.add_widget(img)
+        left.add_widget(portrait_grid)
 
-        self.content = layout
+        split.add_widget(left)
 
+        # RIGHT: portrait preview + name preview
+        right = BoxLayout(
+            orientation='vertical', size_hint_x=0.45,
+            spacing=8, padding=(8, 0, 0, 0),
+        )
+
+        preview_frame = BoxLayout(orientation='vertical')
+        with preview_frame.canvas.before:
+            Color(*T.BG_CARD)
+            _bg = RoundedRectangle(radius=[8])
+        preview_frame.bind(
+            pos =lambda w, _: setattr(_bg, 'pos',  w.pos),
+            size=lambda w, _: setattr(_bg, 'size', w.size),
+        )
+        self._preview_img = Image(
+            source='', allow_stretch=True, keep_ratio=True,
+            size_hint=(1, 1),
+        )
+        preview_frame.add_widget(self._preview_img)
+        right.add_widget(preview_frame)
+
+        self._preview_name = Label(
+            text=f'[color={T.markup_color(T.TEXT_DIM)}]Выберите портрет[/color]',
+            markup=True,
+            font_size=T.FS_TITLE, color=T.TEXT_MAIN,
+            size_hint_y=None, height=56,
+            halign='center', valign='middle',
+        )
+        self._preview_name.bind(size=self._preview_name.setter('text_size'))
+        right.add_widget(self._preview_name)
+
+        split.add_widget(right)
+        root.add_widget(split)
+
+        # ── Bottom bar: error + create button ─────────────────
+        bottom = BoxLayout(size_hint_y=None, height=48, spacing=8)
+        self._error_lbl = Label(
+            text='', color=T.NEGATIVE,
+            halign='left', valign='middle',
+        )
+        self._error_lbl.bind(size=self._error_lbl.setter('text_size'))
+        bottom.add_widget(self._error_lbl)
+        bottom.add_widget(Button(
+            text='Создать ►',
+            size_hint=(None, 1), width=180,
+            background_color=T.BTN_PRIMARY,
+            background_normal='',
+            on_press=self.create_character,
+        ))
+        root.add_widget(bottom)
+
+        self.content = root
+
+    def _inp(self, hint):
+        return TextInput(
+            hint_text=hint, multiline=False,
+            size_hint_y=None, height=44,
+            background_color=T.BG_CARD,
+            foreground_color=T.TEXT_MAIN,
+            hint_text_color=T.TEXT_DIM,
+            cursor_color=T.ACCENT,
+        )
+
+    def _update_preview(self, *args):
+        n = self.name_input.text.strip()
+        s = self.surname_input.text.strip()
+        k = self.nickname_input.text.strip()
+        parts = []
+        if n or s:
+            parts.append(f'[b]{n} {s}'.strip() + '[/b]')
+        if k:
+            parts.append(f'[color={T.markup_color(T.ACCENT)}]{k}[/color]')
+        if parts:
+            self._preview_name.text = '\n'.join(parts)
+        else:
+            self._preview_name.text = (
+                f'[color={T.markup_color(T.TEXT_DIM)}]Введите данные[/color]'
+            )
 
     def select_portrait(self, instance, touch):
-        if instance.collide_point(touch.x, touch.y):
-            # Удаляем выделение с предыдущего портрета
-            if self.selected_portrait:
-                self.selected_portrait.canvas.before.clear()
-
-            # Устанавливаем новый выбранный портрет
-            self.selected_portrait = instance
-
-            # Выделяем новый портрет рамочкой
-            with instance.canvas.before:
-                Color(255, 246, 0, 1)  # Черная рамка
-                self.rect = RoundedRectangle(pos=(instance.x - 5, instance.y - 5),
-                                             size=(instance.width + 10, instance.height + 10))
+        if not instance.collide_point(touch.x, touch.y):
+            return
+        if self.selected_portrait and self.selected_portrait is not instance:
+            self.selected_portrait.canvas.before.clear()
+        self.selected_portrait = instance
+        instance.canvas.before.clear()
+        with instance.canvas.before:
+            Color(1.0, 0.96, 0, 1)
+            self._portrait_hl = RoundedRectangle(
+                pos=(instance.x - 4, instance.y - 4),
+                size=(instance.width + 8, instance.height + 8),
+                radius=[4],
+            )
+        self._preview_img.source = instance.source
+        self._preview_img.reload()
 
     def create_character(self, instance):
-        name = self.name_input.text
-        surname = self.surname_input.text
+        name    = self.name_input.text.strip()
+        surname = self.surname_input.text.strip()
         global nickname
-        nickname = self.nickname_input.text
+        nickname = self.nickname_input.text.strip()
 
-
-        if not name or not surname or not nickname or not self.selected_portrait:
-            print("Пожалуйста, заполните все поля и выберите портрет.")
+        if not name or not surname or not nickname:
+            self._error_lbl.text = 'Заполните имя, фамилию и никнейм.'
             return
+        if not self.selected_portrait:
+            self._error_lbl.text = 'Выберите портрет.'
+            return
+        self._error_lbl.text = ''
 
-        print(f"Создан персонаж: {name} {surname}, Никнейм: {nickname}")
-
-
-        # Создание имени файла для новой базы данных
         global new_db_name
         new_db_name = f"saves/{name}_{surname}.db"
 
-        # Убедитесь, что папка 'saves' существует, если нет - создайте её
+        self._loading = Popup(
+            title='', size_hint=(0.45, 0.20), auto_dismiss=False,
+            content=Label(text='Создание игры...', color=T.TEXT_MAIN),
+        )
+        self._loading.open()
+        Clock.schedule_once(lambda dt: self._do_create(name, surname, nickname), 0.15)
+
+    def _do_create(self, name, surname, nick):
+        global new_db_name
+
         if not os.path.exists('saves'):
             os.makedirs('saves')
 
-        # Копируем шаблон ПЕРВЫМ — пользовательские правки из DB-редактора сохранятся
         shutil.copy('start_database.db', new_db_name)
 
-        # Миграции запускаем на КОПИИ, не на шаблоне
         from db_migrate2        import migrate as _m2
         from db_migrate3        import migrate as _m3
         from db_migrate4        import migrate as _m4
@@ -149,6 +246,7 @@ class NewGamePopup(Popup):
         from db_fix_orphans     import fix as _fix
         from core               import _fix_contracts, _fix_team_regions
         from logic.sponsors     import ensure_sponsors_table
+
         _m2(new_db_name);  _m3(new_db_name);  _m4(new_db_name)
         _m5(new_db_name);  _m6(new_db_name);  _m7(new_db_name)
         _m8(new_db_name);  _m9(new_db_name);  _m10(new_db_name)
@@ -160,32 +258,23 @@ class NewGamePopup(Popup):
         _fix_contracts(new_db_name)
         _fix_team_regions(new_db_name)
         ensure_sponsors_table(new_db_name)
-
-        # Рандомизация skill_cap для новых игроков (пропускаем у кого уже задано)
         _randomize_skill_caps(new_db_name)
 
-        # Сохранение персонажа в новую базу данных
         conn = sqlite3.connect(new_db_name)
-        cursor = conn.cursor()
-
-        cursor.execute('''CREATE TABLE IF NOT EXISTS characters (
-                            id INTEGER PRIMARY KEY,
-                            name TEXT,
-                            surname TEXT,
-                            nickname TEXT,
-                            portrait TEXT)''')
-
-        cursor.execute("INSERT INTO characters (name, surname, nickname, portrait) VALUES (?, ?, ?, ?)",
-                       (name, surname, nickname, self.selected_portrait.source))
-
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS characters (
+                         id INTEGER PRIMARY KEY,
+                         name TEXT, surname TEXT,
+                         nickname TEXT, portrait TEXT)''')
+        cur.execute(
+            "INSERT INTO characters (name, surname, nickname, portrait) VALUES (?,?,?,?)",
+            (name, surname, nick, self.selected_portrait.source),
+        )
         conn.commit()
         conn.close()
 
-        # Закрыть попап после создания персонажа
+        self._loading.dismiss()
         self.dismiss()
-
-
-        # Открыть новое окно с выбором создания команды или выбора существующей
         TeamChoicePopup().open()
 
     def get_db_name(self):

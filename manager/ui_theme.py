@@ -156,6 +156,49 @@ def make_chip(text, bg=BTN_NEUTRAL, fg=TEXT_MAIN, font_size=FS_TINY):
     return lbl
 
 
+def skill_bar_text(v, width=6):
+    """Compact markup bar + number for skill display: ████░░ 82"""
+    filled = max(0, min(width, int(v / 100 * width)))
+    empty  = width - filled
+    c   = markup_color(skill_color(v))
+    dim = markup_color(TEXT_DIM)
+    bar = f'[color={c}]{"█" * filled}[/color][color={dim}]{"█" * empty}[/color]'
+    return f'{bar} {v}'
+
+
+def make_stepper(steps, active_idx, height=38):
+    """Horizontal step indicator. active_idx is 0-based."""
+    from kivy.uix.boxlayout import BoxLayout
+    from kivy.uix.label import Label
+    from kivy.graphics import Color, RoundedRectangle
+
+    row = BoxLayout(orientation='horizontal', size_hint_y=None, height=height,
+                    padding=(12, 0), spacing=0)
+    with row.canvas.before:
+        Color(*BG_HEADER)
+        _r = RoundedRectangle(radius=[4])
+    row.bind(pos =lambda w, _: setattr(_r, 'pos',  w.pos),
+             size=lambda w, _: setattr(_r, 'size', w.size))
+
+    for i, step in enumerate(steps):
+        if i == active_idx:
+            text = f'[b][color={markup_color(ACCENT)}]● {step}[/color][/b]'
+        elif i < active_idx:
+            text = f'[color={markup_color(POSITIVE)}]✓ {step}[/color]'
+        else:
+            text = f'[color={markup_color(TEXT_DIM)}]○ {step}[/color]'
+        lbl = Label(text=text, markup=True, size_hint_x=1,
+                    halign='center', valign='middle', font_size=FS_SMALL)
+        lbl.bind(size=lbl.setter('text_size'))
+        row.add_widget(lbl)
+        if i < len(steps) - 1:
+            sep = Label(text=f'[color={markup_color(TEXT_DIM)}]──[/color]',
+                        markup=True, size_hint_x=None, width=28,
+                        halign='center', valign='middle', font_size=FS_SMALL)
+            row.add_widget(sep)
+    return row
+
+
 def make_row_separator(height=1):
     from kivy.uix.widget import Widget
     from kivy.graphics import Color, Rectangle

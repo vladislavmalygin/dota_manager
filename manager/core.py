@@ -54,6 +54,7 @@ from db_migrate25 import migrate as _migrate25
 from db_migrate26 import migrate as _migrate26
 from db_migrate27 import migrate as _migrate27
 from db_migrate28 import migrate as _migrate28
+from db_migrate29 import migrate as _migrate29
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -1031,6 +1032,7 @@ class MainWindow(BoxLayout):
         _migrate26(db_name)
         _migrate27(db_name)
         _migrate28(db_name)
+        _migrate29(db_name)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""

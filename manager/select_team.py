@@ -10,6 +10,7 @@ from kivy.uix.image import Image
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 
+import ui_theme as T
 from core import DotaPopup
 
 _ACCENT  = (0.35, 0.85, 1.00, 1)
@@ -58,6 +59,14 @@ def _lbl(text, height=30, color=_WHITE, bold=False, halign='left'):
     lbl = Label(text=t, markup=True,
                 size_hint_y=None, height=height,
                 color=color, halign=halign, valign='middle')
+    lbl.bind(size=lbl.setter('text_size'))
+    return lbl
+
+
+def _cell_markup(text, sw, font_size='11sp'):
+    """Label cell with markup enabled (for skill bars)."""
+    lbl = Label(text=text, markup=True, size_hint_x=sw,
+                halign='center', valign='middle', font_size=font_size)
     lbl.bind(size=lbl.setter('text_size'))
     return lbl
 
@@ -242,8 +251,8 @@ class SelectTeamPopup(Popup):
         # column header
         chdr = _BgBox(bg=(0.08, 0.10, 0.14, 1), orientation='horizontal',
                       size_hint_y=None, height=24, padding=(4, 0))
-        for txt, sw in [('Роль', 0.18), ('Игрок', 0.38),
-                        ('Mic', 0.12), ('Mac', 0.12), ('Sft', 0.12), ('Зарп', 0.08)]:
+        for txt, sw in [('Роль', 0.15), ('Игрок', 0.32),
+                        ('Micro', 0.17), ('Macro', 0.17), ('Soft', 0.15), ('Зарп', 0.04)]:
             l = Label(text=f'[b]{txt}[/b]', markup=True, size_hint_x=sw,
                       color=_ACCENT, halign='center', valign='middle', font_size='11sp')
             l.bind(size=l.setter('text_size'))
@@ -276,16 +285,16 @@ class SelectTeamPopup(Popup):
                         l.bind(size=l.setter('text_size'))
                         return l
 
-                    row.add_widget(_cell(ROLE_LABELS.get(role_col, role_col), 0.18, _DIM))
+                    row.add_widget(_cell(ROLE_LABELS.get(role_col, role_col), 0.15, _DIM))
                     if face_p:
                         row.add_widget(Image(source=face_p,
                                             size_hint=(None, 1), width=34))
                     name_str = f'{nick}\n{fname} {lname[:6]}.'
-                    row.add_widget(_cell(name_str, 0.38))
-                    row.add_widget(_cell(str(micro), 0.12, SKILL_COLOR(micro)))
-                    row.add_widget(_cell(str(macro), 0.12, SKILL_COLOR(macro)))
-                    row.add_widget(_cell(str(soft),  0.12, SKILL_COLOR(soft)))
-                    row.add_widget(_cell(f'${wage//1000}k', 0.08, (0.9, 0.85, 0.5, 1)))
+                    row.add_widget(_cell(name_str, 0.32))
+                    row.add_widget(_cell_markup(T.skill_bar_text(micro), 0.17))
+                    row.add_widget(_cell_markup(T.skill_bar_text(macro), 0.17))
+                    row.add_widget(_cell_markup(T.skill_bar_text(soft),  0.15))
+                    row.add_widget(_cell(f'${wage//1000}k', 0.04, (0.9, 0.85, 0.5, 1)))
             else:
                 row.add_widget(_lbl(
                     f'  {ROLE_LABELS.get(role_col, role_col)}: — свободно —',

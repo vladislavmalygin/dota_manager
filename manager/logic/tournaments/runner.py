@@ -316,9 +316,38 @@ def _generate_minor(minor_teams, db_name, player_teams, gp_fn):
 
 # ── main generator ────────────────────────────────────────────────────────────
 
+_DPC_REGION_MAP = {
+    'EEU': 'EEU',
+    'WEU': 'WEU',
+    'SEA': 'SEA',
+    'CN':  'China',
+    'NA':  'NA',
+    'SA':  'SA',
+}
+
+
+def _dpc_region_filter(tournament_name):
+    """Return DB region string if tournament is a DPC regional league, else None."""
+    import re
+    m = re.search(r'\bDPC\s+(EEU|WEU|SEA|CN|NA|SA)\b', tournament_name or '')
+    if m:
+        return _DPC_REGION_MAP.get(m.group(1))
+    return None
+
+
 def generate_tournament_events(db_name, tournament_id):
+    conn_t = sqlite3.connect(db_name)
+    t_row = conn_t.execute(
+        "SELECT name FROM tournaments WHERE id=?", (tournament_id,)
+    ).fetchone()
+    conn_t.close()
+    tournament_name = t_row[0] if t_row else ''
+    region_filter = _dpc_region_filter(tournament_name)
+
     player_teams = get_teams_with_player_yes(db_name)
-    qualified_16, qualifier_events, player_qualified = invites_with_events(db_name)
+    qualified_16, qualifier_events, player_qualified = invites_with_events(
+        db_name, region_filter=region_filter
+    )
     qualified_16 = qualified_16[:16]
     direct_8     = qualified_16[:8]
     qualifier_8  = qualified_16[8:]
@@ -761,60 +790,60 @@ def increment_player_fatigue(db_name, team_name, amount=8):
 # ── Season schedule ───────────────────────────────────────────────────────────
 
 SEASON_TOURNAMENTS = [
-    ("ESL One Bangkok 2024",       "2024-11-10", "2024-11-17",  500_000,   500),
-    ("DreamLeague Season 25",      "2025-01-12", "2025-01-19", 1_000_000, 1000),
-    ("ESL One Birmingham 2025",    "2025-03-09", "2025-03-16",  500_000,   500),
-    ("PGL Wallachia Season 3",     "2025-04-27", "2025-05-04", 1_000_000, 1000),
-    ("The International 2025",     "2025-08-02", "2025-08-14", 1_600_000, 1500),
-    ("PGL Bucharest 2025",         "2025-09-21", "2025-09-28",  500_000,   500),
-    ("ESL One Kuala Lumpur 2025",  "2025-11-02", "2025-11-09",  500_000,   500),
-    ("DreamLeague Season 26",      "2025-12-07", "2025-12-14", 1_000_000, 1000),
-    ("ESL One Bangkok 2026",       "2026-01-25", "2026-02-01",  500_000,   500),
-    ("PGL Wallachia Season 4",     "2026-03-08", "2026-03-15", 1_000_000, 1000),
-    ("DreamLeague Season 27",      "2026-04-26", "2026-05-03", 1_000_000, 1000),
-    ("ESL One Birmingham 2026",    "2026-06-07", "2026-06-14",  500_000,   500),
-    ("The International 2026",     "2026-08-01", "2026-08-13", 1_600_000, 1500),
-    ("PGL Bucharest 2026",         "2026-09-20", "2026-09-27",  500_000,   500),
-    ("ESL One Kuala Lumpur 2026",  "2026-11-01", "2026-11-08",  500_000,   500),
-    ("DreamLeague Season 28",      "2026-12-06", "2026-12-13", 1_000_000, 1000),
-    ("ESL One Bangkok 2027",       "2027-01-24", "2027-01-31",  500_000,   500),
-    ("PGL Wallachia Season 5",     "2027-03-07", "2027-03-14", 1_000_000, 1000),
-    ("DreamLeague Season 29",      "2027-04-25", "2027-05-02", 1_000_000, 1000),
-    ("ESL One Birmingham 2027",    "2027-06-06", "2027-06-13",  500_000,   500),
-    ("The International 2027",     "2027-08-07", "2027-08-19", 1_800_000, 1500),
-    ("PGL Bucharest 2027",         "2027-09-19", "2027-09-26",  500_000,   500),
-    ("ESL One Kuala Lumpur 2027",  "2027-10-31", "2027-11-07",  500_000,   500),
-    ("DreamLeague Season 30",      "2027-12-05", "2027-12-12", 1_000_000, 1000),
-    ("ESL One Bangkok 2028",       "2028-01-23", "2028-01-30",  500_000,   500),
-    ("PGL Wallachia Season 6",     "2028-03-05", "2028-03-12", 1_000_000, 1000),
-    ("DreamLeague Season 31",      "2028-04-23", "2028-04-30", 1_000_000, 1000),
-    ("ESL One Birmingham 2028",    "2028-06-04", "2028-06-11",  500_000,   500),
-    ("The International 2028",     "2028-08-05", "2028-08-17", 2_000_000, 1500),
-    ("PGL Bucharest 2028",         "2028-09-18", "2028-09-25",  500_000,   500),
-    ("ESL One Kuala Lumpur 2028",  "2028-10-30", "2028-11-06",  500_000,   500),
-    ("DreamLeague Season 32",      "2028-12-04", "2028-12-11", 1_000_000, 1000),
-    ("ESL One Bangkok 2029",       "2029-01-22", "2029-01-29",  500_000,   500),
-    ("PGL Wallachia Season 7",     "2029-03-04", "2029-03-11", 1_000_000, 1000),
-    ("DreamLeague Season 33",      "2029-04-22", "2029-04-29", 1_000_000, 1000),
-    ("ESL One Birmingham 2029",    "2029-06-03", "2029-06-10",  500_000,   500),
-    ("The International 2029",     "2029-08-04", "2029-08-16", 2_000_000, 1500),
-    ("PGL Bucharest 2029",         "2029-09-17", "2029-09-24",  500_000,   500),
-    ("ESL One Kuala Lumpur 2029",  "2029-10-29", "2029-11-05",  500_000,   500),
-    ("DreamLeague Season 34",      "2029-12-03", "2029-12-10", 1_000_000, 1000),
-    ("ESL One Bangkok 2030",       "2030-01-21", "2030-01-28",  500_000,   500),
-    ("PGL Wallachia Season 8",     "2030-03-03", "2030-03-10", 1_000_000, 1000),
-    ("DreamLeague Season 35",      "2030-04-21", "2030-04-28", 1_000_000, 1000),
-    ("The International 2030",     "2030-08-03", "2030-08-15", 2_200_000, 1500),
+    ("ESL One Bangkok 2024",       "2024-11-10", "2024-11-17",  500_000,   2858),
+    ("DreamLeague Season 25",      "2025-01-12", "2025-01-19", 1_000_000, 5715),
+    ("ESL One Birmingham 2025",    "2025-03-09", "2025-03-16",  500_000,   2858),
+    ("PGL Wallachia Season 3",     "2025-04-27", "2025-05-04", 1_000_000, 5715),
+    ("The International 2025",     "2025-08-02", "2025-08-14", 1_600_000, 8572),
+    ("PGL Bucharest 2025",         "2025-09-21", "2025-09-28",  500_000,   2858),
+    ("ESL One Kuala Lumpur 2025",  "2025-11-02", "2025-11-09",  500_000,   2858),
+    ("DreamLeague Season 26",      "2025-12-07", "2025-12-14", 1_000_000, 5715),
+    ("ESL One Bangkok 2026",       "2026-01-25", "2026-02-01",  500_000,   2858),
+    ("PGL Wallachia Season 4",     "2026-03-08", "2026-03-15", 1_000_000, 5715),
+    ("DreamLeague Season 27",      "2026-04-26", "2026-05-03", 1_000_000, 5715),
+    ("ESL One Birmingham 2026",    "2026-06-07", "2026-06-14",  500_000,   2858),
+    ("The International 2026",     "2026-08-01", "2026-08-13", 1_600_000, 8572),
+    ("PGL Bucharest 2026",         "2026-09-20", "2026-09-27",  500_000,   2858),
+    ("ESL One Kuala Lumpur 2026",  "2026-11-01", "2026-11-08",  500_000,   2858),
+    ("DreamLeague Season 28",      "2026-12-06", "2026-12-13", 1_000_000, 5715),
+    ("ESL One Bangkok 2027",       "2027-01-24", "2027-01-31",  500_000,   2858),
+    ("PGL Wallachia Season 5",     "2027-03-07", "2027-03-14", 1_000_000, 5715),
+    ("DreamLeague Season 29",      "2027-04-25", "2027-05-02", 1_000_000, 5715),
+    ("ESL One Birmingham 2027",    "2027-06-06", "2027-06-13",  500_000,   2858),
+    ("The International 2027",     "2027-08-07", "2027-08-19", 1_800_000, 8572),
+    ("PGL Bucharest 2027",         "2027-09-19", "2027-09-26",  500_000,   2858),
+    ("ESL One Kuala Lumpur 2027",  "2027-10-31", "2027-11-07",  500_000,   2858),
+    ("DreamLeague Season 30",      "2027-12-05", "2027-12-12", 1_000_000, 5715),
+    ("ESL One Bangkok 2028",       "2028-01-23", "2028-01-30",  500_000,   2858),
+    ("PGL Wallachia Season 6",     "2028-03-05", "2028-03-12", 1_000_000, 5715),
+    ("DreamLeague Season 31",      "2028-04-23", "2028-04-30", 1_000_000, 5715),
+    ("ESL One Birmingham 2028",    "2028-06-04", "2028-06-11",  500_000,   2858),
+    ("The International 2028",     "2028-08-05", "2028-08-17", 2_000_000, 8572),
+    ("PGL Bucharest 2028",         "2028-09-18", "2028-09-25",  500_000,   2858),
+    ("ESL One Kuala Lumpur 2028",  "2028-10-30", "2028-11-06",  500_000,   2858),
+    ("DreamLeague Season 32",      "2028-12-04", "2028-12-11", 1_000_000, 5715),
+    ("ESL One Bangkok 2029",       "2029-01-22", "2029-01-29",  500_000,   2858),
+    ("PGL Wallachia Season 7",     "2029-03-04", "2029-03-11", 1_000_000, 5715),
+    ("DreamLeague Season 33",      "2029-04-22", "2029-04-29", 1_000_000, 5715),
+    ("ESL One Birmingham 2029",    "2029-06-03", "2029-06-10",  500_000,   2858),
+    ("The International 2029",     "2029-08-04", "2029-08-16", 2_000_000, 8572),
+    ("PGL Bucharest 2029",         "2029-09-17", "2029-09-24",  500_000,   2858),
+    ("ESL One Kuala Lumpur 2029",  "2029-10-29", "2029-11-05",  500_000,   2858),
+    ("DreamLeague Season 34",      "2029-12-03", "2029-12-10", 1_000_000, 5715),
+    ("ESL One Bangkok 2030",       "2030-01-21", "2030-01-28",  500_000,   2858),
+    ("PGL Wallachia Season 8",     "2030-03-03", "2030-03-10", 1_000_000, 5715),
+    ("DreamLeague Season 35",      "2030-04-21", "2030-04-28", 1_000_000, 5715),
+    ("The International 2030",     "2030-08-03", "2030-08-15", 2_200_000, 8572),
 ]
 
 
 def _regional_league_templates(year):
     """Return 4 regional DPC league events for a given year."""
     return [
-        (f"DPC EEU Division I {year} S1",   f"{year}-02-10", f"{year}-02-17", 200_000, 200),
-        (f"DPC WEU Division I {year} S1",   f"{year}-02-12", f"{year}-02-19", 200_000, 200),
-        (f"DPC SEA Division I {year} S1",   f"{year}-07-08", f"{year}-07-13", 200_000, 200),
-        (f"DPC CN Division I {year} S1",    f"{year}-07-10", f"{year}-07-15", 200_000, 200),
+        (f"DPC EEU Division I {year} S1",   f"{year}-02-10", f"{year}-02-17", 200_000, 1429),
+        (f"DPC WEU Division I {year} S1",   f"{year}-02-12", f"{year}-02-19", 200_000, 1429),
+        (f"DPC SEA Division I {year} S1",   f"{year}-07-08", f"{year}-07-13", 200_000, 1429),
+        (f"DPC CN Division I {year} S1",    f"{year}-07-10", f"{year}-07-15", 200_000, 1429),
     ]
 
 
@@ -830,6 +859,11 @@ def ensure_season_tournaments(db_name):
                 "VALUES (?, ?, ?, ?, ?)",
                 (name, start, end, prize, rating),
             )
+        else:
+            cur.execute(
+                "UPDATE tournaments SET ratingpool = ? WHERE name = ?",
+                (rating, name),
+            )
     # Add regional leagues for known years
     for year in range(2024, 2031):
         for name, start, end, prize, rating in _regional_league_templates(year):
@@ -840,6 +874,11 @@ def ensure_season_tournaments(db_name):
                     (name, start, end, prize, rating),
                 )
                 existing.add(name)
+            else:
+                cur.execute(
+                    "UPDATE tournaments SET ratingpool = ? WHERE name = ?",
+                    (rating, name),
+                )
     conn.commit()
     conn.close()
 
