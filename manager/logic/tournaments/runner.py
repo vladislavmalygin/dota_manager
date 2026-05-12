@@ -1008,6 +1008,113 @@ def ensure_season_tournaments(db_name):
     conn.close()
 
 
+def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
+                        player_matches=None, game_date=None):
+    """Persist tournament results without UI.  Called by active_tournament system."""
+    if not final_ev:
+        return
+    # Guard: skip if already saved
+    conn = sqlite3.connect(db_name)
+    row = conn.execute("SELECT place1 FROM tournaments WHERE id=?", (tourn_id,)).fetchone()
+    conn.close()
+    if row and row[0] is not None:
+        return
+
+    placements      = final_ev.get('placements', {})
+    group_elim      = final_ev.get('group_eliminated', [])
+    games_played    = final_ev.get('games_played', {})
+    champion        = final_ev.get('champion', '')
+
+    save_tournament_results(tourn_id, placements, group_elim, db_name)
+
+    from logic.ai import (update_morale_after_tournament, apply_training_from_games,
+                          update_form_after_tournament, ai_transfers)
+    from ingame_interface.transfers import is_transfer_window as _itw
+
+    update_morale_after_tournament(db_name, placements, group_elim)
+
+    _season = int(game_date[:4]) if game_date else 2024
+    apply_training_from_games(db_name, games_played, season=_season,
+                              placements=placements, champion_name=champion)
+    update_form_after_tournament(db_name, placements, group_elim)
+
+    # Fatigue for player team
+    try:
+        conn2 = sqlite3.connect(db_name)
+        pt = conn2.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        conn2.close()
+        if pt:
+            n = games_played.get(pt[0].strip(), 0)
+            if n > 0:
+                increment_player_fatigue(db_name, pt[0].strip(), amount=n * 2)
+    except Exception:
+        pass
+
+    if _itw(game_date or ''):
+        ai_transfers(db_name, placements=placements, group_eliminated=group_elim)
+
+    # Player result message
+    try:
+        conn3 = sqlite3.connect(db_name)
+        pt2 = conn3.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        conn3.close()
+        if pt2:
+            my_team = pt2[0].strip()
+            place = placements.get(my_team)
+            if not place:
+                for i, (t, _) in enumerate(
+                    sorted(group_elim, key=lambda x: x[1], reverse=True)
+                ):
+                    if t == my_team:
+                        place = 9 + i
+                        break
+            if place:
+                conn4 = sqlite3.connect(db_name)
+                conn4.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f"{tourn_name} завершён. {my_team} заняла {place}-е место.",
+                     game_date or '', 'Новости'),
+                )
+                conn4.commit()
+                conn4.close()
+    except Exception:
+        pass
+
+    # Save player match logs
+    if player_matches:
+        import json as _json
+        try:
+            conn5 = sqlite3.connect(db_name)
+            conn5.execute("""
+                CREATE TABLE IF NOT EXISTS match_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    played_date TEXT, tournament TEXT, stage TEXT,
+                    team1 TEXT, team2 TEXT, winner TEXT,
+                    score_t1 INTEGER DEFAULT 0, score_t2 INTEGER DEFAULT 0,
+                    best_of INTEGER DEFAULT 1, log_json TEXT
+                )
+            """)
+            for ev in player_matches:
+                conn5.execute("""
+                    INSERT INTO match_history
+                    (played_date, tournament, stage, team1, team2, winner,
+                     score_t1, score_t2, best_of, log_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    game_date or '', tourn_name,
+                    ev.get('stage', ''),
+                    ev.get('team1', ''), ev.get('team2', ''),
+                    ev.get('winner', ''),
+                    ev.get('score_t1', 0), ev.get('score_t2', 0),
+                    ev.get('best_of', 1),
+                    _json.dumps(ev.get('match_log', [])),
+                ))
+            conn5.commit()
+            conn5.close()
+        except Exception:
+            pass
+
+
 def ensure_next_year_tournaments(db_name, year):
     """Generate a standard 8-tournament year if no main tournaments for that year exist."""
     conn = sqlite3.connect(db_name)

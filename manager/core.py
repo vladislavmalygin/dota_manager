@@ -58,6 +58,7 @@ from db_migrate29 import migrate as _migrate29
 from db_migrate30 import migrate as _migrate30
 from db_migrate31 import migrate as _migrate31
 from db_migrate32 import migrate as _migrate32
+from db_migrate33 import migrate as _migrate33
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -688,6 +689,13 @@ class MainWindow(BoxLayout):
             self._home_btn.background_color = T.NAV_ACTIVE
         self._active_inline_popup = None
         self._refresh_menu_badges()
+        # Update skip button label based on tournament state
+        if hasattr(self, '_skip_btn'):
+            at = self._get_active_tournament()
+            if at:
+                self._skip_btn.text = '>> Матч'
+            else:
+                self._skip_btn.text = '>> Турнир'
         self._build_dashboard()
 
     def _build_dashboard(self):
@@ -727,7 +735,8 @@ class MainWindow(BoxLayout):
                     avg_morale = sum(r[0] for r in rows) // len(rows)
                     total_wage = sum(r[1] for r in rows)
 
-            # Next tournament
+            # Active or next tournament
+            active_tourn = self._get_active_tournament()
             t_row = c.execute(
                 "SELECT name, start_date FROM tournaments WHERE place1 IS NULL ORDER BY start_date LIMIT 1"
             ).fetchone()
@@ -916,7 +925,176 @@ class MainWindow(BoxLayout):
         c1.add_widget(_row('Баланс/мес',
                            f'[color={_mc(bal_c)}]{sign}${balance:,}[/color]'))
 
-        if t_row:
+        if active_tourn:
+            at = active_tourn
+            queue        = at['match_queue']
+            idx          = at['match_idx']
+            total        = len(queue)
+            player_teams = at['player_teams']
+            draw_ev      = at.get('draw_ev') or {}
+            groups       = draw_ev.get('groups', [])
+            standings    = at['standings']
+
+            # Detect phase: if any played match has a playoff stage → playoff
+            _PLAYOFF_KEYWORDS = ('UB', 'LB', 'Grand', 'Гранд', 'Финал (BO3)', 'Финал (BO5)')
+            in_playoff = any(
+                any(kw in (queue[i]['result_ev'].get('stage', '')) for kw in _PLAYOFF_KEYWORDS)
+                for i in range(min(idx, len(queue)))
+            )
+
+            # Find next player match
+            next_player   = None
+            days_to_next  = 0
+            for j in range(idx, len(queue)):
+                ev = queue[j]['result_ev']
+                if ev.get('is_player_match'):
+                    next_player  = ev
+                    days_to_next = j - idx
+                    break
+
+            def _next_match_row(card):
+                if next_player:
+                    opp  = next_player['team2'] if next_player['team1'] in player_teams \
+                           else next_player['team1']
+                    when = 'Сегодня' if days_to_next == 0 else f'Через {days_to_next} дн.'
+                    card.add_widget(_row(
+                        f'[b]{when}[/b]', f'vs {opp[:16]}',
+                        rc=(1.00, 0.85, 0.30, 1),
+                    ))
+                elif idx >= total:
+                    card.add_widget(_row('', 'Завершается...', rc=T.TEXT_DIM))
+
+            if not in_playoff and len(groups) >= 2:
+                # ── Two group tables side by side ─────────────────────────────
+                c2 = _card(T.BG_CARD_TRN)
+                c2.size_hint_x = 0.65
+                c2.add_widget(_title(at['name'][:30], (0.80, 0.55, 1.00, 1)))
+                c2.add_widget(_row('Матч', f'[b]{idx}/{total}[/b]',
+                                   rc=(0.95, 0.85, 1.00, 1)))
+
+                groups_row = BoxLayout(size_hint_y=None, height=26 * 9, spacing=8)
+                for gi, grp in enumerate(groups[:2]):
+                    gcol = GridLayout(cols=1, spacing=2)
+                    label = 'Группа A' if gi == 0 else 'Группа B'
+                    lbl = Label(
+                        text=f'[b]{label}[/b]', markup=True,
+                        color=T.ACCENT, size_hint_y=None, height=24,
+                        halign='left', valign='middle', font_size=T.FS_SMALL,
+                    )
+                    lbl.bind(size=lbl.setter('text_size'))
+                    gcol.add_widget(lbl)
+                    grp_st = sorted(
+                        [(t, standings.get(t, 0)) for t in grp],
+                        key=lambda x: x[1], reverse=True
+                    )
+                    for rank, (team, pts) in enumerate(grp_st):
+                        is_my = team in player_teams
+                        tc = _mc(T.PLAYER_CLR) if is_my else (
+                            _mc(T.GOLD) if rank == 0 else _mc(T.TEXT_MAIN)
+                        )
+                        row_w = BoxLayout(size_hint_y=None, height=22)
+                        tl = Label(
+                            text=f'[color={tc}]{rank+1}. {team[:14]}[/color]',
+                            markup=True, color=T.TEXT_MAIN,
+                            font_size='11sp', halign='left', valign='middle',
+                        )
+                        tl.bind(size=tl.setter('text_size'))
+                        pr = Label(
+                            text=f'[color={tc}]{pts}[/color]',
+                            markup=True, color=T.TEXT_MAIN,
+                            font_size='11sp', halign='right', valign='middle',
+                            size_hint_x=None, width=36,
+                        )
+                        row_w.add_widget(tl)
+                        row_w.add_widget(pr)
+                        gcol.add_widget(row_w)
+                    groups_row.add_widget(gcol)
+                c2.add_widget(groups_row)
+                _next_match_row(c2)
+                row1.add_widget(c1)
+                row1.add_widget(c2)
+
+            elif not in_playoff and standings:
+                # ── Single group table (DPC / round-robin) ────────────────────
+                c2 = _card(T.BG_CARD_TRN)
+                c2.add_widget(_title(at['name'][:30], (0.80, 0.55, 1.00, 1)))
+                c2.add_widget(_row('Матч', f'[b]{idx}/{total}[/b]',
+                                   rc=(0.95, 0.85, 1.00, 1)))
+                sorted_st = sorted(standings.items(), key=lambda x: x[1], reverse=True)
+                for i, (team, pts) in enumerate(sorted_st[:8]):
+                    is_my = team in player_teams
+                    tc = _mc(T.PLAYER_CLR) if is_my else (
+                        _mc(T.GOLD) if i == 0 else _mc(T.TEXT_MAIN)
+                    )
+                    c2.add_widget(_row(
+                        f'[color={tc}]{i+1}. {team[:18]}[/color]',
+                        f'[color={tc}]{pts} pts[/color]',
+                    ))
+                _next_match_row(c2)
+                row1.add_widget(c1)
+                row1.add_widget(c2)
+
+            else:
+                # ── Playoff bracket ───────────────────────────────────────────
+                c2 = _card(T.BG_CARD_TRN)
+                c2.add_widget(_title(at['name'][:30], (0.80, 0.55, 1.00, 1)))
+                c2.add_widget(_row('Плей-офф', f'[b]{idx}/{total}[/b]',
+                                   rc=(0.95, 0.85, 1.00, 1)))
+
+                # Collect played playoff matches grouped by stage
+                from collections import OrderedDict
+                bracket_stages = OrderedDict()
+                for i in range(min(idx, len(queue))):
+                    ev = queue[i]['result_ev']
+                    stage = ev.get('stage', '')
+                    if any(kw in stage for kw in _PLAYOFF_KEYWORDS):
+                        bracket_stages.setdefault(stage, []).append(ev)
+
+                for stage, matches in bracket_stages.items():
+                    lbl = Label(
+                        text=f'[b]{stage}[/b]', markup=True,
+                        color=T.TEXT_DIM, font_size='10sp',
+                        size_hint_y=None, height=18,
+                        halign='left', valign='middle',
+                    )
+                    lbl.bind(size=lbl.setter('text_size'))
+                    c2.add_widget(lbl)
+                    for ev in matches:
+                        w   = ev.get('winner', '')
+                        t1  = ev['team1']
+                        t2  = ev['team2']
+                        s1  = ev.get('score_t1', 0)
+                        s2  = ev.get('score_t2', 0)
+                        t1c = _mc(T.PLAYER_CLR) if t1 in player_teams else (
+                              _mc(T.POSITIVE) if t1 == w else _mc(T.TEXT_DIM))
+                        t2c = _mc(T.PLAYER_CLR) if t2 in player_teams else (
+                              _mc(T.POSITIVE) if t2 == w else _mc(T.TEXT_DIM))
+                        c2.add_widget(_row(
+                            f'[color={t1c}]{t1[:14]}[/color]',
+                            f'[color={t1c}]{s1}[/color]:{s2}  '
+                            f'[color={t2c}]{t2[:14]}[/color]',
+                            lc=T.TEXT_MAIN, rc=T.TEXT_MAIN,
+                        ))
+
+                # Next upcoming playoff match
+                if idx < total:
+                    next_ev = queue[idx]['result_ev']
+                    if any(kw in next_ev.get('stage', '') for kw in _PLAYOFF_KEYWORDS):
+                        c2.add_widget(_row(
+                            'Следующий',
+                            f"{next_ev['team1'][:12]} vs {next_ev['team2'][:12]}",
+                            rc=(1.00, 0.85, 0.30, 1),
+                        ))
+
+                _next_match_row(c2)
+                row1.add_widget(c1)
+                row1.add_widget(c2)
+
+            # Tournament button: non-clickable during active tournament
+            if hasattr(self, 'tournament_button'):
+                self.tournament_button.disabled = True
+                self.tournament_button.background_color = (0.55, 0.10, 0.10, 1)
+        elif t_row:
             t_title_val, t_start = t_row
             try:
                 days_left = (date.fromisoformat(t_start) - self.date_object).days
@@ -929,8 +1107,14 @@ class MainWindow(BoxLayout):
                                rc=(0.95, 0.85, 1.00, 1)))
             row1.add_widget(c1)
             row1.add_widget(c2)
+            if hasattr(self, 'tournament_button'):
+                self.tournament_button.disabled = False
+                self.tournament_button.background_color = (0.65, 0.15, 0.15, 1)
         else:
             row1.add_widget(c1)
+            if hasattr(self, 'tournament_button'):
+                self.tournament_button.disabled = False
+                self.tournament_button.background_color = (0.65, 0.15, 0.15, 1)
 
         outer.add_widget(row1)
 
@@ -1040,6 +1224,7 @@ class MainWindow(BoxLayout):
         _migrate30(db_name)
         _migrate31(db_name)
         _migrate32(db_name)
+        _migrate33(db_name)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""
@@ -1168,6 +1353,10 @@ class MainWindow(BoxLayout):
         self.rect_main_area.size = self.main_area.size
 
     def get_next_tournament_date(self):
+        # During active tournament, next "event" is tomorrow (next match day)
+        at = self._get_active_tournament()
+        if at:
+            return str(self.date_object + timedelta(days=1))
         date_object = self.get_date_from_db(1)
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
@@ -1496,16 +1685,48 @@ class MainWindow(BoxLayout):
             self._stop_auto_advance()
 
     def on_skip_to_tournament(self, instance):
+        if self._auto_advance_event:
+            self._stop_auto_advance()
+
+        at = self._get_active_tournament()
+        if at:
+            # Skip through non-player matches until player match or end
+            while True:
+                at2 = self._get_active_tournament()
+                if not at2:
+                    break
+                idx = at2['match_idx']
+                queue = at2['match_queue']
+                if idx >= len(queue):
+                    self._finish_active_tournament(at2)
+                    break
+                next_item = queue[idx]
+                if next_item['result_ev'].get('is_player_match') and next_item.get('lineup_ev'):
+                    # Found player match — play it interactively
+                    self._play_match_day(suppress_notifications=False)
+                    break
+                # Non-player match: silent advance
+                self._advance_one_day(suppress_notifications=True)
+            return
+
+        # No active tournament: skip to next tournament start
         next_date = self.get_next_tournament_date()
         if not next_date:
             return
-        if self._auto_advance_event:
-            self._stop_auto_advance()
         target = date.fromisoformat(next_date)
         while self.date_object < target:
             self._advance_one_day(suppress_notifications=True)
+        # Trigger tournament start
         if str(self.date_object) == next_date:
-            self.show_tournament_popup()
+            conn2 = sqlite3.connect(self.db_name)
+            tourn_row = conn2.execute(
+                "SELECT id, name FROM tournaments WHERE start_date=? AND place1 IS NULL LIMIT 1",
+                (next_date,)
+            ).fetchone()
+            conn2.close()
+            if tourn_row:
+                self._init_tournament(tourn_row[0], tourn_row[1])
+                self._play_match_day(suppress_notifications=False)
 
     def _advance_one_day(self, suppress_notifications=False):
         """Advance date by 1 day. Returns True if a notification was triggered."""
@@ -1534,23 +1755,42 @@ class MainWindow(BoxLayout):
             if updated_date:
                 updated_date_value = updated_date[0]
 
-                next_tournament_date = self.get_next_tournament_date()
+                at = self._get_active_tournament()
 
-                # За день до турнира — AI заполняет пустые слоты
-                if next_tournament_date:
-                    from datetime import date as _date
-                    days_left = (
-                        _date.fromisoformat(next_tournament_date) -
-                        _date.fromisoformat(updated_date_value)
-                    ).days
-                    if days_left == 1:
-                        from logic.ai import ai_transfers
-                        ai_transfers(self.db_name)
+                if at:
+                    # Tournament in progress: play next match day
+                    triggered = self._play_match_day(suppress_notifications)
+                    if triggered:
+                        notification_triggered = True
+                else:
+                    next_tournament_date = self.get_next_tournament_date()
 
-                if next_tournament_date and updated_date_value == next_tournament_date:
-                    if not suppress_notifications:
-                        self.show_tournament_popup()
-                    notification_triggered = True
+                    # Day before tournament: AI fills empty slots
+                    if next_tournament_date:
+                        from datetime import date as _date
+                        days_left = (
+                            _date.fromisoformat(next_tournament_date) -
+                            _date.fromisoformat(updated_date_value)
+                        ).days
+                        if days_left == 1:
+                            from logic.ai import ai_transfers
+                            ai_transfers(self.db_name)
+
+                    if next_tournament_date and updated_date_value == next_tournament_date:
+                        # Start tournament
+                        conn2 = sqlite3.connect(self.db_name)
+                        tourn_row = conn2.execute(
+                            "SELECT id, name FROM tournaments "
+                            "WHERE start_date=? AND place1 IS NULL "
+                            "ORDER BY start_date LIMIT 1",
+                            (updated_date_value,)
+                        ).fetchone()
+                        conn2.close()
+                        if tourn_row:
+                            self._init_tournament(tourn_row[0], tourn_row[1])
+                            triggered = self._play_match_day(suppress_notifications)
+                            if triggered:
+                                notification_triggered = True
 
                 self.today_date_button.text = updated_date_value
                 self.tournament_button.text = self.get_next_tournament()
@@ -1942,15 +2182,307 @@ class MainWindow(BoxLayout):
                 size_hint=(0.50, 0.25),
             ).open()
 
+    # ── Active-tournament system ──────────────────────────────────────────────
+
+    def _get_active_tournament(self):
+        """Return active tournament dict or None."""
+        import json
+        try:
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT tourn_id, name, match_queue_json, match_idx, standings_json, "
+                "final_ev_json, minor_ev_json, draw_ev_json, player_teams_json "
+                "FROM active_tournament LIMIT 1"
+            ).fetchone()
+            conn.close()
+            if not row:
+                return None
+            return {
+                'tourn_id':     row[0],
+                'name':         row[1],
+                'match_queue':  json.loads(row[2]) if row[2] else [],
+                'match_idx':    row[3],
+                'standings':    json.loads(row[4]) if row[4] else {},
+                'final_ev':     json.loads(row[5]) if row[5] else None,
+                'minor_ev':     json.loads(row[6]) if row[6] else None,
+                'draw_ev':      json.loads(row[7]) if row[7] else None,
+                'player_teams': set(json.loads(row[8])) if row[8] else set(),
+            }
+        except Exception:
+            return None
+
+    def _init_tournament(self, tourn_id, tourn_name):
+        """Generate events for tournament and store match queue in DB."""
+        import json
+        from logic.tournaments.runner import generate_tournament_events
+        from ingame_interface.tournaments import _add_message
+
+        events, _pl, _ge = generate_tournament_events(self.db_name, tourn_id)
+
+        # Build lineup map (player match logs)
+        lineup_map = {}
+        for ev in events:
+            if ev['type'] == 'match_lineup':
+                k = (ev['stage'], ev['team1'], ev['team2'])
+                lineup_map[k] = ev
+
+        # Collect ordered match queue
+        match_queue = []
+        for ev in events:
+            if ev['type'] == 'match_result':
+                k = (ev['stage'], ev['team1'], ev['team2'])
+                item = {'result_ev': ev}
+                if k in lineup_map:
+                    item['lineup_ev'] = lineup_map[k]
+                match_queue.append(item)
+
+        # Find key events
+        final_ev   = next((e for e in events if e['type'] == 'tournament_results'), None)
+        minor_ev   = next((e for e in events if e['type'] == 'minor_results'), None)
+        draw_ev    = next((e for e in events if e['type'] == 'draw'), None)
+
+        # Determine player teams
+        player_teams = set()
+        for ev in events:
+            if ev['type'] == 'draw' and ev.get('player_teams'):
+                player_teams = set(ev['player_teams'])
+
+        # No player → silent finalize immediately
+        if not player_teams and not any(
+            item['result_ev'].get('is_player_match') for item in match_queue
+        ):
+            champ = final_ev.get('champion', '?') if final_ev else '?'
+            _add_message(self.db_name, f"{tourn_name}: чемпион — {champ}.", 'Новости')
+            if final_ev:
+                from logic.tournaments.runner import finalize_tournament
+                finalize_tournament(self.db_name, tourn_id, tourn_name, final_ev,
+                                    game_date=str(self.date_object))
+            return
+
+        # Handle minor without player: persist silently
+        if minor_ev:
+            try:
+                from ingame_interface.tournaments import _persist_minor_results_standalone
+                _persist_minor_results_standalone(self.db_name, minor_ev)
+            except Exception:
+                pass
+
+        # Initial standings from draw event
+        initial_standings = {}
+        if draw_ev:
+            for group in draw_ev.get('groups', []):
+                for team in group:
+                    initial_standings[team] = 0
+
+        # Clear any stale active tournament
+        conn = sqlite3.connect(self.db_name)
+        conn.execute("DELETE FROM active_tournament")
+        conn.execute(
+            "INSERT INTO active_tournament "
+            "(tourn_id, name, match_queue_json, match_idx, standings_json, "
+            " final_ev_json, minor_ev_json, draw_ev_json, player_teams_json) "
+            "VALUES (?,?,?,0,?,?,?,?,?)",
+            (
+                tourn_id, tourn_name,
+                json.dumps(match_queue),
+                json.dumps(initial_standings),
+                json.dumps(final_ev) if final_ev else None,
+                json.dumps(minor_ev) if minor_ev else None,
+                json.dumps(draw_ev) if draw_ev else None,
+                json.dumps(list(player_teams)),
+            )
+        )
+        conn.commit()
+        conn.close()
+
+    def _play_match_day(self, suppress_notifications=False):
+        """Play next match from active tournament. Return True if notification triggered."""
+        import json
+        at = self._get_active_tournament()
+        if not at:
+            return False
+
+        queue = at['match_queue']
+        idx   = at['match_idx']
+
+        if idx >= len(queue):
+            self._finish_active_tournament(at)
+            return True
+
+        item      = queue[idx]
+        result_ev = item['result_ev']
+        lineup_ev = item.get('lineup_ev')
+        is_player = result_ev.get('is_player_match', False)
+
+        # Merge standings — each match event only has its group's standings
+        new_standings = dict(at['standings'])
+        if result_ev.get('standings'):
+            new_standings.update(result_ev['standings'])
+        new_idx = idx + 1
+
+        conn = sqlite3.connect(self.db_name)
+        conn.execute(
+            "UPDATE active_tournament SET match_idx=?, standings_json=? WHERE id=1",
+            (new_idx, json.dumps(new_standings))
+        )
+        conn.commit()
+        conn.close()
+
+        is_last = (new_idx >= len(queue))
+
+        if is_player and lineup_ev and not suppress_notifications:
+            on_done = (lambda: self._finish_active_tournament(
+                self._get_active_tournament()
+            )) if is_last else None
+            self._show_player_match_day(lineup_ev, result_ev, at, on_done)
+            return True
+
+        if is_last:
+            self._finish_active_tournament(self._get_active_tournament())
+            return True
+
+        return False
+
+    def _show_player_match_day(self, lineup_ev, result_ev, at, on_done=None):
+        """Show MatchLogPopup for a player match inline."""
+        from ingame_interface.tournaments import MatchLogPopup
+
+        logo_map = {}
+        try:
+            conn = sqlite3.connect(self.db_name)
+            logo_map = {
+                r[0].strip(): r[1]
+                for r in conn.execute("SELECT name, logo FROM teams").fetchall()
+            }
+            conn.close()
+        except Exception:
+            pass
+
+        t1, t2 = lineup_ev['team1'], lineup_ev['team2']
+        player_teams = at.get('player_teams', set())
+        pre_match_team = t1 if t1 in player_teams else (t2 if t2 in player_teams else None)
+
+        # Disable nav buttons while match plays
+        for btn in (getattr(self, '_next_btn', None), getattr(self, '_skip_btn', None)):
+            if btn:
+                btn.disabled = True
+
+        def _on_close():
+            for btn in (getattr(self, '_next_btn', None), getattr(self, '_skip_btn', None)):
+                if btn:
+                    btn.disabled = False
+            if on_done:
+                on_done()
+            else:
+                self._show_dashboard()
+
+        popup = MatchLogPopup(
+            team1=t1, team2=t2,
+            winner=lineup_ev.get('winner', t1),
+            log_lines=lineup_ev.get('match_log', []),
+            snapshots=lineup_ev.get('match_snaps', []),      # correct key
+            best_of=lineup_ev.get('best_of', 1),
+            final_score=(lineup_ev.get('score_t1', 0), lineup_ev.get('score_t2', 0)),
+            match_stats=lineup_ev.get('match_stats', {}),
+            on_close=_on_close,
+            t1_logo=logo_map.get(t1),
+            t2_logo=logo_map.get(t2),
+            pre_match_team=pre_match_team,   # enables draft + strategy
+            db_name=self.db_name,
+        )
+        popup.title = f"{at['name']} — {lineup_ev.get('stage', '')}"
+        self._show_inline(popup, at['name'])
+        popup.dismiss = _on_close
+
+    def _finish_active_tournament(self, at=None):
+        """Persist results and clear active tournament."""
+        if at is None:
+            at = self._get_active_tournament()
+        if not at:
+            return
+
+        # Collect player match lineup events for match_history
+        player_matches = [
+            item['lineup_ev']
+            for item in at['match_queue']
+            if item.get('lineup_ev') and item['result_ev'].get('is_player_match')
+        ]
+
+        from logic.tournaments.runner import finalize_tournament
+        finalize_tournament(
+            self.db_name,
+            at['tourn_id'],
+            at['name'],
+            at['final_ev'],
+            minor_ev=at.get('minor_ev'),
+            player_matches=player_matches,
+            game_date=str(self.date_object),
+        )
+
+        # Clear
+        conn = sqlite3.connect(self.db_name)
+        conn.execute("DELETE FROM active_tournament")
+        conn.commit()
+        conn.close()
+
+        # Check season over
+        self._check_season_over_core(at['tourn_id'])
+        self._refresh_tournament_btn()
+        self._show_dashboard()
+
+    def _check_season_over_core(self, tournament_id):
+        """Check if all tournaments for the year are done; open SeasonEndPopup if so."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT start_date FROM tournaments WHERE id=?", (tournament_id,)
+            ).fetchone()
+            if not row:
+                conn.close()
+                return
+            year = row[0][:4]
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM tournaments WHERE start_date LIKE ? AND place1 IS NULL",
+                (f'{year}%',)
+            ).fetchone()[0]
+            conn.close()
+            if remaining == 0:
+                from ingame_interface.season_end import SeasonEndPopup
+                SeasonEndPopup(
+                    self.db_name, int(year),
+                    on_confirmed=self._refresh_tournament_btn,
+                ).open()
+        except Exception as e:
+            T.log_err('_check_season_over_core', e)
+
+    # ── Tournament popup (legacy path + tournament-btn handler) ───────────────
+
     def show_tournament_popup(self):
-        popup = TournamentPopup(self.db_name,
-                                on_finish=self._refresh_tournament_btn)
-        self._show_inline(popup, 'Турнир')
-        # Override dismiss set by _show_inline to also run tournament cleanup
-        def _dismiss(*_):
-            popup._on_dismissed(None)
-            self._show_dashboard()
-        popup.dismiss = _dismiss
+        """Init the next tournament and play its first match day."""
+        conn = sqlite3.connect(self.db_name)
+        row = conn.execute(
+            "SELECT id, name FROM tournaments WHERE place1 IS NULL ORDER BY start_date LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if not row:
+            return
+        tourn_id, tourn_name = row
+
+        # If already active (e.g. button pressed mid-tournament), play next match
+        at = self._get_active_tournament()
+        if at and at['tourn_id'] == tourn_id:
+            triggered = self._play_match_day(suppress_notifications=False)
+            if not triggered:
+                self._show_dashboard()
+            return
+
+        # Fresh start
+        self._init_tournament(tourn_id, tourn_name)
+        at = self._get_active_tournament()
+        if at:
+            triggered = self._play_match_day(suppress_notifications=False)
+            if not triggered:
+                self._show_dashboard()
 
     def _refresh_tournament_btn(self):
         self.tournament_button.text = self.get_next_tournament()

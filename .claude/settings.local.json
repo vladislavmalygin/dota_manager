@@ -40,7 +40,8 @@
       "Bash(cp /home/vlad/Dev/dota_manager/dist/dota_manager /home/vlad/.local/bin/dota_manager)",
       "Read(//home/vlad/.local/bin/**)",
       "Bash(.venv/bin/pyinstaller dota_manager.spec)",
-      "Bash(python3.14 *)"
+      "Bash(python3.14 *)",
+      "Bash(/home/vlad/Dev/dota_manager/.venv/bin/python3 -c ' *)"
     ]
   }
 }

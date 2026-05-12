@@ -1050,10 +1050,20 @@ class MatchLogPopup(Popup):
             import random as _r
             from logic.heroes import HEROES, ROLE_ORDER as _RO
             self._hero_picks = {role: _r.choice(HEROES[role]) for role in _RO}
-        self._run_simulation()
+        # Defer past popup dismiss animation (~0.1s) before rebuilding widget tree
+        Clock.schedule_once(lambda dt: self._run_simulation(), 0.25)
 
     def _run_simulation(self):
         """Simulate one map with self._hero_picks and start the match animation."""
+        # Stop running intervals before rebuild
+        if self._interval:
+            self._interval.cancel()
+            self._interval = None
+        # Cancel old map animation clock to avoid orphaned clock events
+        if hasattr(self, '_map') and getattr(self._map, '_anim_clock', None):
+            self._map._anim_clock.cancel()
+            self._map._anim_clock = None
+
         try:
             opp_picks = random_picks(exclude=[h[0] for h in self._hero_picks.values()])
             is_t1 = (self._pre_match_team == self._team1)
@@ -1083,10 +1093,19 @@ class MatchLogPopup(Popup):
                 snp['game_score_t2'] = pre_w2
                 snp['best_of']       = self._best_of
             self._build()
-        except Exception:
-            pass
+        except Exception as _e:
+            import traceback as _tb
+            print(f'[MatchLogPopup._run_simulation] error: {_e}')
+            _tb.print_exc()
+            # Fall back: play pre-generated log
+            self._sched_idx = 0
+            self._elapsed   = 0.0
+
+        # Detach old content from any parent before setting new one
+        if self._match_content.parent:
+            self._match_content.parent.remove_widget(self._match_content)
         self.content = self._match_content
-        Clock.schedule_once(lambda dt: self._start(), 0.15)
+        Clock.schedule_once(lambda dt: self._start(), 0.2)
 
     def _confirm_strategy(self, _):
         import sqlite3 as _sq
@@ -1106,6 +1125,10 @@ class MatchLogPopup(Popup):
         self._run_simulation()
 
     def _start(self):
+        if not self._schedule:
+            # Empty log — jump straight to finish
+            Clock.schedule_once(lambda dt: self._finish(), 0)
+            return
         self._interval = Clock.schedule_interval(self._tick, 0.05)
 
     def _tick(self, dt):
@@ -2421,7 +2444,6 @@ class TournamentPopup(Popup):
 
     # ── persistence ───────────────────────────────────────────
 
-
     def _persist_minor_results(self, event):
         places = event.get('placements', {})
         _MINOR_PRIZES = {1: 80_000, 2: 40_000, 3: 20_000, 4: 10_000}
@@ -2953,3 +2975,11 @@ class TournamentsViewPopup(Popup):
                 grid.add_widget(irow)
 
         conn.close()
+
+
+def _persist_minor_results_standalone(db_name, event):
+    """Persist minor tournament results — module-level helper for active_tournament system."""
+    _obj = object.__new__(TournamentPopup)
+    _obj.db_name = db_name
+    _obj._player_matches = []
+    _obj._persist_minor_results(event)
