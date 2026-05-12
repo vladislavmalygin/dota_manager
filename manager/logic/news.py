@@ -34,6 +34,21 @@ _FA_STORIES = [
     '{nick} (FA, скилл {sk}) ожидает оферов после расторжения контракта',
     'Инсайд: {nick} ищет команду с серьёзными амбициями',
 ]
+_RESULT_STORIES = [
+    '{winner} разгромили {loser} в решающем матче — безупречная форма',
+    'Неожиданно: {loser} вылетели от {winner} на групповой стадии',
+    '{winner} продолжают победную серию, обыграв {loser}',
+]
+_MILESTONE_STORIES = [
+    '{nick} достиг пика карьеры — аналитики называют его лучшим {role} региона',
+    'Ветеран {nick} объявил о завершении карьеры. Легенда уходит из профессионального Dota 2',
+    '{nick} провёл 100-й матч за {team} — впечатляющая карьера',
+]
+_PATCH_STORIES = [
+    'Аналитики: мета-патч {patch} перевернул ситуацию — команды срочно меняют ростеры',
+    'После патча {patch} спрос на {role}-игроков вырос в разы',
+    'Комментаторы: {patch} — самый масштабный баланс за последний год',
+]
 
 
 def generate_monthly_news(db_name):
@@ -123,6 +138,54 @@ def generate_monthly_news(db_name):
             news.append(
                 f'{row[0]} — одна из самых сыгранных команд мира '
                 f'(сыгранность {row[1]}/100)')
+
+    # Recent tournament result (two AI teams)
+    if random.random() < 0.35:
+        c.execute("""
+            SELECT t.name, p1.name, p2.name
+            FROM tournaments t
+            JOIN teams p1 ON t.place1=p1.id
+            JOIN teams p2 ON t.place2=p2.id
+            WHERE p1.player!='yes' AND p2.player!='yes'
+            ORDER BY t.start_date DESC LIMIT 5
+        """)
+        rows = c.fetchall()
+        if rows:
+            t_name, winner, loser = random.choice(rows)
+            news.append(random.choice(_RESULT_STORIES).format(
+                winner=winner.strip(), loser=loser.strip()))
+
+    # Player milestone
+    if random.random() < 0.22:
+        c.execute("""
+            SELECT p.nickname, p.role, t.name
+            FROM players p JOIN teams t ON p.team_id=t.id
+            WHERE t.player!='yes'
+              AND p.micro_skills+p.macro_skills >= 160
+              AND COALESCE(p.age,22) >= 28
+            ORDER BY RANDOM() LIMIT 1
+        """)
+        row = c.fetchone()
+        if row:
+            nick, role, team = row
+            role_ru = _ROLE_RU.get(role, role or '?')
+            news.append(random.choice(_MILESTONE_STORIES).format(
+                nick=nick, role=role_ru, team=team.strip()))
+
+    # Patch news
+    if random.random() < 0.20:
+        try:
+            patch_row = c.execute(
+                "SELECT patch_name, favored_role FROM meta_patches "
+                "WHERE active=1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if patch_row:
+                pname, prole = patch_row
+                role_ru = _ROLE_RU.get(prole, prole or '?')
+                news.append(random.choice(_PATCH_STORIES).format(
+                    patch=pname, role=role_ru))
+        except Exception:
+            pass
 
     conn.close()
     random.shuffle(news)

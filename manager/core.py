@@ -50,6 +50,10 @@ from db_migrate21 import migrate as _migrate21
 from db_migrate22 import migrate as _migrate22
 from db_migrate23 import migrate as _migrate23
 from db_migrate24 import migrate as _migrate24
+from db_migrate25 import migrate as _migrate25
+from db_migrate26 import migrate as _migrate26
+from db_migrate27 import migrate as _migrate27
+from db_migrate28 import migrate as _migrate28
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -210,6 +214,11 @@ def _pay_streaming_income(db_name, game_date_str):
 
         income = max(2_000, int(rating * 120 + reputation * 200))
         income = round(income / 500) * 500
+        try:
+            from logic.achievements import apply_monthly_bonuses
+            income = apply_monthly_bonuses(self.db_name, income)
+        except Exception:
+            pass
 
         conn.execute("UPDATE teams SET budget=budget+? WHERE id=?", (income, team_id))
         conn.execute(
@@ -518,10 +527,11 @@ class MainWindow(BoxLayout):
                 ('Статистика', self.on_stats),
             ]),
             ('ПРОЧЕЕ', [
-                ('Входящие',   self.on_incoming),
-                ('Мой профиль',self.on_profile),
-                ('Настройки',  self.on_settings),
-                ('Сохранить',  self.on_manual_save),
+                ('Входящие',    self.on_incoming),
+                ('Достижения',  self.on_achievements),
+                ('Мой профиль', self.on_profile),
+                ('Настройки',   self.on_settings),
+                ('Сохранить',   self.on_manual_save),
                 ('Главное меню',self.on_main_menu),
             ]),
         ]
@@ -689,15 +699,17 @@ class MainWindow(BoxLayout):
 
             team = c.execute(
                 "SELECT name, COALESCE(budget,0), COALESCE(rating,0), COALESCE(cohesion,0), "
-                "carry, mid, offlane, partial_support, full_support "
+                "carry, mid, offlane, partial_support, full_support, "
+                "COALESCE(org_reputation,20) "
                 "FROM teams WHERE player='yes'"
             ).fetchone()
             if not team:
                 conn.close()
                 return
 
-            t_name, budget, rating, cohesion, *slot_ids = team
-            slot_ids = [s for s in slot_ids if s]
+            t_name, budget, rating, cohesion, *_rest = team
+            org_reputation = _rest[-1]
+            slot_ids = [s for s in _rest[:-1] if s]
 
             # Avg morale + wages
             avg_morale, total_wage = 5, 0
@@ -876,9 +888,25 @@ class MainWindow(BoxLayout):
         coh_c = T.cohesion_color(cohesion)
         c1.add_widget(_row('Сыгранность',
                            f'[color={_mc(coh_c)}]{cohesion}/100[/color]'))
+        try:
+            from logic.chemistry import pair_bond_description
+            _pb = pair_bond_description(self.db_name, my_id[0] if my_id else None)
+            if _pb:
+                c1.add_widget(_row('', _pb, rc=(0.70, 0.90, 0.70, 1)))
+        except Exception:
+            pass
         mor_c = T.morale_color(avg_morale)
         c1.add_widget(_row('Мораль состава',
                            f'[color={_mc(mor_c)}]{avg_morale}/10[/color]'))
+        rep_c = T.cohesion_color(org_reputation)
+        c1.add_widget(_row('Репутация',
+                           f'[color={_mc(rep_c)}]{org_reputation}/100[/color]'))
+        try:
+            from logic.meta import patch_description
+            c1.add_widget(_row('Мета', patch_description(self.db_name),
+                               rc=(0.80, 0.75, 1.00, 1)))
+        except Exception:
+            pass
         bal_c  = T.balance_color(balance)
         sign   = '+' if balance >= 0 else ''
         c1.add_widget(_row('Баланс/мес',
@@ -999,6 +1027,10 @@ class MainWindow(BoxLayout):
         _fix_team_regions(db_name)
         _fix_contracts(db_name)
         ensure_sponsors_table(db_name)
+        _migrate25(db_name)
+        _migrate26(db_name)
+        _migrate27(db_name)
+        _migrate28(db_name)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""
@@ -1238,12 +1270,107 @@ class MainWindow(BoxLayout):
             c.commit()
             c.close()
 
+        # Monthly achievement check + rep bonus
+        try:
+            from logic.achievements import check_achievements, get_rep_monthly_bonus
+            _new_ach = check_achievements(self.db_name, str(self.date_object))
+            for _aname, _abonus in _new_ach:
+                _mc = sqlite3.connect(self.db_name)
+                _mc.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'🏆 Достижение: «{_aname}»! Бонус: {_abonus}',
+                     str(self.date_object), 'Достижения')
+                )
+                _mc.commit(); _mc.close()
+            _rep_bonus = get_rep_monthly_bonus(self.db_name)
+            if _rep_bonus:
+                _rb = sqlite3.connect(self.db_name)
+                _rb.execute(
+                    "UPDATE teams SET org_reputation=MIN(100,COALESCE(org_reputation,20)+?) "
+                    "WHERE player='yes'", (_rep_bonus,)
+                )
+                _rb.commit(); _rb.close()
+        except Exception:
+            pass
+
+        # Fatigue decay (Feature 3): all team players recover 15 fatigue/month
+        try:
+            _fc = sqlite3.connect(self.db_name)
+            _fc.execute(
+                "UPDATE players SET fatigue=MAX(0, COALESCE(fatigue,0)-15) "
+                "WHERE team_id IN (SELECT id FROM teams WHERE player='yes')"
+            )
+            _fc.commit()
+            _fc.close()
+        except Exception:
+            pass
+
+        # Meta patch rotation (Feature 1): rotate every even month
+        if self.date_object.month % 2 == 0 and self.date_object.day == 1:
+            try:
+                from logic.meta import rotate_patch
+                new_pname, new_prole = rotate_patch(self.db_name, str(self.date_object))
+                _ROLE_RU_SHORT = {
+                    'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
+                    'partial_support': 'Sup 4', 'full_support': 'Sup 5',
+                }
+                _mc2 = sqlite3.connect(self.db_name)
+                _mc2.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'Вышел патч {new_pname}: '
+                     f'{_ROLE_RU_SHORT.get(new_prole, new_prole)} усилен метой.',
+                     str(self.date_object), 'Новости')
+                )
+                _mc2.commit(); _mc2.close()
+            except Exception:
+                pass
+
+        # Investor income deduction (Feature 8)
+        try:
+            _ic = sqlite3.connect(self.db_name)
+            inv_row = _ic.execute(
+                "SELECT id, COALESCE(investor_cut_pct,0), COALESCE(investor_end_date,''), "
+                "COALESCE(investor_name,'') FROM teams WHERE player='yes'"
+            ).fetchone()
+            if inv_row:
+                inv_id, inv_cut, inv_end, inv_name = inv_row
+                if inv_cut > 0 and inv_end and inv_end >= str(self.date_object):
+                    # Deduct cut from streaming income retroactively (estimate)
+                    stream_est = max(0, int(
+                        _ic.execute(
+                            "SELECT COALESCE(rating,0) FROM teams WHERE id=?", (inv_id,)
+                        ).fetchone()[0] * 120 * inv_cut / 100
+                    ))
+                    if stream_est > 0:
+                        _ic.execute(
+                            "UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?",
+                            (stream_est, inv_id)
+                        )
+                        _ic.execute(
+                            "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                            (f'Инвестор {inv_name}: выплата доли {inv_cut}% = −${stream_est:,}',
+                             str(self.date_object), 'Финансы')
+                        )
+                    _ic.commit()
+            _ic.close()
+        except Exception:
+            pass
+
         # Random monthly event (60% chance)
         import random
         if random.random() < 0.60:
             event = random_event_monthly(self.db_name, str(self.date_object))
             if event:
-                if len(event) == 3 and event[2] == 'popup':
+                if len(event) >= 3 and event[2] == 'investor_pending':
+                    _ev_data = event[3] if len(event) > 3 else {}
+                    c = sqlite3.connect(self.db_name)
+                    c.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?, date('now'), ?)",
+                        (event[1], 'Организация'),
+                    )
+                    c.commit(); c.close()
+                    self._show_investor_popup(_ev_data)
+                elif len(event) == 3 and event[2] == 'popup':
                     title, text, _ = event
                     c = sqlite3.connect(self.db_name)
                     c.execute(
@@ -1254,7 +1381,7 @@ class MainWindow(BoxLayout):
                     c.close()
                     self._show_event_popup(title, text)
                 else:
-                    title, text = event
+                    title, text = event[0], event[1]
                     c = sqlite3.connect(self.db_name)
                     c.execute(
                         "INSERT INTO messages (text, date, author) VALUES (?, date('now'), ?)",
@@ -1488,6 +1615,10 @@ class MainWindow(BoxLayout):
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')
 
+    def on_achievements(self, instance):
+        from ingame_interface.achievements import show_achievements_popup
+        show_achievements_popup(self.db_name)
+
     def on_incoming(self, instance):
         messages = self._load_messages()
         if not messages:
@@ -1583,6 +1714,71 @@ class MainWindow(BoxLayout):
                     background_normal='', background_color=(0.22, 0.50, 0.22, 1))
         ok.bind(on_press=popup.dismiss)
         root.add_widget(ok)
+        popup.open()
+
+    def _show_investor_popup(self, ev_data):
+        from kivy.uix.popup import Popup
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+        from datetime import timedelta
+
+        company = ev_data.get('company', 'Инвестор')
+        amount  = ev_data.get('amount', 100_000)
+        cut     = ev_data.get('cut', 15)
+        team_id = ev_data.get('team_id')
+        try:
+            game_date = date.fromisoformat(ev_data.get('game_date', str(self.date_object)))
+        except Exception:
+            game_date = self.date_object
+        end_date = str(game_date + timedelta(days=730))
+
+        root = BoxLayout(orientation='vertical', padding=14, spacing=10)
+        lbl = Label(
+            text=(f'[b]{company}[/b] предлагает [b]${amount:,}[/b] инвестиций.\n'
+                  f'Условие: {cut}% доходов от стриминга в течение 2 лет.\n'
+                  f'Договор действует до {end_date}.'),
+            markup=True,
+            color=(0.92, 0.92, 0.92, 1), halign='center', valign='middle', font_size='14sp',
+        )
+        lbl.bind(size=lbl.setter('text_size'))
+        root.add_widget(lbl)
+        btn_row = BoxLayout(size_hint_y=None, height=46, spacing=8)
+
+        popup = Popup(title='Предложение инвестора', content=root,
+                      size_hint=(0.65, 0.40), auto_dismiss=False)
+
+        def _accept(_):
+            if team_id:
+                c = sqlite3.connect(self.db_name)
+                c.execute(
+                    "UPDATE teams SET budget=budget+?, investor_name=?, "
+                    "investor_end_date=?, investor_cut_pct=?, investor_bonus=? "
+                    "WHERE id=?",
+                    (amount, company, end_date, cut, amount, team_id)
+                )
+                c.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'Договор с {company} заключён. Получено ${amount:,}. '
+                     f'Ежемесячно {cut}% дохода от стриминга отчисляется инвестору.',
+                     str(self.date_object), 'Организация')
+                )
+                c.commit(); c.close()
+            popup.dismiss()
+            self._refresh_ui()
+
+        def _reject(_):
+            popup.dismiss()
+
+        acc = Button(text='Принять', background_normal='',
+                     background_color=(0.18, 0.55, 0.20, 1))
+        acc.bind(on_press=_accept)
+        rej = Button(text='Отказать', background_normal='',
+                     background_color=(0.60, 0.18, 0.18, 1))
+        rej.bind(on_press=_reject)
+        btn_row.add_widget(acc)
+        btn_row.add_widget(rej)
+        root.add_widget(btn_row)
         popup.open()
 
     def _show_player_dialogue(self, dialogue):

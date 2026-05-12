@@ -402,7 +402,7 @@ class SquadPopup(Popup):
                     "SELECT name, surname, nickname, country, micro_skills, macro_skills, "
                     "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
                     "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
-                    "contract_end, COALESCE(form, 5), secondary_role "
+                    "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0) "
                     "FROM players WHERE id=?",
                     (int(sid),)
                 )
@@ -411,7 +411,7 @@ class SquadPopup(Popup):
                     (fname, lname, nick, country,
                      micro, macro, soft, wage, face, skill_cap, morale,
                      priority, age, injured_until, wants_to_leave,
-                     contract_end, form, secondary_role) = p
+                     contract_end, form, secondary_role, fatigue) = p
                     micro = micro or 0; macro = macro or 0; soft = soft or 0
                     wage  = wage  or 0; skill_cap = skill_cap or 300
                     total_wage += wage
@@ -513,6 +513,13 @@ class SquadPopup(Popup):
                         chips_row.add_widget(T.make_chip(
                             f'до {injured_until[5:]}', (0.15, 0.40, 0.70, 1),
                             (0.60, 0.85, 1.00, 1)))
+                    # Fatigue chip (Feature 3)
+                    if fatigue >= 70:
+                        chips_row.add_widget(T.make_chip(
+                            f'Уст.{fatigue}', (0.60, 0.15, 0.10, 1), (1.0, 0.5, 0.4, 1)))
+                    elif fatigue >= 50:
+                        chips_row.add_widget(T.make_chip(
+                            f'Уст.{fatigue}', (0.50, 0.35, 0.05, 1), (1.0, 0.8, 0.3, 1)))
                     if cend_txt:
                         chips_row.add_widget(T.make_chip(cend_txt, T.BG_ROW_A, cend_color))
 
@@ -858,7 +865,7 @@ class PlayerDetailPopup(Popup):
             "COALESCE(competence,5), face, "
             "COALESCE(micro_cap,100), COALESCE(macro_cap,100), COALESCE(soft_cap,100), "
             "COALESCE(train_xp,0.0), COALESCE(wants_to_leave,0), "
-            "injured_until "
+            "injured_until, COALESCE(psychotype,'team_player') "
             "FROM players WHERE id=?", (pid,)
         ).fetchone()
 
@@ -876,6 +883,15 @@ class PlayerDetailPopup(Popup):
             ).fetchall()
         except Exception:
             pass
+
+        career_stats = []
+        try:
+            career_stats = c.execute(
+                "SELECT season, games, wins, mvp_count FROM player_career_stats "
+                "WHERE player_id=? ORDER BY season DESC LIMIT 6", (pid,)
+            ).fetchall()
+        except Exception:
+            pass
         conn.close()
 
         if not p:
@@ -887,7 +903,7 @@ class PlayerDetailPopup(Popup):
          micro, macro, soft, morale, form, stability,
          wage, contract_end, priority, skill_cap, competence,
          face, micro_cap, macro_cap, soft_cap, train_xp, wants_to_leave,
-         injured_until) = p
+         injured_until, psychotype) = p
 
         micro = micro or 0; macro = macro or 0; soft = soft or 0
         micro_cap = micro_cap or 100; macro_cap = macro_cap or 100; soft_cap = soft_cap or 100
@@ -1015,9 +1031,24 @@ class PlayerDetailPopup(Popup):
         left.add_widget(_sec('ПРОФИЛЬ'))
         role_txt = ROLE_LABELS.get(role, role or '—')
         sec_txt  = ROLE_LABELS.get(sec_role, '—') if sec_role else '—'
+        _PSYCHO_LABEL = {
+            'leader':      'Лидер 👑',
+            'solo_carry':  'Соло-керри ⚡',
+            'team_player': 'Командный игрок 🤝',
+            'wildcard':    'Wildcard 🎲',
+        }
+        _PSYCHO_COLOR = {
+            'leader':      (1.00, 0.85, 0.20, 1),
+            'solo_carry':  (0.40, 0.80, 1.00, 1),
+            'team_player': (0.30, 0.95, 0.45, 1),
+            'wildcard':    (1.00, 0.55, 0.20, 1),
+        }
         left.add_widget(_kv('Роль', role_txt))
         if sec_role:
             left.add_widget(_kv('Доп. роль', sec_txt, T.TEXT_DIM))
+        left.add_widget(_kv('Психотип',
+                            _PSYCHO_LABEL.get(psychotype, psychotype or '—'),
+                            _PSYCHO_COLOR.get(psychotype, T.TEXT_MAIN)))
         left.add_widget(_kv('Возраст', f'{age} лет'))
         left.add_widget(_kv('Страна', country or '—'))
         left.add_widget(_kv('Компетентность', f'{competence}/10'))
@@ -1107,8 +1138,26 @@ class PlayerDetailPopup(Popup):
         right_scroll_content.add_widget(_kv('Тренировка', prior_txt))
 
         # Career
-        if snapshots or history:
+        if snapshots or history or career_stats:
             right_scroll_content.add_widget(_sec('КАРЬЕРА'))
+
+        if career_stats:
+            cs_hdr = Label(
+                text='  Сезон  Игры  Победы  MVP',
+                color=T.TEXT_DIM, font_size='10sp',
+                size_hint_y=None, height=18, halign='left', valign='middle',
+            )
+            cs_hdr.bind(size=cs_hdr.setter('text_size'))
+            right_scroll_content.add_widget(cs_hdr)
+            for cs_season, cs_g, cs_w, cs_mvp in career_stats:
+                wr = f'{int(cs_w/cs_g*100)}%' if cs_g else '—'
+                cs_lbl = Label(
+                    text=f'  [b]{cs_season}[/b]    {cs_g:3d}     {cs_w:3d} ({wr})   {cs_mvp}🏆',
+                    markup=True, color=T.TEXT_LABEL, font_size='11sp',
+                    size_hint_y=None, height=20, halign='left', valign='middle',
+                )
+                cs_lbl.bind(size=cs_lbl.setter('text_size'))
+                right_scroll_content.add_widget(cs_lbl)
 
         if snapshots:
             snap_hdr = Label(

@@ -147,6 +147,24 @@ class TeamViewerPopup(Popup):
             row.add_widget(_lbl(val, color=vc, height=34, halign='right'))
             left.add_widget(row)
 
+        # H2H record vs this team
+        try:
+            h2h = cur.execute(
+                "SELECT wins, losses FROM h2h_records WHERE opponent_team_id=?",
+                (team_id,)
+            ).fetchone()
+            if h2h and (h2h[0] or h2h[1]):
+                wins, losses = h2h
+                h2h_color = _GREEN if wins > losses else (_DIM if wins == losses else (1.0, 0.4, 0.3, 1))
+                h2h_row = _BgBox(bg=(0.10, 0.18, 0.10, 1) if wins > losses else _BG_MED,
+                                 orientation='horizontal', size_hint_y=None, height=34, padding=(8, 0))
+                h2h_row.add_widget(_lbl('H2H:', color=_DIM, height=34))
+                h2h_row.add_widget(_lbl(f'{wins}W – {losses}L', color=h2h_color,
+                                        height=34, halign='right'))
+                left.add_widget(h2h_row)
+        except Exception:
+            pass
+
         left_sv.add_widget(left)
         root.add_widget(left_sv)
 

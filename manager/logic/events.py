@@ -20,6 +20,19 @@ _EVENTS = [
     ('performance_slump',    6),
     ('rival_interest',       5),
     ('comeback_veteran',     4),
+    # Feature 7: Media/scandals
+    ('social_media_drama',   5),
+    ('viral_clip',           5),
+    ('controversy',          3),
+    # Feature 8: Investors
+    ('investor_offer',       3),
+    # Feature 9: Injuries
+    ('player_injury',        5),
+    # Feature 10: Force-majeure
+    ('visa_problem',         3),
+    ('tv_deal',              3),
+    ('sponsor_viral_moment', 4),
+    ('equipment_theft',      2),
     ('no_event',             3),
 ]
 _EVENT_NAMES, _EVENT_WEIGHTS = zip(*_EVENTS)
@@ -286,6 +299,203 @@ def _apply(cur, event, team_id, player_ids, today=None):
         rival = random.choice(top_teams) if top_teams else 'конкурирующая команда'
         return ('Интерес соперников',
                 f'{rival} интересуется {nick}. Продлите контракт, чтобы не потерять игрока.')
+
+    # ── Feature 7: Social media ──────────────────────────────────────────────
+    if event == 'social_media_drama':
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        nick = row[0]
+        fine = random.choice([8_000, 12_000, 15_000])
+        cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?", (pid,))
+        cur.execute("UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (fine, team_id))
+        try:
+            cur.execute("UPDATE teams SET org_reputation=MAX(0,org_reputation-3) WHERE id=?", (team_id,))
+        except Exception:
+            pass
+        dramas = [
+            f'{nick} написал провокационный пост — скандал в соцсетях.',
+            f'{nick} поругался с фанатами в твиттере.',
+            f'{nick} опубликовал критику организации в интернете.',
+        ]
+        return ('Скандал в соцсетях',
+                f'{random.choice(dramas)} −${fine:,} штраф спонсоров, −1 мораль.', 'popup')
+
+    if event == 'viral_clip':
+        bonus = random.choice([6_000, 8_000, 12_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        try:
+            cur.execute("UPDATE teams SET org_reputation=MIN(100,org_reputation+5) WHERE id=?", (team_id,))
+        except Exception:
+            pass
+        stories = [
+            'Клип с невероятным мувом игрока набрал миллион просмотров.',
+            'Хайлайт матча разлетелся по соцсетям — хайп зашкаливает.',
+            'Контент команды стал вирусным — спонсоры довольны.',
+        ]
+        return ('Вирусный клип',
+                f'{random.choice(stories)} Репутация +5, бюджет +${bonus:,}.')
+
+    if event == 'controversy':
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-10) WHERE id=?", (team_id,))
+        try:
+            cur.execute("UPDATE teams SET org_reputation=MAX(0,org_reputation-5) WHERE id=?", (team_id,))
+        except Exception:
+            pass
+        return ('Скандал',
+                'Внутренний конфликт утёк в прессу. −1 мораль всем, −10 сыгранность, −5 репутации.',
+                'popup')
+
+    # ── Feature 8: Investors ─────────────────────────────────────────────────
+    if event == 'investor_offer':
+        # Check if investor already active
+        try:
+            cur.execute("SELECT COALESCE(investor_name,'') FROM teams WHERE id=?", (team_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return None  # already has investor
+        except Exception:
+            return None
+
+        companies = ['Red Bull Esports Fund', 'GameBoost Capital', 'Nexus Ventures',
+                     'ProPlay Investments', 'ESports Capital Group']
+        company = random.choice(companies)
+        amount  = random.choice([100_000, 150_000, 200_000])
+        cut     = random.choice([10, 15, 20])
+        seasons = 2
+        return (
+            'Предложение инвестора',
+            f'{company} предлагает ${amount:,} инвестиций в обмен на {cut}% доходов '
+            f'от стриминга на {seasons} сезона. Принять в разделе Организация.',
+            'investor_pending',
+            {'company': company, 'amount': amount, 'cut': cut, 'team_id': team_id,
+             'game_date': str(today)},
+        )
+
+    # ── Feature 9: Injuries ──────────────────────────────────────────────────
+    if event == 'player_injury':
+        if not today:
+            today = date.today()
+        # Pick player not already injured
+        eligible = []
+        for pid in player_ids:
+            cur.execute(
+                "SELECT nickname, COALESCE(age,22), COALESCE(fatigue,0), injured_until "
+                "FROM players WHERE id=?", (pid,)
+            )
+            row = cur.fetchone()
+            if row:
+                nick, age, fatigue, inj_until = row
+                if inj_until:
+                    try:
+                        if date.fromisoformat(inj_until) >= today:
+                            continue  # already injured
+                    except Exception:
+                        pass
+                eligible.append((pid, nick, age, fatigue))
+        if not eligible:
+            return None
+        pid, nick, age, fatigue = random.choice(eligible)
+        base_days = random.randint(14, 45)
+        # Older or fatigued players stay out longer
+        if age >= 30:
+            base_days = int(base_days * 1.4)
+        if fatigue >= 60:
+            base_days = int(base_days * 1.2)
+        until = str(today + timedelta(days=base_days))
+        cur.execute("UPDATE players SET injured_until=?, morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?",
+                    (until, pid))
+        injury_types = ['растяжение', 'микротравма запястья', 'боль в спине', 'усталостная травма']
+        return ('Травма',
+                f'{nick} получил {random.choice(injury_types)} — недоступен до {until} '
+                f'({base_days} дн.).', 'popup')
+
+    # ── Feature 10: Force-majeure ────────────────────────────────────────────
+    if event == 'visa_problem':
+        if not today:
+            today = date.today()
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname, injured_until FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        nick, inj = row
+        if inj:
+            try:
+                if date.fromisoformat(inj) >= today:
+                    return None
+            except Exception:
+                pass
+        days = random.randint(14, 45)
+        until = str(today + timedelta(days=days))
+        cur.execute("UPDATE players SET injured_until=? WHERE id=?", (until, pid))
+        reasons = [
+            'проблемы с визой для выездного турнира',
+            'таможенные задержки, не успел на рейс',
+            'бюрократические проволочки в консульстве',
+        ]
+        return ('Форс-мажор: виза',
+                f'{nick} пропустит {days} дней из-за {random.choice(reasons)}.', 'popup')
+
+    if event == 'tv_deal':
+        bonus = random.choice([20_000, 30_000, 40_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        try:
+            cur.execute(
+                "UPDATE teams SET org_reputation=MIN(100,org_reputation+8) WHERE id=?",
+                (team_id,)
+            )
+        except Exception:
+            pass
+        channels = ['ESPN Esports', 'Twitch Prime', 'YouTube Gaming', 'local esports channel']
+        return ('ТВ-сделка',
+                f'{random.choice(channels)} хочет снять документальный фильм о команде. '
+                f'Аванс: +${bonus:,}. Репутация +8.')
+
+    if event == 'sponsor_viral_moment':
+        bonus = random.choice([10_000, 15_000, 20_000])
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        nick = row[0] if row else '?'
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        try:
+            cur.execute(
+                "UPDATE teams SET org_reputation=MIN(100,org_reputation+5) WHERE id=?",
+                (team_id,)
+            )
+        except Exception:
+            pass
+        moments = [
+            f'невероятный мув {nick} собрал 2M просмотров за сутки',
+            f'мем с {nick} стал вирусным в Dota-комьюнити',
+            f'интервью {nick} разлетелось по соцсетям',
+        ]
+        return ('Вирусный момент',
+                f'Спонсор в восторге — {random.choice(moments)}. Бонус: +${bonus:,}.')
+
+    if event == 'equipment_theft':
+        loss = random.choice([15_000, 20_000, 25_000])
+        cur.execute("UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (loss, team_id))
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        incidents = [
+            'ограбление на буткемпе — украдены ноутбуки и периферия',
+            'пожар в офисе уничтожил оборудование',
+            'кража компьютеров на выездном турнире',
+        ]
+        return ('Форс-мажор: оборудование',
+                f'{random.choice(incidents)}. Потери: −${loss:,}, −1 мораль.', 'popup')
 
     if event == 'comeback_veteran':
         cur.execute(

@@ -649,7 +649,112 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
                 (tid,),
             )
 
+    # H2H records (Feature 5)
+    try:
+        player_id_row = cur.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+        if player_id_row:
+            ptid = player_id_row[0]
+            player_name = cur.execute("SELECT name FROM teams WHERE id=?", (ptid,)).fetchone()
+            pname_str = player_name[0].strip() if player_name else ''
+            p_place = placements.get(pname_str, 99)
+            if p_place < 99:
+                for opp_name, opp_place in placements.items():
+                    if opp_name == pname_str:
+                        continue
+                    opp_row = cur.execute(
+                        "SELECT id FROM teams WHERE name=?", (opp_name,)
+                    ).fetchone()
+                    if not opp_row:
+                        continue
+                    opp_id = opp_row[0]
+                    cur.execute(
+                        "INSERT OR IGNORE INTO h2h_records (opponent_team_id) VALUES (?)",
+                        (opp_id,)
+                    )
+                    if p_place < opp_place:
+                        cur.execute(
+                            "UPDATE h2h_records SET wins=wins+1, last_tournament=? "
+                            "WHERE opponent_team_id=?",
+                            (str(tournament_id), opp_id)
+                        )
+                    elif opp_place < p_place:
+                        cur.execute(
+                            "UPDATE h2h_records SET losses=losses+1, last_tournament=? "
+                            "WHERE opponent_team_id=?",
+                            (str(tournament_id), opp_id)
+                        )
+    except Exception:
+        pass
+
+    # Rival tracking (Feature 3)
+    try:
+        player_row = cur.execute(
+            "SELECT id, rival_team_id FROM teams WHERE player='yes'"
+        ).fetchone()
+        if player_row:
+            ptid, rival_id = player_row
+            if rival_id:
+                rival_name_row = cur.execute("SELECT name FROM teams WHERE id=?", (rival_id,)).fetchone()
+                rival_name_str = rival_name_row[0].strip() if rival_name_row else ''
+                player_place = placements.get(
+                    cur.execute("SELECT name FROM teams WHERE id=?", (ptid,)).fetchone()[0].strip()
+                    if ptid else '', 99)
+                rival_place = placements.get(rival_name_str, 99)
+                if rival_place < 99 and player_place < 99:
+                    if player_place < rival_place:
+                        cur.execute(
+                            "UPDATE teams SET rival_wins=COALESCE(rival_wins,0)+1 WHERE id=?",
+                            (ptid,)
+                        )
+                    elif rival_place < player_place:
+                        cur.execute(
+                            "UPDATE teams SET rival_losses=COALESCE(rival_losses,0)+1 WHERE id=?",
+                            (ptid,)
+                        )
+    except Exception:
+        pass
+
+    # Org reputation boost based on placement (Feature 4)
+    rep_by_place = {1: 15, 2: 10, 3: 7, 4: 5, 5: 3, 6: 3, 7: 2, 8: 2}
+    for i, team_name in enumerate(final_standings):
+        if not team_name:
+            continue
+        tid = id_map.get(team_name)
+        if not tid:
+            continue
+        place = i + 1
+        rep_gain = rep_by_place.get(place, 1)
+        try:
+            cur.execute(
+                "UPDATE teams SET org_reputation=MIN(100, COALESCE(org_reputation,20)+?) WHERE id=?",
+                (rep_gain, tid),
+            )
+        except Exception:
+            pass
+
     conn.commit()
+    conn.close()
+
+
+def increment_player_fatigue(db_name, team_name, amount=8):
+    """Increase fatigue for all active players of a team after matches."""
+    conn = sqlite3.connect(db_name)
+    try:
+        row = conn.execute(
+            "SELECT carry, mid, offlane, partial_support, full_support "
+            "FROM teams WHERE name=?", (team_name,)
+        ).fetchone()
+        if row:
+            pids = [p for p in row if p]
+            if pids:
+                ph = ','.join('?' * len(pids))
+                conn.execute(
+                    f"UPDATE players SET fatigue=MIN(100, COALESCE(fatigue,0)+?) WHERE id IN ({ph})",
+                    [amount] + list(pids)
+                )
+                conn.commit()
+    except Exception:
+        pass
     conn.close()
 
 
@@ -703,6 +808,16 @@ SEASON_TOURNAMENTS = [
 ]
 
 
+def _regional_league_templates(year):
+    """Return 4 regional DPC league events for a given year."""
+    return [
+        (f"DPC EEU Division I {year} S1",   f"{year}-02-10", f"{year}-02-17", 200_000, 200),
+        (f"DPC WEU Division I {year} S1",   f"{year}-02-12", f"{year}-02-19", 200_000, 200),
+        (f"DPC SEA Division I {year} S1",   f"{year}-07-08", f"{year}-07-13", 200_000, 200),
+        (f"DPC CN Division I {year} S1",    f"{year}-07-10", f"{year}-07-15", 200_000, 200),
+    ]
+
+
 def ensure_season_tournaments(db_name):
     conn = sqlite3.connect(db_name)
     cur = conn.cursor()
@@ -715,6 +830,16 @@ def ensure_season_tournaments(db_name):
                 "VALUES (?, ?, ?, ?, ?)",
                 (name, start, end, prize, rating),
             )
+    # Add regional leagues for known years
+    for year in range(2024, 2031):
+        for name, start, end, prize, rating in _regional_league_templates(year):
+            if name not in existing:
+                cur.execute(
+                    "INSERT INTO tournaments (name, start_date, end_date, prizepool, ratingpool) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (name, start, end, prize, rating),
+                )
+                existing.add(name)
     conn.commit()
     conn.close()
 
@@ -742,6 +867,13 @@ def ensure_next_year_tournaments(db_name, year):
     cur.execute("SELECT name FROM tournaments")
     existing = {r[0] for r in cur.fetchall()}
     for name, start, end, prize, rating in templates:
+        if name not in existing:
+            cur.execute(
+                "INSERT INTO tournaments (name, start_date, end_date, prizepool, ratingpool) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, start, end, prize, rating),
+            )
+    for name, start, end, prize, rating in _regional_league_templates(year):
         if name not in existing:
             cur.execute(
                 "INSERT INTO tournaments (name, start_date, end_date, prizepool, ratingpool) "

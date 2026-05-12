@@ -27,7 +27,20 @@
       "Bash(pacman -Ss \"^python311\")",
       "Bash(yay -Ss python311)",
       "Bash(yay -Ss \"^python311-bin\")",
-      "Bash(yay -Ss \"^python311 \")"
+      "Bash(yay -Ss \"^python311 \")",
+      "Bash(echo \"PID=$!\")",
+      "Bash(timeout 10 /home/vlad/Dev/dota_manager/.venv/bin/python dota_manager.py)",
+      "Bash(grep -v \"^--$\\\\|icon\\\\|BMP\\\\|set_icon\\\\|_set_icon\")",
+      "Bash(cp /home/vlad/Dev/dota_manager/manager/images/core1.png /home/vlad/.local/share/icons/dota_manager.png)",
+      "Bash(mkdir -p /home/vlad/.local/share/icons)",
+      "Bash(mkdir -p /home/vlad/.local/share/applications)",
+      "Bash(cat)",
+      "Bash(chmod +x /home/vlad/.local/share/applications/dota_manager.desktop)",
+      "Bash(update-desktop-database /home/vlad/.local/share/applications/)",
+      "Bash(cp /home/vlad/Dev/dota_manager/dist/dota_manager /home/vlad/.local/bin/dota_manager)",
+      "Read(//home/vlad/.local/bin/**)",
+      "Bash(.venv/bin/pyinstaller dota_manager.spec)",
+      "Bash(python3.14 *)"
     ]
   }
 }

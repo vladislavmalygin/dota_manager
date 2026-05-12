@@ -55,7 +55,10 @@ class OrganizationPopup(Popup):
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT id, name, country, budget, manager, rating FROM teams WHERE player = 'yes'"
+            "SELECT id, name, country, budget, manager, rating, "
+            "COALESCE(org_reputation,20), COALESCE(investor_name,''), "
+            "COALESCE(investor_end_date,''), COALESCE(investor_cut_pct,0) "
+            "FROM teams WHERE player = 'yes'"
         )
         team = cursor.fetchone()
         if not team:
@@ -63,14 +66,29 @@ class OrganizationPopup(Popup):
             conn.close()
             return
 
-        team_id, name, country, budget, manager, rating = team
+        team_id, name, country, budget, manager, rating, \
+            org_rep, inv_name, inv_end, inv_cut = team
         budget = budget or 0
         rating = rating or 0
+
+        # Active patch
+        try:
+            from logic.meta import patch_description
+            patch_txt = patch_description(db_name)
+        except Exception:
+            patch_txt = ''
 
         grid.add_widget(self._header(f"Организация: {name}"))
         grid.add_widget(self._row(f"  Страна: {country or '—'}"))
         grid.add_widget(self._row(f"  Менеджер: {manager or '—'}"))
         grid.add_widget(self._row(f"  Рейтинг: {int(rating)}"))
+        grid.add_widget(self._row(f"  Репутация орг.: {org_rep}/100"))
+        if patch_txt:
+            grid.add_widget(self._row(f"  {patch_txt}"))
+        if inv_name and inv_end:
+            grid.add_widget(self._row(
+                f"  Инвестор: {inv_name}  ({inv_cut}% доходов до {inv_end})"
+            ))
         grid.add_widget(self._row(f"  Бюджет: ${budget:,}", height=50))
 
         roles_order = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
@@ -138,7 +156,38 @@ class OrganizationPopup(Popup):
         except Exception:
             pass
 
+        # Rival info
+        rival_name = None
+        rival_wins = 0
+        rival_losses = 0
+        try:
+            rv = conn.execute(
+                "SELECT t2.name, t1.rival_wins, t1.rival_losses "
+                "FROM teams t1 LEFT JOIN teams t2 ON t1.rival_team_id=t2.id "
+                "WHERE t1.id=?", (team_id,)
+            ).fetchone()
+            if rv and rv[0]:
+                rival_name, rival_wins, rival_losses = rv
+        except Exception:
+            pass
+
         conn.close()
+
+        # ── Rival section ─────────────────────────────────────────
+        grid.add_widget(self._header("Соперник"))
+        if rival_name:
+            grid.add_widget(self._row(
+                f'  Соперник: [b]{rival_name}[/b]  |  '
+                f'Победы: {rival_wins}  Поражений: {rival_losses}'
+            ))
+        else:
+            grid.add_widget(self._row('  Соперник не выбран.'))
+        rival_btn = Button(
+            text='Выбрать соперника', size_hint_y=None, height=44,
+            background_color=(0.30, 0.18, 0.48, 1), background_normal='',
+        )
+        rival_btn.bind(on_press=lambda _: _pick_rival(db_name, team_id, self))
+        grid.add_widget(rival_btn)
 
         # ── Actions ──────────────────────────────────────────────
         grid.add_widget(self._header("Действия"))
@@ -237,6 +286,53 @@ def _do_loan(db_name, team_id, popup):
     conn.commit(); conn.close()
     popup.dismiss()
     show_organization_popup(db_name)
+
+
+def _pick_rival(db_name, team_id, parent_popup):
+    from kivy.uix.popup import Popup
+    from kivy.uix.scrollview import ScrollView
+    conn = sqlite3.connect(db_name)
+    teams = conn.execute(
+        "SELECT id, name FROM teams WHERE id!=? AND player!='yes' "
+        "ORDER BY COALESCE(rating,0) DESC LIMIT 12", (team_id,)
+    ).fetchall()
+    conn.close()
+
+    root = BoxLayout(orientation='vertical', padding=8, spacing=6)
+    root.add_widget(Label(text='Выберите соперника:', size_hint_y=None, height=30,
+                          color=(0.85, 0.70, 1.0, 1), bold=True))
+    sv = ScrollView(size_hint=(1, 1))
+    grid = GridLayout(cols=1, size_hint_y=None, spacing=3)
+    grid.bind(minimum_height=grid.setter('height'))
+
+    popup = Popup(title='', content=root, size_hint=(0.55, 0.65),
+                  background_color=(1, 1, 1, 0))
+
+    def _set(tid, tname):
+        c2 = sqlite3.connect(db_name)
+        c2.execute(
+            "UPDATE teams SET rival_team_id=?, rival_wins=0, rival_losses=0 WHERE id=?",
+            (tid, team_id)
+        )
+        c2.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+            (f'Выбран соперник: {tname}. Победы над ними будут засчитываться в соперничестве.',
+             'Организация')
+        )
+        c2.commit(); c2.close()
+        popup.dismiss()
+        parent_popup.dismiss()
+        show_organization_popup(db_name)
+
+    for tid, tname in teams:
+        b = Button(text=tname.strip(), size_hint_y=None, height=40,
+                   background_color=(0.20, 0.15, 0.35, 1), background_normal='')
+        b.bind(on_press=lambda _, i=tid, n=tname: _set(i, n))
+        grid.add_widget(b)
+
+    sv.add_widget(grid)
+    root.add_widget(sv)
+    popup.open()
 
 
 def show_organization_popup(db_name):

@@ -1444,7 +1444,11 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     strat_btns  = {}   # (phase, key) → Button
     hero_btns   = {}   # (role, name) → Button
+    ban_btns    = {}   # hero_name → Button
     strat_state = dict(cur_strats)
+    player_bans = []   # list of banned hero names (player picks up to 3)
+    ai_bans     = []   # AI bans (auto after player done)
+    _BAN_MAX    = 3
 
     _BG   = (0.07, 0.09, 0.13, 1)
     _SEL  = (0.10, 0.45, 0.18, 1)
@@ -1509,16 +1513,93 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     body.add_widget(left)
 
-    # ── RIGHT: hero picks ─────────────────────────────────────────────────────
+    # ── RIGHT: bans + hero picks ──────────────────────────────────────────────
     right = BoxLayout(orientation='vertical', size_hint_x=0.62, spacing=3)
-    right.add_widget(_lbl('ГЕРОИ', height=26, fs='13sp'))
 
     _ROLE_RU = {
         'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
         'partial_support': 'Sup 4', 'full_support': 'Sup 5',
     }
+    _BANNED  = (0.40, 0.08, 0.08, 1)
+    _AIBANNED = (0.22, 0.08, 0.22, 1)
+
+    ban_status_lbl = Label(
+        text=f'[b]БАН-ФАЗА[/b]  (выбрано 0/{_BAN_MAX})', markup=True,
+        color=(1.00, 0.45, 0.20, 1), size_hint_y=None, height=24,
+        font_size='12sp', halign='left', valign='middle',
+    )
+    ban_status_lbl.bind(size=ban_status_lbl.setter('text_size'))
+    right.add_widget(ban_status_lbl)
+
+    # Bans grid: all heroes flat, 2 rows × many cols
+    ban_sv = ScrollView(size_hint=(1, None), height=80, do_scroll_y=False)
+    ban_grid = GridLayout(cols=1, size_hint_y=None)
+    ban_grid.bind(minimum_height=ban_grid.setter('height'))
+    ban_row1 = BoxLayout(size_hint_y=None, height=36, spacing=2)
+    ban_row2 = BoxLayout(size_hint_y=None, height=36, spacing=2)
+    ban_grid.add_widget(ban_row1)
+    ban_grid.add_widget(ban_row2)
+    ban_sv.add_widget(ban_grid)
+    right.add_widget(ban_sv)
+
+    _all_heroes = [(role, h) for role in ROLE_ORDER for h in HEROES[role][:5]]
+
+    def _refresh_hero_btns():
+        all_banned = set(player_bans) | set(ai_bans)
+        for (role, hname), hbtn in hero_btns.items():
+            if hname in all_banned:
+                hbtn.disabled = True
+                hbtn.background_color = _BANNED
+            else:
+                is_sel = picks.get(role, (None,))[0] == hname
+                hbtn.disabled = False
+                hbtn.background_color = _HSEL if is_sel else _HUNS
+            # if picked hero got banned, repick randomly
+            if picks.get(role, (None,))[0] in all_banned:
+                pool = [h for h in HEROES[role] if h[0] not in all_banned]
+                if pool:
+                    picks[role] = _rnd.choice(pool)
+
+    def _do_ai_bans():
+        all_names = [h[0] for _, h in _all_heroes]
+        pool = [n for n in all_names if n not in player_bans]
+        _rnd.shuffle(pool)
+        for hname in pool[:_BAN_MAX]:
+            ai_bans.append(hname)
+            if hname in ban_btns:
+                ban_btns[hname].background_color = _AIBANNED
+                ban_btns[hname].text = f'[s]{hname}[/s]'
+                ban_btns[hname].markup = True
+        ban_status_lbl.text = (f'[b]БАН-ФАЗА[/b]  Ваши: {len(player_bans)}  '
+                               f'AI: {len(ai_bans)}  ✓ пики открыты')
+        _refresh_hero_btns()
+
+    def _toggle_ban(hname, btn):
+        if hname in player_bans:
+            player_bans.remove(hname)
+            btn.background_color = (0.22, 0.22, 0.30, 1)
+        elif len(player_bans) < _BAN_MAX:
+            player_bans.append(hname)
+            btn.background_color = _BANNED
+        ban_status_lbl.text = f'[b]БАН-ФАЗА[/b]  (выбрано {len(player_bans)}/{_BAN_MAX})'
+        if len(player_bans) == _BAN_MAX and not ai_bans:
+            _do_ai_bans()
+
+    for i, (role, hero) in enumerate(_all_heroes):
+        hname = hero[0]
+        btn = Button(
+            text=hname, font_size='9sp', background_normal='',
+            background_color=(0.22, 0.22, 0.30, 1), size_hint_x=None, width=78,
+        )
+        btn.bind(on_press=lambda _, n=hname, b=btn: _toggle_ban(n, b))
+        ban_btns[hname] = btn
+        (ban_row1 if i < len(_all_heroes)//2 else ban_row2).add_widget(btn)
+
+    right.add_widget(_lbl('ГЕРОИ  (бан-героев недоступны)', height=24, fs='12sp'))
 
     def _pick_hero(role, hero):
+        if hero[0] in set(player_bans) | set(ai_bans):
+            return
         prev = picks.get(role)
         if prev and (role, prev[0]) in hero_btns:
             hero_btns[(role, prev[0])].background_color = _HUNS
@@ -2318,6 +2399,23 @@ class TournamentPopup(Popup):
         update_morale_after_tournament(
             self.db_name, event['placements'], event['group_eliminated'],
         )
+        # Achievement check after tournament
+        try:
+            from logic.achievements import check_achievements
+            _ctx = {
+                'youth_win': event.get('youth_win', False),
+            }
+            _new = check_achievements(self.db_name, _game_date or '', _ctx)
+            for _aname, _abonus in _new:
+                _mc = sqlite3.connect(self.db_name)
+                _mc.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'🏆 Достижение разблокировано: «{_aname}»! Бонус: {_abonus}',
+                     _game_date or '', 'Достижения')
+                )
+                _mc.commit(); _mc.close()
+        except Exception:
+            pass
         try:
             _gd = sqlite3.connect(self.db_name).execute(
                 "SELECT date FROM save WHERE id=1"
@@ -2334,6 +2432,18 @@ class TournamentPopup(Popup):
             placements=event.get('placements', {}),
             champion_name=event.get('champion'),
         )
+        # Fatigue increment for player's team (Feature 3)
+        try:
+            from logic.tournaments.runner import increment_player_fatigue
+            from logic.dota.match_data import get_teams_with_player_yes
+            _ptms = get_teams_with_player_yes(self.db_name)
+            _gp = event.get('games_played', {})
+            for _pt in _ptms:
+                _n = _gp.get(_pt, 0)
+                if _n > 0:
+                    increment_player_fatigue(self.db_name, _pt, amount=_n * 5)
+        except Exception:
+            pass
         update_form_after_tournament(
             self.db_name,
             event.get('placements', {}),

@@ -66,10 +66,14 @@ class AcademyPopup(Popup):
 
         # Tab bar
         tab_row = BoxLayout(size_hint_y=None, height=38, spacing=4)
-        for tid, tlabel in [('market', 'Рынок таланов'), ('squad', 'Моя молодёжь')]:
+        for tid, tlabel in [
+            ('market', 'Рынок талантов'),
+            ('squad',  'Моя молодёжь'),
+            ('camp',   'Сборы'),
+        ]:
             active = tid == self._tab
             btn = Button(
-                text=tlabel, size_hint_x=0.5,
+                text=tlabel, size_hint_x=0.33,
                 background_color=(0.20, 0.55, 0.80, 1) if active else (0.18, 0.20, 0.25, 1),
                 background_normal='', bold=active,
             )
@@ -79,8 +83,10 @@ class AcademyPopup(Popup):
 
         if self._tab == 'market':
             self._build_market(root)
-        else:
+        elif self._tab == 'squad':
             self._build_squad(root)
+        else:
+            self._build_camp(root)
 
         root.add_widget(Button(
             text='Закрыть', size_hint_y=None, height=44,
@@ -92,6 +98,109 @@ class AcademyPopup(Popup):
     def _switch(self, tab):
         self.dismiss()
         AcademyPopup(db_name=self.db_name, tab=tab).open()
+
+    # ── camp tab ──────────────────────────────────────────────────────────────
+
+    def _build_camp(self, root):
+        conn = sqlite3.connect(self.db_name)
+        team = conn.execute(
+            "SELECT id, COALESCE(budget,0) FROM teams WHERE player='yes'"
+        ).fetchone()
+        if not team:
+            conn.close()
+            root.add_widget(_lbl('Нет команды.', _RED))
+            return
+        team_id, budget = team
+
+        youth = conn.execute(
+            "SELECT id, nickname, role, micro_skills, macro_skills, soft_skills, "
+            "COALESCE(skill_cap,300) FROM players "
+            "WHERE team_id=? AND is_youth=1", (team_id,)
+        ).fetchall()
+        conn.close()
+
+        root.add_widget(_lbl(f'  Бюджет: ${budget:,}', _GOLD, height=30, bold=True))
+        root.add_widget(_lbl(
+            f'  Молодёжных игроков: {len(youth)}', _WHITE, height=26
+        ))
+
+        sv = ScrollView(size_hint=(1, 0.65))
+        grid = GridLayout(cols=1, size_hint_y=None, spacing=2)
+        grid.bind(minimum_height=grid.setter('height'))
+        if youth:
+            grid.add_widget(_lbl('  Ник             Роль     Micro  Macro  Soft   Потенциал',
+                                  _DIM, height=22))
+            for pid, nick, role, mi, mx, so, cap in youth:
+                stars = _potential(cap)
+                grid.add_widget(_lbl(
+                    f'  {(nick or "?")[:14]:<14}  {_ROLE_SHORT.get(role,"?"):<8} '
+                    f'{mi:3d}    {mx:3d}    {so:3d}   {stars}',
+                    _WHITE, height=22
+                ))
+        else:
+            grid.add_widget(_lbl('  Нет молодёжи в команде.', _DIM))
+        sv.add_widget(grid)
+        root.add_widget(sv)
+
+        root.add_widget(_lbl('  ── Тренировочные сборы ──', _ACCENT, height=28, bold=True))
+
+        for cost, gain, label, desc in [
+            (20_000, 3, 'Лёгкий сбор  ($20,000)',
+             f'+3 к каждому скиллу всех {len(youth)} молодёжных игроков'),
+            (40_000, 6, 'Серьёзный сбор  ($40,000)',
+             f'+6 к каждому скиллу + +1 мораль'),
+        ]:
+            can = budget >= cost and len(youth) > 0
+            root.add_widget(_lbl(f'  {desc}', _DIM if not can else _WHITE, height=22))
+            btn = Button(
+                text=label, size_hint_y=None, height=44,
+                background_color=(0.15, 0.45, 0.20, 1) if can else (0.28, 0.28, 0.28, 1),
+                background_normal='', disabled=not can,
+            )
+            btn.bind(on_press=lambda _, db=self.db_name, tid=team_id,
+                     c=cost, g=gain, morale=(1 if cost >= 40_000 else 0):
+                     self._do_camp(db, tid, c, g, morale))
+            root.add_widget(btn)
+
+    def _do_camp(self, db_name, team_id, cost, gain, morale_gain):
+        from kivy.uix.popup import Popup
+        conn = sqlite3.connect(db_name)
+        budget = conn.execute(
+            "SELECT COALESCE(budget,0) FROM teams WHERE id=?", (team_id,)
+        ).fetchone()[0]
+        if budget < cost:
+            conn.close()
+            from kivy.uix.label import Label as _L
+            Popup(content=_L(text='Недостаточно средств', halign='center'),
+                  size_hint=(0.4, 0.22)).open()
+            return
+        youth_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM players WHERE team_id=? AND is_youth=1", (team_id,)
+        ).fetchall()]
+        if not youth_ids:
+            conn.close()
+            return
+        ph = ','.join('?' * len(youth_ids))
+        conn.execute("UPDATE teams SET budget=budget-? WHERE id=?", (cost, team_id))
+        for col in ('micro_skills', 'macro_skills', 'soft_skills'):
+            conn.execute(
+                f"UPDATE players SET {col}=MIN(100,COALESCE({col},0)+?) WHERE id IN ({ph})",
+                [gain] + list(youth_ids)
+            )
+        if morale_gain:
+            conn.execute(
+                f"UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id IN ({ph})",
+                list(youth_ids)
+            )
+        conn.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+            (f'Молодёжный сбор: {len(youth_ids)} игроков получили +{gain} к навыкам'
+             + (' +1 мораль' if morale_gain else '') + f'. Расходы: −${cost:,}',
+             'Академия')
+        )
+        conn.commit(); conn.close()
+        self.dismiss()
+        AcademyPopup(db_name=db_name, tab='camp').open()
 
     # ── market tab ────────────────────────────────────────────────────────────
 

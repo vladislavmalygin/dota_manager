@@ -94,9 +94,12 @@ class Dota_Manager(App):
         return MainMenu()
 
     def on_start(self):
-        pygame.mixer.init()
-        pygame.mixer.music.load('music/music.mp3')  # Замените на путь к вашему музыкальному файлу
-        pygame.mixer.music.play(-1)  # -1 означает бесконечное воспроизведение
+        try:
+            pygame.mixer.init()
+            pygame.mixer.music.load('music/music.mp3')
+            pygame.mixer.music.play(-1)
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     Dota_Manager().run()

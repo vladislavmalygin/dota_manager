@@ -24,7 +24,8 @@ def chemistry_score(db_name, team_id):
     for pid in pids:
         p = c.execute(
             "SELECT country, COALESCE(micro_skills,0), COALESCE(macro_skills,0),"
-            "COALESCE(soft_skills,0), COALESCE(time_in_team,0), COALESCE(morale,5)"
+            "COALESCE(soft_skills,0), COALESCE(time_in_team,0), COALESCE(morale,5),"
+            "COALESCE(psychotype,'team_player')"
             " FROM players WHERE id=?", (pid,)
         ).fetchone()
         if p:
@@ -58,12 +59,54 @@ def chemistry_score(db_name, team_id):
     if   avg_time >= 3: score += 1.0
     elif avg_time >= 1: score += 0.5
 
+    # Pair bonds — carry/mid/offlane veterans together ≥ 2 seasons
+    core_times = [p[4] for p in players[:3]]  # carry, mid, offlane time_in_team
+    bonded_pairs = sum(1 for t in core_times if t >= 2)
+    if   bonded_pairs == 3: score += 1.2
+    elif bonded_pairs == 2: score += 0.6
+
+    # Psychotype effects
+    psychotypes = [p[6] for p in players]
+    leaders     = psychotypes.count('leader')
+    team_players = psychotypes.count('team_player')
+    if leaders >= 2:   score -= 1.5  # two alphas clash
+    elif leaders == 1: score += 0.3  # one leader = good
+    if team_players >= 3: score += 0.5
+
     # Morale
     avg_morale = sum(p[5] for p in players) / len(players)
     if   avg_morale >= 8: score += 0.5
     elif avg_morale <= 3: score -= 0.5
 
     return min(10.0, max(1.0, round(score * 10) / 10))
+
+
+def pair_bond_description(db_name, team_id):
+    """Return short text about strongest player pairs for UI."""
+    conn = sqlite3.connect(db_name)
+    c = conn.cursor()
+    row = c.execute(
+        "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+        (team_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return ''
+    roles = ['carry', 'mid', 'offlane', 'sup4', 'sup5']
+    pairs = []
+    for i, pid in enumerate(row):
+        if not pid:
+            continue
+        p = c.execute(
+            "SELECT nickname, COALESCE(time_in_team,0) FROM players WHERE id=?", (pid,)
+        ).fetchone()
+        if p and p[1] >= 2:
+            pairs.append((p[0], roles[i], p[1]))
+    conn.close()
+    if len(pairs) >= 2:
+        names = ' + '.join(f'{n}({r})' for n, r, _ in pairs[:2])
+        return f'Связка: {names}'
+    return ''
 
 
 def chemistry_mult(score):
