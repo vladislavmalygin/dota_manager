@@ -1939,6 +1939,23 @@ class TournamentPopup(Popup):
         if self._player_in_minor and not self._player_qualified and self._tournament_ev:
             pass  # main tournament was already persisted above; minor persisted after feed
 
+        # Tournament where player has no matches (e.g. DPC in wrong region) → silent complete
+        if not self._player_teams and not self._player_matches:
+            if self._tournament_ev:
+                self._persist_results(self._tournament_ev)
+                champ = self._tournament_ev.get('champion', '?')
+                self._tournament_ev = None
+            else:
+                champ = '?'
+            _add_message(db_name, f"{tournament_name}: чемпион — {champ}.", 'Новости')
+            self.bind(on_dismiss=self._on_dismissed)
+            self.content = Label(
+                text=f'{tournament_name}\nВаша команда не участвует.\nЧемпион: {champ}.',
+                halign='center', valign='middle',
+            )
+            Clock.schedule_once(lambda dt: self.dismiss(), 0.0)
+            return
+
         self._build_ui(tournament_name)
 
     # ── state builder ─────────────────────────────────────────
@@ -2150,6 +2167,7 @@ class TournamentPopup(Popup):
         self._next_step()
 
     def _step_delay(self, stage):
+        if 'Лига'   in stage: return 0.08
         if 'Группа' in stage: return 0.35
         if 'Малый'  in stage: return 1.2
         return 2.0

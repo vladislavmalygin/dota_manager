@@ -101,16 +101,18 @@ class AcademyPopup(Popup):
 
     # ── camp tab ──────────────────────────────────────────────────────────────
 
+    _MAX_CAMPS = 2
+
     def _build_camp(self, root):
         conn = sqlite3.connect(self.db_name)
         team = conn.execute(
-            "SELECT id, COALESCE(budget,0) FROM teams WHERE player='yes'"
+            "SELECT id, COALESCE(budget,0), COALESCE(youth_camp_count,0) FROM teams WHERE player='yes'"
         ).fetchone()
         if not team:
             conn.close()
             root.add_widget(_lbl('Нет команды.', _RED))
             return
-        team_id, budget = team
+        team_id, budget, camp_count = team
 
         youth = conn.execute(
             "SELECT id, nickname, role, micro_skills, macro_skills, soft_skills, "
@@ -142,15 +144,19 @@ class AcademyPopup(Popup):
         sv.add_widget(grid)
         root.add_widget(sv)
 
-        root.add_widget(_lbl('  ── Тренировочные сборы ──', _ACCENT, height=28, bold=True))
+        camps_left = self._MAX_CAMPS - camp_count
+        root.add_widget(_lbl(
+            f'  ── Тренировочные сборы ──  (осталось в сезоне: {camps_left}/{self._MAX_CAMPS})',
+            _ACCENT, height=28, bold=True
+        ))
 
         for cost, gain, label, desc in [
-            (20_000, 3, 'Лёгкий сбор  ($20,000)',
-             f'+3 к каждому скиллу всех {len(youth)} молодёжных игроков'),
-            (40_000, 6, 'Серьёзный сбор  ($40,000)',
-             f'+6 к каждому скиллу + +1 мораль'),
+            (20_000, 2, 'Лёгкий сбор  ($20,000)',
+             f'+2 к каждому скиллу всех {len(youth)} молодёжных игроков'),
+            (40_000, 4, 'Серьёзный сбор  ($40,000)',
+             f'+4 к каждому скиллу + +1 мораль'),
         ]:
-            can = budget >= cost and len(youth) > 0
+            can = budget >= cost and len(youth) > 0 and camps_left > 0
             root.add_widget(_lbl(f'  {desc}', _DIM if not can else _WHITE, height=22))
             btn = Button(
                 text=label, size_hint_y=None, height=44,
@@ -181,7 +187,7 @@ class AcademyPopup(Popup):
             conn.close()
             return
         ph = ','.join('?' * len(youth_ids))
-        conn.execute("UPDATE teams SET budget=budget-? WHERE id=?", (cost, team_id))
+        conn.execute("UPDATE teams SET budget=budget-?, youth_camp_count=COALESCE(youth_camp_count,0)+1 WHERE id=?", (cost, team_id))
         for col in ('micro_skills', 'macro_skills', 'soft_skills'):
             conn.execute(
                 f"UPDATE players SET {col}=MIN(100,COALESCE({col},0)+?) WHERE id IN ({ph})",

@@ -416,6 +416,12 @@ class SeasonEndPopup(Popup):
         apply_age_decline(self.db_name)
         ensure_next_year_tournaments(self.db_name, self.year + 1)
 
+        # Reset youth camp counter for new season
+        _sc = sqlite3.connect(self.db_name)
+        _sc.execute("UPDATE teams SET youth_camp_count=0")
+        _sc.commit()
+        _sc.close()
+
         # Первый сезон = год первого завершённого турнира
         import sqlite3 as _sq
         _c = _sq.connect(self.db_name)

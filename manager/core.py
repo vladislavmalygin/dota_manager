@@ -57,6 +57,7 @@ from db_migrate28 import migrate as _migrate28
 from db_migrate29 import migrate as _migrate29
 from db_migrate30 import migrate as _migrate30
 from db_migrate31 import migrate as _migrate31
+from db_migrate32 import migrate as _migrate32
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -1038,6 +1039,7 @@ class MainWindow(BoxLayout):
         _migrate29(db_name)
         _migrate30(db_name)
         _migrate31(db_name)
+        _migrate32(db_name)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""
@@ -1623,8 +1625,8 @@ class MainWindow(BoxLayout):
         print(f'Нажата кнопка: {instance.text}')
 
     def on_achievements(self, instance):
-        from ingame_interface.achievements import show_achievements_popup
-        show_achievements_popup(self.db_name)
+        from ingame_interface.achievements import AchievementsPopup
+        self._show_inline(AchievementsPopup(self.db_name), 'Достижения')
 
     def on_incoming(self, instance):
         messages = self._load_messages()
@@ -1849,7 +1851,7 @@ class MainWindow(BoxLayout):
         self._show_inline(SponsorsPopup(self.db_name), 'Спонсоры')
 
     def on_settings(self, instance):
-        SettingsPopup().open()
+        self._show_inline(SettingsPopup(), 'Настройки')
 
     def on_profile(self, instance):
         from ingame_interface.profile import ProfilePopup

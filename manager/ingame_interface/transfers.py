@@ -1191,10 +1191,14 @@ class TransferPopup(Popup):
                 "renewal_notified=0 WHERE id=?",
                 (buyer_id, new_wage, cend, pid),
             )
-            cx.execute(
-                "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?",
-                (my,),
-            )
+            _is_youth = (cx.execute(
+                "SELECT COALESCE(is_youth,0) FROM players WHERE id=?", (pid,)
+            ).fetchone() or (0,))[0]
+            if not _is_youth:
+                cx.execute(
+                    "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?",
+                    (my,),
+                )
             # Clear conflict_targets if this player was a target
             ct_row = cx.execute(
                 "SELECT conflict_targets FROM teams WHERE id=?", (my,)
@@ -1268,7 +1272,11 @@ class TransferPopup(Popup):
             "wants_to_leave=0, renewal_notified=0 WHERE id=?",
             (buyer_id, new_wage, cend, pid),
         )
-        cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?", (my,))
+        _is_youth = (cur.execute(
+            "SELECT COALESCE(is_youth,0) FROM players WHERE id=?", (pid,)
+        ).fetchone() or (0,))[0]
+        if not _is_youth:
+            cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-15) WHERE id=?", (my,))
         cur.execute("DELETE FROM ai_offers WHERE player_id=?", (pid,))
         # Clear conflict_targets if this player was a target
         ct_row = cur.execute(
@@ -1408,9 +1416,12 @@ class TransferPopup(Popup):
                 "UPDATE teams SET conflict_targets=? WHERE id=?",
                 (','.join(remaining) if remaining else None, team_id),
             )
-        # Cohesion penalty (skip if releasing a conflict target — conflict penalty already applied)
+        # Cohesion penalty (skip if releasing a conflict target or youth player)
         is_conflict_target = ct_row and ct_row[0] and str(player_id) in ct_row[0].split(',')
-        if not is_conflict_target:
+        _is_youth = (cur.execute(
+            "SELECT COALESCE(is_youth,0) FROM players WHERE id=?", (player_id,)
+        ).fetchone() or (0,))[0]
+        if not is_conflict_target and not _is_youth:
             cur.execute(
                 "UPDATE teams SET cohesion=MAX(0, COALESCE(cohesion, 0)-15) WHERE id=?",
                 (team_id,),

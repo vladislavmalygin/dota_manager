@@ -359,8 +359,8 @@ def generate_dpc_regional_events(db_name, tournament_id, region_filter):
         return [], {}, []
 
     team_names = [t[0] for t in teams]
-    player_teams = {player_team} if player_team else set()
     player_qualified = player_team in team_names if player_team else False
+    player_teams = {player_team} if player_team and player_qualified else set()
 
     standings = {t: 0 for t in team_names}
     events = []
@@ -1009,10 +1009,14 @@ def ensure_season_tournaments(db_name):
 
 
 def ensure_next_year_tournaments(db_name, year):
-    """Generate a standard 8-tournament year if no tournaments for that year exist."""
+    """Generate a standard 8-tournament year if no main tournaments for that year exist."""
     conn = sqlite3.connect(db_name)
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM tournaments WHERE start_date LIKE ?", (f'{year}%',))
+    # DPC regionals may be pre-seeded by ensure_season_tournaments — don't count them
+    cur.execute(
+        "SELECT COUNT(*) FROM tournaments WHERE start_date LIKE ? AND name NOT LIKE 'DPC%'",
+        (f'{year}%',),
+    )
     if cur.fetchone()[0] > 0:
         conn.close()
         return
