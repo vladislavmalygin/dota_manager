@@ -16,6 +16,16 @@ def face_path(face, default='images/default_face.png'):
     return _os.path.join(_MANAGER_DIR, default)
 
 
+def logo_path(logo):
+    """Return absolute path to team logo image, or None if missing."""
+    if not logo:
+        return None
+    p = _os.path.join(_MANAGER_DIR, 'images', logo)
+    if _os.path.exists(p):
+        return p
+    return None
+
+
 def log_err(context: str, exc: Exception) -> None:
     """Log exception with context instead of silent pass."""
     print(f'[ERROR] {context}: {exc}')

@@ -49,11 +49,10 @@ def _lbl(text, height=32, color=_WHITE, bold=False, halign='left'):
 
 
 def _logo(logo, size=120):
-    if logo:
-        p = f"images/{logo}"
-        if os.path.exists(p):
-            return Image(source=p, size_hint=(None, None), size=(size, size),
-                         allow_stretch=True, keep_ratio=True)
+    p = T.logo_path(logo)
+    if p:
+        return Image(source=p, size_hint=(None, None), size=(size, size),
+                     allow_stretch=True, keep_ratio=True)
     lbl = Label(text='?', size_hint=(None, None), size=(size, size),
                 color=_DIM, font_size=f'{size//2}sp')
     return lbl

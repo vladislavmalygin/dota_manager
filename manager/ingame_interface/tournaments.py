@@ -85,11 +85,7 @@ def _update_reputation(db_name, delta):
 
 
 def _logo_path(logo):
-    if logo:
-        p = f"images/{logo}"
-        if os.path.exists(p):
-            return p
-    return None
+    return _T.logo_path(logo)
 
 
 class _BgBox(BoxLayout):
