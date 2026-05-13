@@ -691,6 +691,16 @@ class SquadPopup(Popup):
             f'  Итого зарплат: ${total_wage:,}/мес',
             height=38, color=(0.8, 0.8, 0.5, 1), bold=True,
         ))
+        # Chemistry info
+        try:
+            from logic.chemistry import chemistry_score, pair_bond_description
+            chem = chemistry_score(self.db_name, team_id)
+            bond = pair_bond_description(self.db_name, team_id)
+            chem_col = (0.3, 1.0, 0.4, 1) if chem >= 7 else ((1.0, 0.85, 0.2, 1) if chem >= 4 else (1.0, 0.4, 0.3, 1))
+            chem_txt = f'  Химия команды: {chem:.1f}/10' + (f'  ·  {bond}' if bond else '')
+            grid.add_widget(_lbl(chem_txt, height=28, color=chem_col))
+        except Exception:
+            pass
         grid.add_widget(_lbl(
             '  Трен.: M=Micro, Ma=Macro, S=Soft, —=нет приоритета  |  '
             'Навыки растут от игр в турнирах',

@@ -1093,14 +1093,27 @@ class MainWindow(BoxLayout):
                             lc=T.TEXT_MAIN, rc=T.TEXT_MAIN,
                         ))
 
-                # Next upcoming playoff match
-                if idx < total:
-                    next_ev = queue[idx]['result_ev']
-                    if any(kw in next_ev.get('stage', '') for kw in _PLAYOFF_KEYWORDS):
+                # Upcoming playoff matches (show next few)
+                upcoming_stages = {}
+                for j in range(idx, min(idx + 8, total)):
+                    ev = queue[j]['result_ev']
+                    st = ev.get('stage', '')
+                    if any(kw in st for kw in _PLAYOFF_KEYWORDS):
+                        upcoming_stages.setdefault(st, []).append(ev)
+                for st, evs in list(upcoming_stages.items())[:2]:
+                    sep = Label(text=f'[b]→ {st}[/b]', markup=True,
+                                color=(1.0, 0.85, 0.30, 1), font_size='10sp',
+                                size_hint_y=None, height=18, halign='left', valign='middle')
+                    sep.bind(size=sep.setter('text_size'))
+                    c2.add_widget(sep)
+                    for ev in evs[:2]:
+                        t1, t2 = ev['team1'], ev['team2']
+                        t1c = _mc(T.PLAYER_CLR) if t1 in player_teams else _mc(T.TEXT_MAIN)
+                        t2c = _mc(T.PLAYER_CLR) if t2 in player_teams else _mc(T.TEXT_MAIN)
                         c2.add_widget(_row(
-                            'Следующий',
-                            f"{next_ev['team1'][:12]} vs {next_ev['team2'][:12]}",
-                            rc=(1.00, 0.85, 0.30, 1),
+                            f'[color={t1c}]{t1[:16]}[/color]',
+                            f'vs [color={t2c}]{t2[:16]}[/color]',
+                            lc=T.TEXT_MAIN, rc=T.TEXT_DIM,
                         ))
 
                 _next_match_row(c2)
@@ -1470,6 +1483,16 @@ class MainWindow(BoxLayout):
 
         update_morale_monthly(self.db_name)
         update_form_monthly(self.db_name)
+        # Monthly XP flush: apply accumulated train_xp to player skills
+        try:
+            from ingame_interface.scrimmage import _flush_scrim_xp
+            _conn_pt = sqlite3.connect(self.db_name)
+            _pt = _conn_pt.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+            _conn_pt.close()
+            if _pt:
+                _flush_scrim_xp(self.db_name, _pt[0].strip())
+        except Exception as _e:
+            T.log_err('monthly_xp_flush', _e)
         develop_free_agents(self.db_name)
         set_ai_train_priorities(self.db_name)
         _enforce_conflict_states(self.db_name)

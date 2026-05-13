@@ -1077,6 +1077,24 @@ def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
                 )
                 conn4.commit()
                 conn4.close()
+                # Update season goals
+                try:
+                    from logic.goals import update_goal, year_from_date
+                    _yr = int(game_date[:4]) if game_date else 2024
+                    update_goal(db_name, _yr, 'best_finish', place)
+                    if place == 1:
+                        update_goal(db_name, _yr, 'win_tournament', 1)
+                    try:
+                        _prize_c = sqlite3.connect(db_name)
+                        _prizes = get_prizepool_worldcup_system(tourn_id, db_name)
+                        _prize_c.close()
+                        _prize = _prizes[place - 1] if _prizes and place <= len(_prizes) else 0
+                        if _prize:
+                            update_goal(db_name, _yr, 'earn_prize', _prize)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
     except Exception:
         pass
 
