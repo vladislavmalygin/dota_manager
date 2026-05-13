@@ -385,17 +385,27 @@ def is_transfer_window(game_date_str):
 
 
 def _transfer_fee(micro, macro, contract_end_str, game_date_str):
-    """Transfer fee: avg_skill * 500 * months_left, floor = skill-based minimum."""
+    """Transfer fee driven primarily by skill; contract length is a minor modifier.
+
+    Base: avg_skill^1.8 * 400  (exponential — stars worth much more than average)
+    Contract modifier: 0 months→×0.75, 12 months→×1.0, 24+ months→×1.15
+    Floor: 15,000 (anyone costs something)
+    """
+    avg = max(1, ((micro or 1) + (macro or 1)) // 2)
+    base = int((avg ** 1.8) * 400)
+
     try:
-        days = (date.fromisoformat(contract_end_str) -
-                date.fromisoformat(game_date_str)).days
-        months = max(1, days / 30)
+        days   = (date.fromisoformat(contract_end_str) -
+                  date.fromisoformat(game_date_str)).days
+        months = max(0, days / 30)
     except Exception:
         months = 12
-    avg = ((micro or 1) + (macro or 1)) // 2
-    fee = int(avg * 500 * months)
-    skill_floor = max(5000, avg * 200)   # even expired contract has skill-based floor
-    return max(skill_floor, round(fee / 5000) * 5000)
+
+    # Contract modifier: ranges 0.75 (expired) → 1.15 (≥24 months)
+    contract_mult = 0.75 + min(0.40, months / 60)
+    fee = int(base * contract_mult)
+
+    return max(15_000, round(fee / 5_000) * 5_000)
 
 
 def _add_message(db_name, text, author="Трансфер"):
