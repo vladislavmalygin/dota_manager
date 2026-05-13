@@ -59,6 +59,7 @@ from db_migrate30 import migrate as _migrate30
 from db_migrate31 import migrate as _migrate31
 from db_migrate32 import migrate as _migrate32
 from db_migrate33 import migrate as _migrate33
+from db_migrate34 import migrate as _migrate34
 from db_fix_orphans import fix as _fix_orphans
 
 
@@ -1225,6 +1226,13 @@ class MainWindow(BoxLayout):
         _migrate31(db_name)
         _migrate32(db_name)
         _migrate33(db_name)
+        _migrate34(db_name)
+        # Assign signature heroes to any players that don't have them yet
+        try:
+            from logic.heroes import assign_signature_heroes
+            assign_signature_heroes(db_name)
+        except Exception as _e:
+            T.log_err('assign_signature_heroes', _e)
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""

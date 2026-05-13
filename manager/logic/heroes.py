@@ -181,3 +181,98 @@ def ai_draft_bans(available_names, n, player_picks_so_far):
     top = [n for _, n in candidates[:15]]
     random.shuffle(top)
     return top[:n]
+
+
+def pick_signature_heroes(role, micro, macro, soft, n=3, favored_role=None):
+    """Return n hero names from role pool suited to player's skill profile."""
+    import random
+    pool = HEROES.get(role, [])
+    if not pool:
+        return []
+    # Score by how well hero multipliers match player's strengths
+    def score(h):
+        base = h[1] * micro + h[2] * macro + h[3] * soft
+        # Bonus if this role is meta-favored (slightly biases toward OP heroes)
+        meta_bonus = 5 if favored_role == role else 0
+        return base + meta_bonus + random.uniform(0, 2)  # small noise for variety
+    ranked = sorted(pool, key=score, reverse=True)
+    # Pick from top 8 to allow variety
+    candidates = ranked[:8]
+    chosen = random.sample(candidates, min(n, len(candidates)))
+    return [h[0] for h in chosen]
+
+
+def assign_signature_heroes(db_name, player_ids=None):
+    """Assign or refresh signature heroes for players. If player_ids=None → all NULL players."""
+    import sqlite3, json
+    from logic.meta import get_active_patch
+
+    patch = get_active_patch(db_name)
+    favored_role = patch[1] if patch else None
+
+    conn = sqlite3.connect(db_name)
+    if player_ids:
+        ph = ','.join('?' * len(player_ids))
+        rows = conn.execute(
+            f"SELECT id, role, COALESCE(micro_skills,50), COALESCE(macro_skills,50), "
+            f"COALESCE(soft_skills,50) FROM players WHERE id IN ({ph})",
+            list(player_ids)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, role, COALESCE(micro_skills,50), COALESCE(macro_skills,50), "
+            "COALESCE(soft_skills,50) FROM players WHERE signature_heroes IS NULL"
+        ).fetchall()
+
+    for pid, role, mi, ma, so in rows:
+        if not role:
+            continue
+        heroes = pick_signature_heroes(role, mi, ma, so, n=3, favored_role=favored_role)
+        if heroes:
+            conn.execute(
+                "UPDATE players SET signature_heroes=? WHERE id=?",
+                (json.dumps(heroes), pid)
+            )
+    conn.commit()
+    conn.close()
+
+
+def update_signature_heroes_for_patch(db_name, new_favored_role):
+    """On patch rotation: refresh 1 hero for some players to reflect meta shift."""
+    import sqlite3, json, random
+
+    conn = sqlite3.connect(db_name)
+    rows = conn.execute(
+        "SELECT id, role, COALESCE(micro_skills,50), COALESCE(macro_skills,50), "
+        "COALESCE(soft_skills,50), signature_heroes FROM players WHERE team_id != 0"
+    ).fetchall()
+
+    for pid, role, mi, ma, so, sig_json in rows:
+        if not role:
+            continue
+        # Players of the newly OP role: 70% chance to update 1 hero
+        # Others: 25% chance
+        chance = 0.70 if role == new_favored_role else 0.25
+        if random.random() > chance:
+            continue
+        current = json.loads(sig_json) if sig_json else []
+        pool = HEROES.get(role, [])
+        if not pool:
+            continue
+        # Pick a new hero not already in signature
+        candidates = [h[0] for h in pool if h[0] not in current]
+        if not candidates:
+            continue
+        new_hero = random.choice(candidates)
+        # Replace one random signature hero
+        if current:
+            idx = random.randrange(len(current))
+            current[idx] = new_hero
+        else:
+            current = pick_signature_heroes(role, mi, ma, so, n=3, favored_role=new_favored_role)
+        conn.execute(
+            "UPDATE players SET signature_heroes=? WHERE id=?",
+            (json.dumps(current[:3]), pid)
+        )
+    conn.commit()
+    conn.close()

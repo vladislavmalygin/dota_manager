@@ -79,6 +79,11 @@ def rotate_patch(db_name, game_date_str):
         )
         conn.commit()
         conn.close()
+        try:
+            from logic.heroes import update_signature_heroes_for_patch
+            update_signature_heroes_for_patch(db_name, new_role)
+        except Exception:
+            pass
         return new_name, new_role
     except Exception:
         return '7.36', 'carry'
