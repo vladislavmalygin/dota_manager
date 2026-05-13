@@ -225,7 +225,7 @@ def _pay_streaming_income(db_name, game_date_str):
         income = round(income / 500) * 500
         try:
             from logic.achievements import apply_monthly_bonuses
-            income = apply_monthly_bonuses(self.db_name, income)
+            income = apply_monthly_bonuses(db_name, income)
         except Exception:
             pass
 
@@ -2324,7 +2324,7 @@ class MainWindow(BoxLayout):
                 return max(1, -(-remaining // days_left))  # ceil division
         except Exception:
             pass
-        return max(1, len(at['match_queue']) // 7)
+        return max(1, len(at['match_queue']) // 7 or 1)
 
     def _get_active_tournament(self):
         """Return active tournament dict or None."""
@@ -2605,9 +2605,7 @@ class MainWindow(BoxLayout):
 
             # Update final_ev placements for player team if result changed
             if final_ev and is_group:
-                conn2 = sqlite3.connect(self.db_name)
-                pt = conn2.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
-                conn2.close()
+                pt = conn.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
                 if pt:
                     my_team = pt[0].strip()
                     # Recompute player's group placement from actual standings
@@ -2646,6 +2644,10 @@ class MainWindow(BoxLayout):
         if at is None:
             at = self._get_active_tournament()
         if not at:
+            return
+        # Guard: if active_tournament was already cleared (race/double-call) abort
+        live = self._get_active_tournament()
+        if not live or live['tourn_id'] != at['tourn_id']:
             return
 
         # Collect player match lineup events for match_history

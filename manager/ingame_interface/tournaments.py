@@ -1140,6 +1140,7 @@ class MatchLogPopup(Popup):
                                 self._team2 if w2 > w1 else map_winner)
             self._final_score = (w1, w2)
             self._lines       = new_lines
+            self._all_lines   = list(new_lines)  # keep in sync for BO auto-skip
             self._snapshots   = new_snaps
             self._match_stats = new_stats
             self._schedule    = _build_log_schedule(new_lines)

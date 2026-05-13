@@ -38,7 +38,8 @@ class SettingsPopup(Popup):
             btn = Button(text=label, background_normal='',
                          background_color=(0.18, 0.45, 0.65, 1) if secs == AUTO_ADVANCE_SPEED
                                           else (0.18, 0.20, 0.28, 1))
-            btn.bind(on_press=lambda _, s=secs, b=btn: self._set_speed(s, speed_row))
+            btn._speed_val = secs  # store speed value as attribute for reliable matching
+            btn.bind(on_press=lambda _, s=secs: self._set_speed(s, speed_row))
             speed_row.add_widget(btn)
         layout.add_widget(speed_row)
 
@@ -61,7 +62,7 @@ class SettingsPopup(Popup):
         global AUTO_ADVANCE_SPEED
         AUTO_ADVANCE_SPEED = secs
         for btn in speed_row.children:
-            btn.background_color = (0.18, 0.45, 0.65, 1) if btn.text.endswith(f'{secs}с)') \
+            btn.background_color = (0.18, 0.45, 0.65, 1) if getattr(btn, '_speed_val', None) == secs \
                                     else (0.18, 0.20, 0.28, 1)
 
     def on_volume_change(self, instance, value):
