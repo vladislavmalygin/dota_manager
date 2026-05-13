@@ -80,6 +80,16 @@ FS_BODY  = '13sp'
 FS_SMALL = '11sp'
 FS_TINY  = '10sp'
 
+# ── Layout metrics (fullscreen-friendly) ──────────────────────────────────────
+TOPBAR_H    = 60     # top bar height px
+NAV_BTN_H   = 50     # sidebar nav button height
+NAV_SEP_H   = 28     # sidebar group separator height
+ROW_H       = 36     # standard data row height
+ROW_H_SM    = 28     # compact row height
+TITLE_H     = 42     # section title height
+CARD_PAD    = (16, 12)  # card padding (h, v)
+CARD_SPACING = 6     # spacing inside card
+
 
 # ── Color helpers ─────────────────────────────────────────────────────────────
 

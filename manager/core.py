@@ -377,7 +377,8 @@ class MainWindow(BoxLayout):
         tournament_name = self.get_next_tournament()
 
         top_bar = BoxLayout(
-            orientation='horizontal', size_hint_y=None, height=52, spacing=3, padding=(4, 3),
+            orientation='horizontal', size_hint_y=None, height=T.TOPBAR_H,
+            spacing=4, padding=(8, 4),
         )
         with top_bar.canvas.before:
             Color(*T.BG_TOPBAR)
@@ -387,21 +388,21 @@ class MainWindow(BoxLayout):
             size=lambda w, _: setattr(self._top_rect, 'size', w.size),
         )
 
-        # Team name (left, wide)
+        # Team name (left)
         team_lbl = Label(
             text=f'[b]{team_name}[/b]', markup=True,
-            color=(0.30, 1.00, 0.50, 1), font_size='18sp',
-            size_hint_x=0.22, halign='left', valign='middle',
+            color=T.PLAYER_CLR, font_size='17sp',
+            size_hint_x=0.20, halign='left', valign='middle',
         )
         team_lbl.bind(size=team_lbl.setter('text_size'))
         top_bar.add_widget(team_lbl)
 
-        # Budget label (updates live)
+        # Budget label
         budget_txt, budget_color = self._get_budget_display()
         self._budget_lbl = Label(
             text=budget_txt, markup=True,
-            color=budget_color, font_size='15sp',
-            size_hint_x=0.18, halign='center', valign='middle',
+            color=budget_color, font_size=T.FS_TITLE,
+            size_hint_x=0.17, halign='center', valign='middle',
         )
         self._budget_lbl.bind(size=self._budget_lbl.setter('text_size'))
         top_bar.add_widget(self._budget_lbl)
@@ -409,8 +410,8 @@ class MainWindow(BoxLayout):
         # Rating label
         self._rating_lbl = Label(
             text=self._get_rating_display(), markup=True,
-            color=(0.85, 0.85, 0.85, 1), font_size='15sp',
-            size_hint_x=0.14, halign='center', valign='middle',
+            color=T.TEXT_MAIN, font_size=T.FS_TITLE,
+            size_hint_x=0.13, halign='center', valign='middle',
         )
         self._rating_lbl.bind(size=self._rating_lbl.setter('text_size'))
         top_bar.add_widget(self._rating_lbl)
@@ -419,7 +420,7 @@ class MainWindow(BoxLayout):
         self.tournament_button = Button(
             text=tournament_name,
             background_color=(0.65, 0.15, 0.15, 1), background_normal='',
-            font_size='14sp', size_hint_x=0.28,
+            font_size=T.FS_BODY, size_hint_x=0.26,
             on_press=self.on_tournament_btn,
         )
         top_bar.add_widget(self.tournament_button)
@@ -427,26 +428,26 @@ class MainWindow(BoxLayout):
         # Date label
         self.today_date_button = Button(
             text=str(self.date_object),
-            background_color=(0.25, 0.35, 0.20, 1), background_normal='',
-            font_size='14sp', size_hint_x=0.12,
+            background_color=(0.22, 0.32, 0.18, 1), background_normal='',
+            font_size=T.FS_BODY, size_hint_x=0.11,
             on_press=self.on_press,
         )
         top_bar.add_widget(self.today_date_button)
 
-        # Далее button (prominent) — toggles auto-advance every 1.5 s
+        # Далее button
         self._next_btn = Button(
-            text='Далее  >',
+            text='Далее  ▶',
             background_color=(0.75, 0.65, 0.05, 1), background_normal='',
-            font_size='15sp', bold=True, size_hint_x=0.10,
+            font_size=T.FS_TITLE, bold=True, size_hint_x=0.08,
             on_press=self.on_next,
         )
         top_bar.add_widget(self._next_btn)
 
-        # Skip-to-tournament button (ignores notifications)
+        # Skip-to-next button
         self._skip_btn = Button(
-            text='>> Турнир',
-            background_color=(0.45, 0.35, 0.05, 1), background_normal='',
-            font_size='13sp', size_hint_x=0.10,
+            text='▶▶ Матч',
+            background_color=(0.38, 0.28, 0.04, 1), background_normal='',
+            font_size=T.FS_BODY, size_hint_x=0.08,
             on_press=self.on_skip_to_tournament,
         )
         top_bar.add_widget(self._skip_btn)
@@ -470,15 +471,15 @@ class MainWindow(BoxLayout):
             size=lambda w, _: setattr(self._side_rect, 'size', w.size),
         )
 
-        _BTN_H = 44
-        _SEP_H = 22
+        _BTN_H = T.NAV_BTN_H
+        _SEP_H = T.NAV_SEP_H
         self._active_nav_btn = None
 
         def _sep(text):
             lbl = Label(
-                text=text, markup=False,
+                text=f'[b]{text}[/b]', markup=True,
                 size_hint_y=None, height=_SEP_H,
-                color=T.NAV_SEP_FG, font_size='10sp',
+                color=T.NAV_SEP_FG, font_size=T.FS_TINY,
                 halign='center', valign='middle',
             )
             lbl.bind(size=lbl.setter('text_size'))
@@ -493,7 +494,7 @@ class MainWindow(BoxLayout):
             btn = Button(
                 text=text, size_hint_y=None, height=_BTN_H,
                 background_color=T.NAV_IDLE, background_normal='',
-                font_size='13sp', halign='center',
+                font_size=T.FS_BODY, halign='center',
             )
             btn._base_text = text
             btn._has_alert = False
@@ -544,9 +545,9 @@ class MainWindow(BoxLayout):
 
         # ── Home button ───────────────────────────────────────────────────────
         _home_sidebar_btn = Button(
-            text='Главная', size_hint_y=None, height=_BTN_H + 4,
+            text='Главная', size_hint_y=None, height=_BTN_H + 6,
             background_color=T.NAV_ACTIVE, background_normal='',
-            font_size='14sp', bold=True,
+            font_size=T.FS_TITLE, bold=True,
         )
         def _press_home(inst):
             prev = self._active_nav_btn
@@ -631,7 +632,7 @@ class MainWindow(BoxLayout):
         self.main_area.clear_widgets()
 
         # ── Breadcrumb bar ────────────────────────────────────────────────────
-        hdr = BoxLayout(size_hint_y=None, height=36, spacing=6, padding=(10, 2))
+        hdr = BoxLayout(size_hint_y=None, height=44, spacing=8, padding=(14, 4))
         with hdr.canvas.before:
             Color(*T.BG_HEADER)
             _hr = Rectangle()
@@ -639,14 +640,14 @@ class MainWindow(BoxLayout):
                  size=lambda w, _: setattr(_hr, 'size', w.size))
 
         title_lbl = Label(text=f'[b]{title}[/b]', markup=True,
-                          color=T.TEXT_MAIN, font_size=T.FS_BODY,
+                          color=T.ACCENT, font_size=T.FS_TITLE,
                           halign='left', valign='middle')
         title_lbl.bind(size=title_lbl.setter('text_size'))
 
-        home_btn = Button(text='Главная',
-                          size_hint=(None, 1), width=115,
-                          background_color=T.NAV_IDLE, background_normal='',
-                          font_size=T.FS_SMALL)
+        home_btn = Button(text='← Главная',
+                          size_hint=(None, 1), width=130,
+                          background_color=T.BTN_NEUTRAL, background_normal='',
+                          font_size=T.FS_BODY)
         home_btn.bind(on_press=lambda _: self._show_dashboard())
 
         hdr.add_widget(title_lbl)
@@ -836,14 +837,15 @@ class MainWindow(BoxLayout):
 
         # ── Build dashboard layout ────────────────────────────────────────────
         sv    = ScrollView(size_hint=(1, 1))
-        outer = GridLayout(cols=1, size_hint_y=None, spacing=10, padding=(12, 10))
+        outer = GridLayout(cols=1, size_hint_y=None, spacing=14, padding=(16, 14))
         outer.bind(minimum_height=outer.setter('height'))
 
         def _card(bg=T.BG_CARD):
-            return T.make_card(bg=bg, radius=8, padding=(14, 10), spacing=2)
+            return T.make_card(bg=bg, radius=10, padding=T.CARD_PAD,
+                               spacing=T.CARD_SPACING)
 
         def _row(left, right, lc=T.TEXT_LABEL, rc=T.TEXT_MAIN):
-            r = BoxLayout(size_hint_y=None, height=30)
+            r = BoxLayout(size_hint_y=None, height=T.ROW_H)
             ll = Label(text=left,  markup=True, color=lc, font_size=T.FS_BODY,
                        halign='left',  valign='middle', size_hint_x=0.55)
             rl = Label(text=right, markup=True, color=rc, font_size=T.FS_BODY,
@@ -855,7 +857,7 @@ class MainWindow(BoxLayout):
 
         def _title(text, color=T.ACCENT):
             lbl = Label(text=f'[b]{text}[/b]', markup=True, color=color,
-                        font_size=T.FS_TITLE, size_hint_y=None, height=36,
+                        font_size=T.FS_TITLE, size_hint_y=None, height=T.TITLE_H,
                         halign='left', valign='middle')
             lbl.bind(size=lbl.setter('text_size'))
             return lbl
@@ -863,15 +865,28 @@ class MainWindow(BoxLayout):
         def _mc(rgba):
             return T.markup_color(rgba)
 
+        # ── Transfer window banner ───────────────────────────────────────────
+        if _is_transfer_window(str(self.date_object)):
+            tw = _card((0.08, 0.22, 0.10, 1))
+            lbl_tw = Label(
+                text='[b]🔓 ТРАНСФЕРНОЕ ОКНО ОТКРЫТО[/b]  —  январь и август',
+                markup=True, color=T.POSITIVE,
+                font_size=T.FS_BODY, size_hint_y=None, height=T.ROW_H,
+                halign='center', valign='middle',
+            )
+            lbl_tw.bind(size=lbl_tw.setter('text_size'))
+            tw.add_widget(lbl_tw)
+            outer.add_widget(tw)
+
         # ── Action items card ────────────────────────────────────────────────
         if actions:
-            ca = _card((0.12, 0.08, 0.08, 1))
+            ca = _card((0.13, 0.07, 0.07, 1))
             ca.add_widget(_title('Требует внимания', T.NEGATIVE))
             for kind, text in actions:
                 color = T.NEGATIVE if kind == 'danger' else T.WARNING
                 lbl = Label(
                     text=f'  • {text}', color=color,
-                    font_size=T.FS_BODY, size_hint_y=None, height=28,
+                    font_size=T.FS_BODY, size_hint_y=None, height=T.ROW_H_SM,
                     halign='left', valign='middle',
                 )
                 lbl.bind(size=lbl.setter('text_size'))
@@ -1766,10 +1781,17 @@ class MainWindow(BoxLayout):
                 at = self._get_active_tournament()
 
                 if at:
-                    # Tournament in progress: play next match day
-                    triggered = self._play_match_day(suppress_notifications)
-                    if triggered:
-                        notification_triggered = True
+                    # Tournament in progress: play multiple matches per day
+                    # so tournament finishes within its scheduled duration
+                    mpd = self._matches_per_day(at)
+                    for _ in range(mpd):
+                        at2 = self._get_active_tournament()
+                        if not at2:
+                            break
+                        triggered = self._play_match_day(suppress_notifications)
+                        if triggered:
+                            notification_triggered = True
+                            break
                 else:
                     next_tournament_date = self.get_next_tournament_date()
 
@@ -2194,6 +2216,26 @@ class MainWindow(BoxLayout):
 
     # ── Active-tournament system ──────────────────────────────────────────────
 
+    def _matches_per_day(self, at):
+        """How many matches to play today so tournament fits within its scheduled dates."""
+        try:
+            total     = len(at['match_queue'])
+            remaining = total - at['match_idx']
+            if remaining <= 0:
+                return 1
+            conn = sqlite3.connect(self.db_name)
+            row  = conn.execute(
+                "SELECT end_date FROM tournaments WHERE id=?", (at['tourn_id'],)
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                end_d     = date.fromisoformat(row[0])
+                days_left = max(1, (end_d - self.date_object).days + 1)
+                return max(1, -(-remaining // days_left))  # ceil division
+        except Exception:
+            pass
+        return max(1, len(at['match_queue']) // 7)
+
     def _get_active_tournament(self):
         """Return active tournament dict or None."""
         import json
@@ -2392,19 +2434,113 @@ class MainWindow(BoxLayout):
             team1=t1, team2=t2,
             winner=lineup_ev.get('winner', t1),
             log_lines=lineup_ev.get('match_log', []),
-            snapshots=lineup_ev.get('match_snaps', []),      # correct key
+            snapshots=lineup_ev.get('match_snaps', []),
             best_of=lineup_ev.get('best_of', 1),
             final_score=(lineup_ev.get('score_t1', 0), lineup_ev.get('score_t2', 0)),
             match_stats=lineup_ev.get('match_stats', {}),
             on_close=_on_close,
             t1_logo=logo_map.get(t1),
             t2_logo=logo_map.get(t2),
-            pre_match_team=pre_match_team,   # enables draft + strategy
+            pre_match_team=pre_match_team,
             db_name=self.db_name,
+            on_result_update=lambda w, s1, s2: self._apply_actual_match_result(
+                t1, t2, result_ev, w, s1, s2),
         )
         popup.title = f"{at['name']} — {lineup_ev.get('stage', '')}"
         self._show_inline(popup, at['name'])
         popup.dismiss = _on_close
+
+    def _apply_actual_match_result(self, t1, t2, result_ev, actual_winner, s1, s2):
+        """Called when player completes a draft: update standings with actual result."""
+        import json as _json
+
+        stage = result_ev.get('stage', '')
+        is_group = 'Группа' in stage or 'Лига' in stage
+
+        pre_s1 = result_ev.get('score_t1', 0)
+        pre_s2 = result_ev.get('score_t2', 0)
+
+        # Points for BO2: win=2, draw=1, loss=0
+        def _pts(sc1, sc2):
+            if sc1 > sc2: return 2, 0
+            if sc2 > sc1: return 0, 2
+            return 1, 1
+
+        old_p1, old_p2 = _pts(pre_s1, pre_s2)
+        new_p1, new_p2 = _pts(s1, s2)
+
+        if (old_p1, old_p2) == (new_p1, new_p2):
+            return  # same outcome, no update needed
+
+        try:
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT standings_json, match_queue_json, final_ev_json "
+                "FROM active_tournament WHERE id=1"
+            ).fetchone()
+            if not row:
+                conn.close()
+                return
+
+            standings = _json.loads(row[0]) if row[0] else {}
+            queue     = _json.loads(row[1]) if row[1] else []
+            final_ev  = _json.loads(row[2]) if row[2] else None
+
+            # Update standings delta
+            if is_group:
+                standings[t1] = standings.get(t1, 0) + (new_p1 - old_p1)
+                standings[t2] = standings.get(t2, 0) + (new_p2 - old_p2)
+
+            # Update match_queue result_ev for this match
+            actual_loser = t2 if actual_winner == t1 else t1
+            for item in queue:
+                rev = item['result_ev']
+                if rev['team1'] == t1 and rev['team2'] == t2 and rev.get('stage') == stage:
+                    rev['winner']    = actual_winner
+                    rev['loser']     = actual_loser
+                    rev['score_t1']  = s1
+                    rev['score_t2']  = s2
+                    if is_group and rev.get('standings'):
+                        rev['standings'] = dict(standings)
+                    break
+
+            # Update final_ev placements for player team if result changed
+            if final_ev and is_group:
+                conn2 = sqlite3.connect(self.db_name)
+                pt = conn2.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+                conn2.close()
+                if pt:
+                    my_team = pt[0].strip()
+                    # Recompute player's group placement from actual standings
+                    draw_row = conn.execute(
+                        "SELECT draw_ev_json FROM active_tournament WHERE id=1"
+                    ).fetchone()
+                    if draw_row and draw_row[0]:
+                        draw_ev = _json.loads(draw_row[0])
+                        for group in draw_ev.get('groups', []):
+                            if my_team in group:
+                                grp_standings = sorted(
+                                    [(t, standings.get(t, 0)) for t in group],
+                                    key=lambda x: x[1], reverse=True
+                                )
+                                actual_rank = next(
+                                    (i+1 for i, (t, _) in enumerate(grp_standings) if t == my_team),
+                                    None
+                                )
+                                if actual_rank and my_team in final_ev.get('placements', {}):
+                                    pre_rank = final_ev['placements'][my_team]
+                                    if actual_rank != pre_rank:
+                                        final_ev['placements'][my_team] = actual_rank
+
+            conn.execute(
+                "UPDATE active_tournament SET standings_json=?, match_queue_json=?, final_ev_json=? WHERE id=1",
+                (_json.dumps(standings), _json.dumps(queue),
+                 _json.dumps(final_ev) if final_ev else None)
+            )
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            T.log_err('_apply_actual_match_result', _e)
 
     def _finish_active_tournament(self, at=None):
         """Persist results and clear active tournament."""
