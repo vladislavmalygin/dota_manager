@@ -219,7 +219,9 @@ def _pay_streaming_income(db_name, game_date_str):
         ).fetchone()
         reputation = rep_row[0] if rep_row else 0
 
-        income = max(2_000, int(rating * 120 + reputation * 200))
+        # Streaming/merch: reputation drives income more than raw rating
+        # Without tournament results/rep income won't cover wages alone
+        income = max(1_000, int(rating * 50 + reputation * 180))
         income = round(income / 500) * 500
         try:
             from logic.achievements import apply_monthly_bonuses
@@ -769,7 +771,7 @@ class MainWindow(BoxLayout):
             sp = c.execute("SELECT monthly_income FROM sponsors WHERE is_active=1 LIMIT 1").fetchone()
             if sp:
                 sponsor_income = sp[0] or 0
-            streaming = int(rating * 120)
+            streaming = max(1_000, int(rating * 50 + org_reputation * 180))
             monthly_in = sponsor_income + streaming
             balance = monthly_in - total_wage
 
