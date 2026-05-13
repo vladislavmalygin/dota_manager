@@ -140,6 +140,15 @@ def _team_logo_widget(logo, size=40):
 
 # ── match log schedule ────────────────────────────────────────────────────────
 
+def _winner_from_map_log(lines):
+    """Extract winner team name from a single map log segment."""
+    for line in reversed(lines):
+        plain = re.sub(r'\[/?[^\]]*\]', '', line).strip()
+        if plain.startswith('ПОБЕДИТЕЛЬ:'):
+            return plain.replace('ПОБЕДИТЕЛЬ:', '').strip()
+    return None
+
+
 def _split_bo_maps(lines):
     """Split a BO match log into per-map segments (split at 'ИГРА N ·' headers).
     Lines before the first ИГРА header are included in map 1."""
@@ -1069,31 +1078,34 @@ class MatchLogPopup(Popup):
             Clock.schedule_once(lambda dt: self._run_simulation(), 0.25)
         else:
             self._auto_skip = True
-            import random as _r
-            # Always split from the original full log
+            # Split from the original full log
             map_logs  = _split_bo_maps(self._all_lines)
             maps_done = sum(self._map_wins.values())
 
-            # Determine this map's winner with correct probability
-            total_s1, total_s2 = self._final_score
-            already_w1    = self._map_wins.get(self._team1, 0)
-            already_w2    = self._map_wins.get(self._team2, 0)
-            remaining_w1  = total_s1 - already_w1
-            remaining_w2  = total_s2 - already_w2
-            remaining_maps = remaining_w1 + remaining_w2  # maps still to be played
-            if remaining_maps > 0:
-                if _r.random() < remaining_w1 / remaining_maps:
-                    map_winner = self._team1
-                else:
-                    map_winner = self._team2
-            else:
-                map_winner = self._winner
-            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
-
-            # Show only this map's log segment
+            # Use this map's log segment
             if maps_done < len(map_logs):
-                self._lines    = map_logs[maps_done]
-                self._schedule = _build_log_schedule(self._lines)
+                map_segment = map_logs[maps_done]
+                self._lines    = map_segment
+                self._schedule = _build_log_schedule(map_segment)
+                # Extract actual winner from the log — source of truth
+                map_winner = _winner_from_map_log(map_segment)
+            else:
+                # Fallback: no segment, use full log
+                self._lines    = self._all_lines
+                self._schedule = _build_log_schedule(self._all_lines)
+                map_winner = None
+
+            # Fall back to pre-generated winner only if log parse failed
+            if not map_winner:
+                map_winner = self._winner
+
+            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
+            w1 = self._map_wins.get(self._team1, 0)
+            w2 = self._map_wins.get(self._team2, 0)
+            self._winner      = self._team1 if w1 > w2 else (
+                                self._team2 if w2 > w1 else map_winner)
+            self._final_score = (w1, w2)
+
             self._sched_idx = 0
             self._elapsed   = 0.0
             Clock.schedule_once(lambda dt: self._start(), 0.25)
