@@ -270,13 +270,17 @@ class ScrimmagePopup(Popup):
             conn3.close()
         except Exception:
             pass
-        # record date
+        # record date + result in messages
         if self._game_date_str:
             try:
                 conn4 = sqlite3.connect(self._db)
                 conn4.execute(
                     "UPDATE teams SET last_scrimmage_date=? WHERE player='yes'",
                     (self._game_date_str,))
+                result_txt = f'Кланвар vs {opponent}: {"Победа" if won else "Поражение"}'
+                conn4.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (result_txt, self._game_date_str, 'Кланвары'))
                 conn4.commit()
                 conn4.close()
             except Exception:

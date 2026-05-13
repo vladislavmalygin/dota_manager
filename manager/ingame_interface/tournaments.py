@@ -140,6 +140,23 @@ def _team_logo_widget(logo, size=40):
 
 # ── match log schedule ────────────────────────────────────────────────────────
 
+def _split_bo_maps(lines):
+    """Split a BO match log into per-map segments (split at 'ИГРА N ·' headers).
+    Lines before the first ИГРА header are included in map 1."""
+    maps, cur, found = [], [], False
+    for line in lines:
+        plain = re.sub(r'\[/?[^\]]*\]', '', line).strip()
+        if 'ИГРА' in plain and '·' in plain:
+            if found:  # start of map 2+: save previous map
+                maps.append(cur)
+                cur = []
+            found = True
+        cur.append(line)
+    if cur:
+        maps.append(cur)
+    return maps if maps else [lines]
+
+
 def _plain(line):
     """Strip Kivy color markup for string comparisons."""
     return re.sub(r'\[/?[^\]]*\]', '', line).strip()
@@ -715,6 +732,7 @@ class MatchLogPopup(Popup):
         self.size_hint = (0.95, 0.95)
         self.auto_dismiss = False
         self._lines            = log_lines
+        self._all_lines        = list(log_lines)  # original full log, never overwritten
         self._snapshots        = snapshots or []
         self._best_of          = best_of
         self._final_score      = final_score
@@ -1052,13 +1070,30 @@ class MatchLogPopup(Popup):
         else:
             self._auto_skip = True
             import random as _r
-            winner_guess = _r.choice([self._team1, self._team2])
-            self._map_wins[winner_guess] = self._map_wins.get(winner_guess, 0) + 1
-            w1 = self._map_wins[self._team1]
-            w2 = self._map_wins[self._team2]
-            self._winner = self._team1 if w1 > w2 else (
-                           self._team2 if w2 > w1 else winner_guess)
-            self._final_score = (w1, w2)
+            # Always split from the original full log
+            map_logs  = _split_bo_maps(self._all_lines)
+            maps_done = sum(self._map_wins.values())
+
+            # Determine this map's winner with correct probability
+            total_s1, total_s2 = self._final_score
+            already_w1    = self._map_wins.get(self._team1, 0)
+            already_w2    = self._map_wins.get(self._team2, 0)
+            remaining_w1  = total_s1 - already_w1
+            remaining_w2  = total_s2 - already_w2
+            remaining_maps = remaining_w1 + remaining_w2  # maps still to be played
+            if remaining_maps > 0:
+                if _r.random() < remaining_w1 / remaining_maps:
+                    map_winner = self._team1
+                else:
+                    map_winner = self._team2
+            else:
+                map_winner = self._winner
+            self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
+
+            # Show only this map's log segment
+            if maps_done < len(map_logs):
+                self._lines    = map_logs[maps_done]
+                self._schedule = _build_log_schedule(self._lines)
             self._sched_idx = 0
             self._elapsed   = 0.0
             Clock.schedule_once(lambda dt: self._start(), 0.25)

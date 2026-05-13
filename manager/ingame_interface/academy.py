@@ -96,8 +96,8 @@ class AcademyPopup(Popup):
         self.content = root
 
     def _switch(self, tab):
-        self.dismiss()
-        AcademyPopup(db_name=self.db_name, tab=tab).open()
+        self._tab = tab
+        self._build()
 
     # ── camp tab ──────────────────────────────────────────────────────────────
 
@@ -205,8 +205,7 @@ class AcademyPopup(Popup):
              'Академия')
         )
         conn.commit(); conn.close()
-        self.dismiss()
-        AcademyPopup(db_name=db_name, tab='camp').open()
+        self._build()  # rebuild in-place so camp count updates correctly
 
     # ── market tab ────────────────────────────────────────────────────────────
 
@@ -398,8 +397,9 @@ class AcademyPopup(Popup):
     # ── actions ───────────────────────────────────────────────────────────────
 
     def _set_rf(self, role):
-        self.dismiss()
-        AcademyPopup(db_name=self.db_name, tab='market', role_filter=role).open()
+        self._rf = role
+        self._tab = 'market'
+        self._build()
 
     def _sign(self, pid, role, wage, years, gd_str):
         err = None
@@ -459,8 +459,8 @@ class AcademyPopup(Popup):
             ).open()
             return
 
-        self.dismiss()
-        AcademyPopup(db_name=self.db_name, tab='squad').open()
+        self._tab = 'squad'
+        self._build()
 
 
 def show_academy_popup(db_name):
