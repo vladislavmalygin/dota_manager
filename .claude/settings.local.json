@@ -56,7 +56,8 @@
       "Bash(pkill -f \"python3.*dota_manager\")",
       "Bash(PYTHONUNBUFFERED=1 DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 -u /home/vlad/Dev/dota_manager/manager/dota_manager.py)",
       "Bash(sed -i \"/print\\(f'\\\\[M\\\\]/d\" /home/vlad/Dev/dota_manager/manager/ingame_interface/tournaments.py)",
-      "Bash(sed -i \"/print\\(f'\\\\[C\\\\]/d\" /home/vlad/Dev/dota_manager/manager/core.py)"
+      "Bash(sed -i \"/print\\(f'\\\\[C\\\\]/d\" /home/vlad/Dev/dota_manager/manager/core.py)",
+      "Bash(git add *)"
     ]
   }
 }
