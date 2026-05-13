@@ -1122,7 +1122,17 @@ class MatchLogPopup(Popup):
             self._map._anim_clock = None
 
         try:
-            opp_picks = random_picks(exclude=[h[0] for h in self._hero_picks.values()])
+            _player_taken = {h[0] for h in self._hero_picks.values()}
+            _opp_team = self._team2 if self._pre_match_team == self._team1 else self._team1
+            try:
+                from logic.dota.draft import get_ai_picks
+                import sqlite3 as _sq
+                _oc = _sq.connect(self._pre_match_db)
+                _or = _oc.execute("SELECT id FROM teams WHERE name=?", (_opp_team,)).fetchone()
+                _oc.close()
+                opp_picks = get_ai_picks(self._pre_match_db, _or[0], exclude=_player_taken) if _or else random_picks(exclude=_player_taken)
+            except Exception:
+                opp_picks = random_picks(exclude=_player_taken)
             is_t1 = (self._pre_match_team == self._team1)
             hero_picks = {
                 'team1': self._hero_picks if is_t1 else opp_picks,

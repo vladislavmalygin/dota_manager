@@ -64,7 +64,12 @@ def get_lineup(team_name, db_name):
 
 
 def _play_one(t1, t2, db_name):
-    skills = get_match_data(t1, t2, db_name)
+    try:
+        from logic.dota.draft import get_ai_draft
+        hero_picks = get_ai_draft(db_name, t1, t2)
+    except Exception:
+        hero_picks = None
+    skills = get_match_data(t1, t2, db_name, hero_picks=hero_picks)
     return dota_simulation_for_bots(t1, t2, skills) if skills else random.choice([t1, t2])
 
 
@@ -119,7 +124,12 @@ def _play_bo2_logged(t1, t2, db_name):
         for line in [sep, header, sep]:
             all_lines.append(line)
             all_snaps.append(blank.copy())
-        gw, lines, snaps, _stats = _play_one_logged(t1, t2, db_name)
+        try:
+            from logic.dota.draft import get_ai_draft
+            _hp = get_ai_draft(db_name, t1, t2)
+        except Exception:
+            _hp = None
+        gw, lines, snaps, _stats = _play_one_logged(t1, t2, db_name, hero_picks=_hp)
         all_lines.extend(lines)
         all_snaps.extend(snaps)
         wins[gw] += 1
@@ -148,7 +158,12 @@ def _play_bo_logged(t1, t2, db_name, n):
             all_lines.append(line)
             all_snaps.append(blank.copy())
 
-        winner_game, lines, snaps, last_stats = _play_one_logged(t1, t2, db_name)
+        try:
+            from logic.dota.draft import get_ai_draft
+            _hp = get_ai_draft(db_name, t1, t2)
+        except Exception:
+            _hp = None
+        winner_game, lines, snaps, last_stats = _play_one_logged(t1, t2, db_name, hero_picks=_hp)
         for snp in snaps:
             snp['game_score_t1'] = s[t1]
             snp['game_score_t2'] = s[t2]
@@ -431,7 +446,60 @@ def generate_dpc_regional_events(db_name, tournament_id, region_filter):
         'groups': [team_names[:]],
     })
 
-    champion = sorted_teams[0][0]
+    # Playoff: top 4 teams — SF + Final (BO3 each)
+    if len(sorted_teams) >= 4:
+        po_teams = [t for t, _ in sorted_teams[:4]]
+        p1, p2, p3, p4 = po_teams
+
+        # SF1: 1st vs 4th
+        sf1_is_player = p1 in player_teams or p4 in player_teams
+        if sf1_is_player:
+            sf1_w, sf1_s1, sf1_s2, sf1_lines, sf1_snaps, sf1_stats = _play_bo_logged(p1, p4, db_name, 3)
+            events.append(_lineup_event(p1, p4, 'Плейофф (BO3)', sf1_lines, sf1_snaps,
+                                        sf1_w, sf1_s1, sf1_s2, db_name, 3, sf1_stats))
+        else:
+            sf1_w, sf1_s1, sf1_s2 = _play_bo(p1, p4, db_name, 3)
+        sf1_l = p4 if sf1_w == p1 else p1
+        events.append(_match_event(p1, p4, sf1_w, sf1_l, sf1_s1, sf1_s2,
+                                   'Плейофф (BO3)', sf1_is_player))
+        _gp(p1, p4, sf1_s1 + sf1_s2)
+
+        # SF2: 2nd vs 3rd
+        sf2_is_player = p2 in player_teams or p3 in player_teams
+        if sf2_is_player:
+            sf2_w, sf2_s1, sf2_s2, sf2_lines, sf2_snaps, sf2_stats = _play_bo_logged(p2, p3, db_name, 3)
+            events.append(_lineup_event(p2, p3, 'Плейофф (BO3)', sf2_lines, sf2_snaps,
+                                        sf2_w, sf2_s1, sf2_s2, db_name, 3, sf2_stats))
+        else:
+            sf2_w, sf2_s1, sf2_s2 = _play_bo(p2, p3, db_name, 3)
+        sf2_l = p3 if sf2_w == p2 else p2
+        events.append(_match_event(p2, p3, sf2_w, sf2_l, sf2_s1, sf2_s2,
+                                   'Плейофф (BO3)', sf2_is_player))
+        _gp(p2, p3, sf2_s1 + sf2_s2)
+
+        # Grand Final
+        gf_t1, gf_t2 = sf1_w, sf2_w
+        gf_is_player = gf_t1 in player_teams or gf_t2 in player_teams
+        if gf_is_player:
+            gf_w, gf_s1, gf_s2, gf_lines, gf_snaps, gf_stats = _play_bo_logged(gf_t1, gf_t2, db_name, 3)
+            events.append(_lineup_event(gf_t1, gf_t2, 'Финал (BO3)', gf_lines, gf_snaps,
+                                        gf_w, gf_s1, gf_s2, db_name, 3, gf_stats))
+        else:
+            gf_w, gf_s1, gf_s2 = _play_bo(gf_t1, gf_t2, db_name, 3)
+        gf_l = gf_t2 if gf_w == gf_t1 else gf_t1
+        events.append(_match_event(gf_t1, gf_t2, gf_w, gf_l, gf_s1, gf_s2,
+                                   'Финал (BO3)', gf_is_player))
+        _gp(gf_t1, gf_t2, gf_s1 + gf_s2)
+
+        # Update placements based on playoff
+        placements[gf_w]  = 1
+        placements[gf_l]  = 2
+        placements[sf1_l] = 3
+        placements[sf2_l] = 3
+        champion = gf_w
+    else:
+        champion = sorted_teams[0][0]
+
     events.append({
         'type':             'tournament_results',
         'champion':          champion,
