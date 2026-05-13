@@ -818,7 +818,22 @@ class MainWindow(BoxLayout):
 
             # Low cohesion
             if cohesion < 25:
-                actions.append(('warn', f'Сыгранность критически низкая: {cohesion}/100'))
+                actions.append(('danger', f'Сыгранность критически низкая: {cohesion}/100'))
+            elif cohesion < 50:
+                # Check if bootcamp available
+                lbd = c.execute(
+                    "SELECT last_bootcamp_date FROM teams WHERE player='yes'"
+                ).fetchone()
+                bc_avail = True
+                if lbd and lbd[0]:
+                    try:
+                        from datetime import timedelta as _td
+                        days_since = (self.date_object - date.fromisoformat(lbd[0])).days
+                        bc_avail = days_since >= 30
+                    except Exception:
+                        pass
+                if bc_avail:
+                    actions.append(('warn', f'Сыгранность низкая ({cohesion}/100) — доступен буткемп'))
 
             # Rating / budget trend (last 6 monthly snapshots)
             rating_trend = None
@@ -1502,9 +1517,33 @@ class MainWindow(BoxLayout):
         if _is_transfer_window(str(self.date_object)):
             ai_buy_offer(self.db_name)
         ai_team_trades(self.db_name)
+        # Monthly AI roster maintenance: fill empty slots from free agents
+        ai_transfers(self.db_name)
 
         # Streaming / merch income
         _pay_streaming_income(self.db_name, str(self.date_object))
+
+        # Manager reputation: small monthly gain for staying active
+        try:
+            _rc = sqlite3.connect(self.db_name)
+            _team_row = _rc.execute(
+                "SELECT COALESCE(rating,0), COALESCE(cohesion,0) FROM teams WHERE player='yes'"
+            ).fetchone()
+            if _team_row:
+                _rating, _cohesion = _team_row
+                # +1 always for being active, +1 if cohesion high, +1 if top rating
+                _rep_gain = 1
+                if _cohesion >= 70:
+                    _rep_gain += 1
+                if _rating >= 500:
+                    _rep_gain += 1
+                _rc.execute(
+                    "UPDATE characters SET reputation=COALESCE(reputation,0)+?",
+                    (_rep_gain,)
+                )
+            _rc.commit(); _rc.close()
+        except Exception:
+            pass
 
         # Cohesion goal check
         from logic.goals import update_goal, year_from_date
@@ -1733,9 +1772,11 @@ class MainWindow(BoxLayout):
             self._start_auto_advance()
 
     def _start_auto_advance(self):
+        from settings import AUTO_ADVANCE_SPEED
         self._next_btn.text = '|| Стоп'
         self._next_btn.background_color = (0.75, 0.2, 0.05, 1)
-        self._auto_advance_event = Clock.schedule_interval(self._auto_advance_step, 1.5)
+        self._auto_advance_event = Clock.schedule_interval(
+            self._auto_advance_step, AUTO_ADVANCE_SPEED)
 
     def _stop_auto_advance(self):
         if self._auto_advance_event:

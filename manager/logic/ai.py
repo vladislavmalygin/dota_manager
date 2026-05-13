@@ -491,10 +491,11 @@ def develop_free_agents(db_name):
                     cur.execute(f"UPDATE players SET {col}={col}+1 WHERE id=?", (pid,))
                     break
 
-        # Wage expectation decay: -3% per month, floor = skill-based minimum
-        skill_floor = max(2000, ((mi + ma) // 2) * 60)
+        # Wage expectation decay: -6% per month, floor = skill-based minimum
+        # Faster decay so AI can afford FAs within a few months
+        skill_floor = max(2000, ((mi + ma) // 2) * 50)
         if exp_w > skill_floor:
-            new_w = max(skill_floor, int(exp_w * 0.97))
+            new_w = max(skill_floor, int(exp_w * 0.94))
             if new_w != exp_w:
                 cur.execute("UPDATE players SET expected_wage=? WHERE id=?", (new_w, pid))
 
