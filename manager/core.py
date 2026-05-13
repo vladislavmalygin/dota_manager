@@ -2211,6 +2211,13 @@ class MainWindow(BoxLayout):
         return result[0] if result else None
 
     def get_next_tournament(self):
+        at = self._get_active_tournament()
+        if at:
+            idx   = at['match_idx']
+            total = len(at['match_queue'])
+            name  = at['name']
+            short = name[:22] if len(name) > 22 else name
+            return f'{short}  {idx}/{total}'
         current = self.get_current_tournament()
         if current:
             return f'{current}'

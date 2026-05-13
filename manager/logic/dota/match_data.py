@@ -82,7 +82,9 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
             cursor.execute(
                 "SELECT micro_skills, macro_skills, soft_skills, COALESCE(morale, 5), "
                 "COALESCE(nickname, ''), COALESCE(stability, 5), COALESCE(form, 5), "
-                "injured_until, COALESCE(fatigue, 0) "
+                "injured_until, COALESCE(fatigue, 0), "
+                "COALESCE(role,''), COALESCE(secondary_role,''), "
+                "COALESCE(secondary_comp, 5) "
                 "FROM players WHERE id=?",
                 (player_id,),
             )
@@ -91,7 +93,8 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
             row = None
 
         if row:
-            micro, macro, soft, morale, nick, stability, form, injured_until, fatigue = row
+            (micro, macro, soft, morale, nick, stability, form,
+             injured_until, fatigue, primary_role, sec_role, sec_comp) = row
             # Injured player plays at 40% effectiveness
             if injured_until:
                 try:
@@ -102,6 +105,20 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
                         nick  = f'[отпуск]{nick}'
                 except Exception:
                     pass
+            # Secondary / out-of-role penalty before other modifiers
+            slot_role = role.replace(f'{team_key}_', '')  # e.g. 'carry', 'mid'
+            if primary_role and slot_role != primary_role:
+                if slot_role == sec_role and sec_role:
+                    # Playing secondary role: comp=1→×0.80, comp=5→×1.00, comp=10→×1.25
+                    comp_mult = 0.80 + 0.04 * sec_comp
+                    micro = max(1, int((micro or 1) * comp_mult))
+                    macro = max(1, int((macro or 1) * comp_mult))
+                    soft  = max(1, int((soft  or 1) * comp_mult))
+                else:
+                    # Completely out of role: −35%
+                    micro = max(1, int((micro or 1) * 0.65))
+                    macro = max(1, int((macro or 1) * 0.65))
+                    soft  = max(1, int((soft  or 1) * 0.65))
             bonus = (morale - 5) * 2 + cohesion_b
             micro = max(1, (micro or 1) + bonus)
             macro = max(1, (macro or 1) + bonus)

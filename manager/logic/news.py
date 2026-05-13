@@ -52,7 +52,7 @@ _PATCH_STORIES = [
 
 
 def generate_monthly_news(db_name):
-    """Returns list of news strings for this month. 0-3 items."""
+    """Returns list of news strings for this month. 0-5 items."""
     conn = sqlite3.connect(db_name)
     c = conn.cursor()
 
@@ -63,7 +63,7 @@ def generate_monthly_news(db_name):
     news = []
 
     # Recent AI transfer
-    if random.random() < 0.45:
+    if random.random() < 0.70:
         c.execute("""
             SELECT p.nickname, p.micro_skills+p.macro_skills, t.name, p.role
             FROM players p JOIN teams t ON p.team_id=t.id
@@ -79,7 +79,7 @@ def generate_monthly_news(db_name):
                 nick=nick, sk=sk, team=team, role=role_ru))
 
     # AI team in crisis (low budget or low rating)
-    if random.random() < 0.30:
+    if random.random() < 0.50:
         c.execute("""
             SELECT name FROM teams
             WHERE player!='yes'
@@ -91,7 +91,7 @@ def generate_monthly_news(db_name):
             news.append(random.choice(_CRISIS_STORIES).format(team=row[0]))
 
     # Dominant top team
-    if random.random() < 0.28:
+    if random.random() < 0.55:
         c.execute("""
             SELECT name, COALESCE(rating,0) FROM teams
             WHERE player!='yes' AND COALESCE(rating,0) >= 500
@@ -104,7 +104,7 @@ def generate_monthly_news(db_name):
             news.append(random.choice(_DOMINANT_STORIES).format(team=team, n=n))
 
     # Rivalry story (two high-rated AI teams)
-    if random.random() < 0.22:
+    if random.random() < 0.45:
         c.execute("""
             SELECT name FROM teams WHERE player!='yes'
             ORDER BY COALESCE(rating,0) DESC LIMIT 6
@@ -115,7 +115,7 @@ def generate_monthly_news(db_name):
             news.append(random.choice(_RIVALRY_STORIES).format(t1=t1, t2=t2))
 
     # Notable free agent
-    if random.random() < 0.25:
+    if random.random() < 0.50:
         c.execute("""
             SELECT nickname, micro_skills+macro_skills FROM players
             WHERE team_id=0 AND micro_skills+macro_skills >= 130
@@ -127,7 +127,7 @@ def generate_monthly_news(db_name):
             news.append(random.choice(_FA_STORIES).format(nick=nick, sk=sk))
 
     # Cohesion / chemistry story
-    if random.random() < 0.18:
+    if random.random() < 0.40:
         c.execute("""
             SELECT name, cohesion FROM teams
             WHERE player!='yes' AND cohesion>=70
@@ -140,7 +140,7 @@ def generate_monthly_news(db_name):
                 f'(сыгранность {row[1]}/100)')
 
     # Recent tournament result (two AI teams)
-    if random.random() < 0.35:
+    if random.random() < 0.65:
         c.execute("""
             SELECT t.name, p1.name, p2.name
             FROM tournaments t
@@ -156,7 +156,7 @@ def generate_monthly_news(db_name):
                 winner=winner.strip(), loser=loser.strip()))
 
     # Player milestone
-    if random.random() < 0.22:
+    if random.random() < 0.45:
         c.execute("""
             SELECT p.nickname, p.role, t.name
             FROM players p JOIN teams t ON p.team_id=t.id
@@ -173,7 +173,7 @@ def generate_monthly_news(db_name):
                 nick=nick, role=role_ru, team=team.strip()))
 
     # Patch news
-    if random.random() < 0.20:
+    if random.random() < 0.40:
         try:
             patch_row = c.execute(
                 "SELECT patch_name, favored_role FROM meta_patches "
@@ -189,4 +189,4 @@ def generate_monthly_news(db_name):
 
     conn.close()
     random.shuffle(news)
-    return news[:3]
+    return news[:5]
