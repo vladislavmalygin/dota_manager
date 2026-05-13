@@ -402,7 +402,8 @@ class SquadPopup(Popup):
                     "SELECT name, surname, nickname, country, micro_skills, macro_skills, "
                     "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
                     "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
-                    "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0) "
+                    "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0), "
+                    "COALESCE(signature_heroes, '[]') "
                     "FROM players WHERE id=?",
                     (int(sid),)
                 )
@@ -411,7 +412,8 @@ class SquadPopup(Popup):
                     (fname, lname, nick, country,
                      micro, macro, soft, wage, face, skill_cap, morale,
                      priority, age, injured_until, wants_to_leave,
-                     contract_end, form, secondary_role, fatigue) = p
+                     contract_end, form, secondary_role, fatigue,
+                     sig_heroes_json) = p
                     micro = micro or 0; macro = macro or 0; soft = soft or 0
                     wage  = wage  or 0; skill_cap = skill_cap or 300
                     total_wage += wage
@@ -512,6 +514,20 @@ class SquadPopup(Popup):
                             (0.60, 0.85, 1.00, 1)))
                     if cend_txt:
                         chips_row.add_widget(T.make_chip(cend_txt, T.BG_ROW_A, cend_color))
+
+                    # Signature heroes row
+                    import json as _json
+                    try:
+                        sig_heroes = _json.loads(sig_heroes_json) if sig_heroes_json else []
+                    except Exception:
+                        sig_heroes = []
+                    if sig_heroes:
+                        hero_row = BoxLayout(size_hint_y=None, height=18, spacing=3)
+                        for h in sig_heroes[:3]:
+                            hero_row.add_widget(T.make_chip(
+                                h[:10], (0.12, 0.20, 0.35, 1),
+                                (0.60, 0.80, 1.00, 1), font_size='9sp'))
+                        name_col.add_widget(hero_row)
 
                     name_col.add_widget(nick_lbl)
                     name_col.add_widget(fullname_lbl)
