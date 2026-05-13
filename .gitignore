@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Game saves and runtime databases
+manager/saves/
+manager/start_database_backup.db
+manager.db
+start_database.db
+
+# Kivy logs and cache
+*.kivy/
+.kivy/
+kivy_logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+output.log
