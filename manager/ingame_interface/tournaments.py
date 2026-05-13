@@ -733,6 +733,7 @@ class MatchLogPopup(Popup):
         self._pre_match_team   = pre_match_team
         self._pre_match_db     = db_name
         self._pre_strats       = {}   # phase → selected key
+        self._auto_skip        = False
         self._pre_strat_btns   = {}   # (phase, key) → Button
         self._hero_picks       = {}   # role → hero tuple (player team)
         self._hero_btns        = {}   # (role, hero_name) → Button
@@ -1045,13 +1046,22 @@ class MatchLogPopup(Popup):
 
     def _on_draft_confirmed(self, hero_picks, confirmed):
         if hero_picks and confirmed:
+            self._auto_skip = False
             self._hero_picks = hero_picks
+            Clock.schedule_once(lambda dt: self._run_simulation(), 0.25)
         else:
+            self._auto_skip = True
             import random as _r
-            from logic.heroes import HEROES, ROLE_ORDER as _RO
-            self._hero_picks = {role: _r.choice(HEROES[role]) for role in _RO}
-        # Defer past popup dismiss animation (~0.1s) before rebuilding widget tree
-        Clock.schedule_once(lambda dt: self._run_simulation(), 0.25)
+            winner_guess = _r.choice([self._team1, self._team2])
+            self._map_wins[winner_guess] = self._map_wins.get(winner_guess, 0) + 1
+            w1 = self._map_wins[self._team1]
+            w2 = self._map_wins[self._team2]
+            self._winner = self._team1 if w1 > w2 else (
+                           self._team2 if w2 > w1 else winner_guess)
+            self._final_score = (w1, w2)
+            self._sched_idx = 0
+            self._elapsed   = 0.0
+            Clock.schedule_once(lambda dt: self._start(), 0.25)
 
     def _run_simulation(self):
         """Simulate one map with self._hero_picks and start the match animation."""
@@ -1101,9 +1111,10 @@ class MatchLogPopup(Popup):
             self._sched_idx = 0
             self._elapsed   = 0.0
 
-        # Detach old content from any parent before setting new one
-        if self._match_content.parent:
-            self._match_content.parent.remove_widget(self._match_content)
+        # Force Kivy ObjectProperty to fire even if _match_content is same object.
+        # Without a value change, the property won't dispatch → _update_content skipped.
+        from kivy.uix.widget import Widget as _W
+        self.content = _W()          # temp object → guarantees next assignment fires
         self.content = self._match_content
         Clock.schedule_once(lambda dt: self._start(), 0.2)
 
@@ -1126,7 +1137,6 @@ class MatchLogPopup(Popup):
 
     def _start(self):
         if not self._schedule:
-            # Empty log — jump straight to finish
             Clock.schedule_once(lambda dt: self._finish(), 0)
             return
         self._interval = Clock.schedule_interval(self._tick, 0.05)
@@ -1218,7 +1228,6 @@ class MatchLogPopup(Popup):
             else:
                 match_over = (w1 >= self._bo_needed or w2 >= self._bo_needed)
             if not match_over:
-                # Match not decided — repurpose Skip button to go to next map
                 map_num = maps_played + 1
                 self._status_lbl.text = (
                     f'Карта {maps_played} завершена  ·  '
@@ -1228,6 +1237,11 @@ class MatchLogPopup(Popup):
                 self._hero_picks     = {}
                 self._hero_btns      = {}
                 self._pre_strat_btns = {}
+                # Auto-skip mode: trigger map 2 draft normally (player chooses to skip or not)
+                if getattr(self, '_auto_skip', False):
+                    self._auto_skip = False  # reset — map 2 draft opens normally
+                    Clock.schedule_once(lambda dt: self._next_map_draft(), 0.3)
+                    return
                 self._skip_btn.text             = f'Карта {map_num}: Драфт  →'
                 self._skip_btn.background_color = (0.15, 0.55, 0.25, 1)
                 self._skip_btn.unbind(on_press=self._skip)
@@ -1287,7 +1301,11 @@ class MatchLogPopup(Popup):
         self._hero_picks     = {}
         self._hero_btns      = {}
         self._pre_strat_btns = {}
-        self._launch_prematch_draft()
+        if getattr(self, '_auto_skip', False):
+            # Auto-skip: bypass draft popup, directly process next map
+            self._on_draft_confirmed(None, False)
+        else:
+            self._launch_prematch_draft()
 
     def _skip(self, _):
         if self._interval:

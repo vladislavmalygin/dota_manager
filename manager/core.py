@@ -1795,7 +1795,9 @@ class MainWindow(BoxLayout):
                 self.today_date_button.text = updated_date_value
                 self.tournament_button.text = self.get_next_tournament()
                 self._refresh_menu_badges()
-                self._show_dashboard()
+                # Don't clear match popup if player is in a match
+                if not getattr(self, '_active_inline_popup', None):
+                    self._show_dashboard()
 
                 # Новые сообщения — останавливаем авто-листание
                 if not suppress_notifications:
@@ -2362,7 +2364,9 @@ class MainWindow(BoxLayout):
         player_teams = at.get('player_teams', set())
         pre_match_team = t1 if t1 in player_teams else (t2 if t2 in player_teams else None)
 
-        # Disable nav buttons while match plays
+        # Stop auto-advance and disable nav buttons while match plays
+        if getattr(self, '_auto_advance_event', None):
+            self._stop_auto_advance()
         for btn in (getattr(self, '_next_btn', None), getattr(self, '_skip_btn', None)):
             if btn:
                 btn.disabled = True

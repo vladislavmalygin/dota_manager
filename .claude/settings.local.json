@@ -41,7 +41,22 @@
       "Read(//home/vlad/.local/bin/**)",
       "Bash(.venv/bin/pyinstaller dota_manager.spec)",
       "Bash(python3.14 *)",
-      "Bash(/home/vlad/Dev/dota_manager/.venv/bin/python3 -c ' *)"
+      "Bash(/home/vlad/Dev/dota_manager/.venv/bin/python3 -c ' *)",
+      "Bash(DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 dota_manager.py)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(pkill -f dota_manager.py)",
+      "Bash(DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 /tmp/test_bo2_full.py)",
+      "Bash(echo \"Game PID: $! — лог пишется в /tmp/game_match_log.txt\")",
+      "Bash(pkill -f dota_manager)",
+      "Bash(tee /tmp/match_debug.log)",
+      "Bash(echo \"PID=$! log=/tmp/match_debug.log\")",
+      "Bash(pkill -f \"python3 dota_manager\")",
+      "Bash(PYTHONUNBUFFERED=1 DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 -u dota_manager.py)",
+      "Bash(awk '{print $1, $2}')",
+      "Bash(pkill -f \"python3.*dota_manager\")",
+      "Bash(PYTHONUNBUFFERED=1 DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 -u /home/vlad/Dev/dota_manager/manager/dota_manager.py)",
+      "Bash(sed -i \"/print\\(f'\\\\[M\\\\]/d\" /home/vlad/Dev/dota_manager/manager/ingame_interface/tournaments.py)",
+      "Bash(sed -i \"/print\\(f'\\\\[C\\\\]/d\" /home/vlad/Dev/dota_manager/manager/core.py)"
     ]
   }
 }
