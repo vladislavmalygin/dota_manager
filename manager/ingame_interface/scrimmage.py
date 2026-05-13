@@ -270,9 +270,10 @@ class ScrimmagePopup(Popup):
             conn3.close()
         except Exception:
             pass
-        # record date + result in messages
+        # record date + result in messages + match_history
         if self._game_date_str:
             try:
+                import json as _json
                 conn4 = sqlite3.connect(self._db)
                 conn4.execute(
                     "UPDATE teams SET last_scrimmage_date=? WHERE player='yes'",
@@ -281,6 +282,26 @@ class ScrimmagePopup(Popup):
                 conn4.execute(
                     "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
                     (result_txt, self._game_date_str, 'Кланвары'))
+                conn4.execute("""
+                    CREATE TABLE IF NOT EXISTS match_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        played_date TEXT, tournament TEXT, stage TEXT,
+                        team1 TEXT, team2 TEXT, winner TEXT,
+                        score_t1 INTEGER DEFAULT 0, score_t2 INTEGER DEFAULT 0,
+                        best_of INTEGER DEFAULT 1, log_json TEXT
+                    )
+                """)
+                conn4.execute("""
+                    INSERT INTO match_history
+                    (played_date, tournament, stage, team1, team2, winner,
+                     score_t1, score_t2, best_of, log_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    self._game_date_str, 'Кланвары', 'BO1',
+                    self._my_team, opponent, winner,
+                    1 if won else 0, 0 if won else 1, 1,
+                    _json.dumps(lines),
+                ))
                 conn4.commit()
                 conn4.close()
             except Exception:
