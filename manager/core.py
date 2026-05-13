@@ -2311,11 +2311,20 @@ class MainWindow(BoxLayout):
                                     game_date=str(self.date_object))
             return
 
-        # Handle minor without player: persist silently
-        if minor_ev:
+        # Determine if player participates in minor tournament
+        player_in_minor = any(
+            item['result_ev'].get('is_player_match') and
+            'Малый' in item['result_ev'].get('stage', '')
+            for item in match_queue
+        )
+
+        # Minor without player → persist silently now; with player → persist at tournament end
+        minor_ev_to_store = minor_ev
+        if minor_ev and not player_in_minor:
             try:
                 from ingame_interface.tournaments import _persist_minor_results_standalone
                 _persist_minor_results_standalone(self.db_name, minor_ev)
+                minor_ev_to_store = None  # already done, don't double-persist at end
             except Exception:
                 pass
 
@@ -2339,7 +2348,7 @@ class MainWindow(BoxLayout):
                 json.dumps(match_queue),
                 json.dumps(initial_standings),
                 json.dumps(final_ev) if final_ev else None,
-                json.dumps(minor_ev) if minor_ev else None,
+                json.dumps(minor_ev_to_store) if minor_ev_to_store else None,
                 json.dumps(draw_ev) if draw_ev else None,
                 json.dumps(list(player_teams)),
             )

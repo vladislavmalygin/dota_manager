@@ -1114,6 +1114,14 @@ def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
         except Exception:
             pass
 
+    # Persist minor results when player was in minor (not persisted at tournament init)
+    if minor_ev:
+        try:
+            from ingame_interface.tournaments import _persist_minor_results_standalone
+            _persist_minor_results_standalone(db_name, minor_ev)
+        except Exception:
+            pass
+
 
 def ensure_next_year_tournaments(db_name, year):
     """Generate a standard 8-tournament year if no main tournaments for that year exist."""
