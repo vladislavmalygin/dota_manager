@@ -1788,7 +1788,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         box = BoxLayout(orientation='vertical', size_hint_x=None, width=w,
                         size_hint_y=None, height=h, spacing=0)
         with box.canvas.before:
-            _GC(*bg_color)
+            _bg_clr  = _GC(*bg_color)   # Color instruction — has .rgba
             _bg_rect = _GR()
         box.bind(pos=lambda w2, _: setattr(_bg_rect, 'pos', w2.pos),
                  size=lambda w2, _: setattr(_bg_rect, 'size', w2.size))
@@ -1803,18 +1803,15 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         box.add_widget(name_lbl)
         box._img_widget = img
         box._lbl_widget = name_lbl
-        box._bg_instr   = _bg_rect
+        box._bg_clr     = _bg_clr    # Color (has .rgba)
         return box
 
     def _fill_slot(slot, hname, tint):
         """Update slot to show hero portrait with given tint."""
         img_path = get_hero_image_path(hname)
-        if img_path:
-            slot._img_widget.source = img_path
-        else:
-            slot._img_widget.source = ''
-        slot._lbl_widget.text = hname[:12]
-        slot._bg_instr.rgba = tint
+        slot._img_widget.source = img_path or ''
+        slot._lbl_widget.text   = hname[:12]
+        slot._bg_clr.rgba       = tint   # Color.rgba works
 
     # ── Draft board ──────────────────────────────────────────────────────────
     board = BoxLayout(orientation='vertical', size_hint_y=None,
@@ -1960,11 +1957,11 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
             width=_CARD_W, height=_CARD_H, spacing=0,
         )
         with card.canvas.before:
-            _GC(*_AVAIL)
-            _card_bg = _GR()
+            _card_clr = _GC(*_AVAIL)   # Color — has .rgba
+            _card_bg  = _GR()
         card.bind(pos=lambda w2, _: setattr(_card_bg, 'pos', w2.pos),
                   size=lambda w2, _: setattr(_card_bg, 'size', w2.size))
-        card._bg_instr = _card_bg
+        card._bg_instr = _card_clr    # store Color, not Rectangle
 
         # Hero portrait
         portrait_h = _CARD_H - 16
