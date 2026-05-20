@@ -1063,7 +1063,7 @@ class TransferPopup(Popup):
                         font_size='13sp',
                     )
                     def _open_actions(_, _pid=pid, _col=col, _nick=nick, _fee=fee,
-                                      _role=role, _mi=micro, _ma=macro, _w=wage):
+                                      _role=col, _mi=micro, _ma=macro, _w=wage):
                         self._show_player_actions(
                             _pid, _col, _nick, _fee, _role, _mi, _ma, _w,
                             in_window, str(today)
@@ -1228,6 +1228,17 @@ class TransferPopup(Popup):
             LIMIT 40
         """)
         free_agents = cur.fetchall()
+        wl_ids = {r[0] for r in cur.execute("SELECT player_id FROM watchlist").fetchall()}
+        wl_rows = cur.execute("""
+            SELECT w.player_id, p.nickname, p.role,
+                   COALESCE(p.micro_skills,0), COALESCE(p.macro_skills,0),
+                   COALESCE(p.expected_wage,0), p.team_id,
+                   COALESCE(t.name, 'Свободный агент')
+            FROM watchlist w
+            JOIN players p ON p.id = w.player_id
+            LEFT JOIN teams t ON t.id = p.team_id AND p.team_id != 0
+            ORDER BY (p.micro_skills+p.macro_skills) DESC
+        """).fetchall()
         conn.close()
 
         # ── outer: tab bar + scroll ────────────────────────────
@@ -1310,7 +1321,9 @@ class TransferPopup(Popup):
         if not free_agents:
             grid.add_widget(_lbl("  Нет свободных игроков.", color=(0.7, 0.7, 0.7, 1)))
         else:
-            for pid, fname, lname, nick, role, micro, macro, exp_wage, age, scouted, psychotype in free_agents:
+            _FA_EVEN = (0.09, 0.11, 0.16, 1)
+            _FA_ODD  = (0.07, 0.08, 0.12, 1)
+            for _fa_idx, (pid, fname, lname, nick, role, micro, macro, exp_wage, age, scouted, psychotype) in enumerate(free_agents):
                 exp_wage = exp_wage or 0
                 avg = (micro + macro) // 2
                 scout_cost = max(3000, min(25000, avg * 200))
@@ -1331,7 +1344,16 @@ class TransferPopup(Popup):
                 except Exception:
                     pass
 
+                _fa_bg = _FA_EVEN if _fa_idx % 2 == 0 else _FA_ODD
                 row = BoxLayout(size_hint_y=None, height=46, spacing=3)
+                import sqlite3 as _sq3
+                with row.canvas.before:
+                    from kivy.graphics import Color as _GCfa, Rectangle as _GRfa
+                    _GCfa(*_fa_bg)
+                    _fa_r = _GRfa()
+                _fa_r_ref = _fa_r
+                row.bind(pos=lambda w, _, _r=_fa_r_ref: setattr(_r, 'pos', w.pos),
+                         size=lambda w, _, _r=_fa_r_ref: setattr(_r, 'size', w.size))
                 if scouted or _scout_reveal:
                     skill_txt = f"скилл {avg}" + (' (ск)' if _scout_reveal else '')
                     pchip, pclr = _PSYCHO_CHIP.get(psychotype, ('', None))
@@ -1347,10 +1369,7 @@ class TransferPopup(Popup):
                 row.add_widget(info)
 
                 # Watchlist toggle button (always visible)
-                _wl_ids = {r[0] for r in cur.execute(
-                    "SELECT player_id FROM watchlist"
-                ).fetchall()} if True else set()
-                in_wl = pid in _wl_ids
+                in_wl = pid in wl_ids
                 wl_btn = Button(
                     text='Вотч+' if in_wl else 'Вотч',
                     size_hint=(None, None), width=40, height=40,
@@ -1397,16 +1416,6 @@ class TransferPopup(Popup):
                 grid.add_widget(row)
 
         # ── watchlist section ─────────────────────────────────
-        wl_rows = cur.execute("""
-            SELECT w.player_id, p.nickname, p.role,
-                   COALESCE(p.micro_skills,0), COALESCE(p.macro_skills,0),
-                   COALESCE(p.expected_wage,0), p.team_id,
-                   COALESCE(t.name, 'Свободный агент')
-            FROM watchlist w
-            JOIN players p ON p.id = w.player_id
-            LEFT JOIN teams t ON t.id = p.team_id AND p.team_id != 0
-            ORDER BY (p.micro_skills+p.macro_skills) DESC
-        """).fetchall()
         if wl_rows:
             grid.add_widget(_header('  Список наблюдения'))
             for wpid, wnick, wrole, wmi, wma, wwage, wtid, wteam in wl_rows:

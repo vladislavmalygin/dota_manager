@@ -19,7 +19,7 @@ from logic.tournaments.runner import (
     get_lineup,
     replay_match_with_heroes,
 )
-from logic.heroes import HEROES, ROLE_ORDER, random_picks
+from logic.heroes import HEROES, ROLE_ORDER, random_picks, get_hero_image_path
 from logic.ai import (update_morale_after_tournament, ai_transfers,
                        apply_training_from_games, update_form_after_tournament)
 from ingame_interface.transfers import is_transfer_window as _is_transfer_window
@@ -769,6 +769,8 @@ class MatchLogPopup(Popup):
         self._pre_strat_btns   = {}   # (phase, key) → Button
         self._hero_picks       = {}   # role → hero tuple (player team)
         self._hero_btns        = {}   # (role, hero_name) → Button
+        self._match_hero_picks = {}   # {team1: {role: hero}, team2: {role: hero}} after sim
+        self._prev_towers      = (11, 11)   # (t1, t2) for fall detection
         # BO per-map state
         self._map_wins         = {team1: 0, team2: 0}
         self._bo_needed        = best_of // 2 + 1 if best_of > 1 else 1
@@ -837,15 +839,70 @@ class MatchLogPopup(Popup):
             font_size='11sp', size_hint_y=None, height=14,
         )
         self._timer_lbl.bind(size=self._timer_lbl.setter('text_size'))
+        # Tower counter (t1 | towers | t2)
+        self._tower_lbl = Label(
+            text='', color=(0.80, 0.65, 0.30, 1),
+            halign='center', valign='middle', font_size='10sp',
+            size_hint_y=None, height=14, markup=True,
+        )
+        self._tower_lbl.bind(size=self._tower_lbl.setter('text_size'))
+
         center.add_widget(self._score_lbl)
         center.add_widget(self._bo_lbl)
         center.add_widget(self._timer_lbl)
+        center.add_widget(self._tower_lbl)
 
         header.add_widget(t1_box)
         header.add_widget(center)
         header.add_widget(t2_box)
         root.add_widget(header)
+
+        # ── gold advantage bar ─────────────────────────────────
+        self._gold_bar = _GoldBar(size_hint_y=None, height=6)
+        root.add_widget(self._gold_bar)
+
+        # ── hero portrait strip ────────────────────────────────
+        picks = getattr(self, '_match_hero_picks', {})
+        if picks:
+            strip = BoxLayout(orientation='horizontal', size_hint_y=None,
+                              height=46, spacing=0, padding=(2, 2))
+            def _make_pick_img(hname, team_clr):
+                pbox = BoxLayout(orientation='vertical', spacing=0)
+                ip = get_hero_image_path(hname) if hname else None
+                if ip:
+                    img_w = _Img(source=ip, allow_stretch=True, keep_ratio=True,
+                                 size_hint=(1, None), height=30)
+                else:
+                    img_w = Label(text='?', font_size='8sp', color=_DIM,
+                                  size_hint=(1, None), height=30)
+                nl = Label(text=(hname or '')[:10], font_size='7sp', color=team_clr,
+                           size_hint=(1, None), height=14,
+                           halign='center', valign='middle')
+                nl.bind(size=nl.setter('text_size'))
+                pbox.add_widget(img_w)
+                pbox.add_widget(nl)
+                return pbox
+
+            t1_picks = picks.get('team1', {})
+            for role in ROLE_ORDER:
+                h = t1_picks.get(role)
+                hname = (h[0] if isinstance(h, tuple) else h) if h else None
+                strip.add_widget(_make_pick_img(hname, (0.35, 1.0, 0.55, 1)))
+
+            strip.add_widget(Label(text='vs', font_size='9sp', color=_DIM,
+                                   size_hint_x=None, width=24))
+
+            t2_picks = picks.get('team2', {})
+            for role in ROLE_ORDER:
+                h = t2_picks.get(role)
+                hname = (h[0] if isinstance(h, tuple) else h) if h else None
+                strip.add_widget(_make_pick_img(hname, (1.0, 0.40, 0.40, 1)))
+
+            root.add_widget(strip)
+
         root.add_widget(_divider())
+
+        self._current_phase = None   # track for flash
 
         # ── body: map (left) + log (right) ────────────────────
         body = BoxLayout(orientation='horizontal', size_hint=(1, 1), spacing=4)
@@ -1044,6 +1101,12 @@ class MatchLogPopup(Popup):
             ph_box.add_widget(ph_lbl)
 
             btn_row = BoxLayout(size_hint_y=None, height=46, spacing=4)
+            strat_desc_lbl = Label(
+                text='', markup=True, color=(0.70, 0.80, 0.70, 1),
+                size_hint_y=None, height=16, font_size='10sp',
+                halign='left', valign='middle',
+            )
+            strat_desc_lbl.bind(size=strat_desc_lbl.setter('text_size'))
             for key, s in strats.items():
                 is_sel = key == self._pre_strats.get(phase, _def)
                 btn = Button(
@@ -1051,10 +1114,20 @@ class MatchLogPopup(Popup):
                     background_color=_SEL_BG if is_sel else _UNSEL_BG,
                     background_normal='', font_size='11sp',
                 )
+                _desc = s.get('description', s.get('desc', ''))
                 btn.bind(on_press=lambda _, p=phase, k=key: self._pre_select(p, k))
+                btn.bind(on_press=lambda _, _d=_desc, _lbl=strat_desc_lbl:
+                         setattr(_lbl, 'text', _d))
+                # Show description on hover
+                from kivy.core.window import Window as _Win2
+                def _on_mouse(win, pos, _btn=btn, _d=_desc, _lbl=strat_desc_lbl):
+                    if _btn.get_root_window() and _btn.collide_point(*_btn.to_widget(*pos)):
+                        _lbl.text = _d
+                _Win2.bind(mouse_pos=_on_mouse)
                 self._pre_strat_btns[(phase, key)] = btn
                 btn_row.add_widget(btn)
             ph_box.add_widget(btn_row)
+            ph_box.add_widget(strat_desc_lbl)
             root.add_widget(ph_box)
 
         # ── Hero picks ────────────────────────────────────────────────────────
@@ -1245,6 +1318,7 @@ class MatchLogPopup(Popup):
                 snp['game_score_t1'] = pre_w1
                 snp['game_score_t2'] = pre_w2
                 snp['best_of']       = self._best_of
+            self._match_hero_picks = hero_picks
             self._build()
         except Exception as _e:
             import traceback as _tb
@@ -1327,7 +1401,32 @@ class MatchLogPopup(Popup):
         m = snap.get('minute', 0)
         self._timer_lbl.text = f'{m}:00'
         phase = snap.get('phase', 'laning')
-        self._phase_lbl.text = _PHASE_LABEL.get(phase, phase.upper())
+        phase_text = _PHASE_LABEL.get(phase, phase.upper())
+        self._phase_lbl.text = phase_text
+        # Flash phase label on transition
+        if phase != self._current_phase:
+            self._current_phase = phase
+            self._phase_lbl.color = _YELLOW
+            Clock.schedule_once(lambda dt: setattr(self._phase_lbl, 'color', _ACCENT), 0.8)
+
+        # Gold bar + tower counter
+        self._gold_bar.update(tok1, tok2)
+        tw1 = snap.get('towers_t1', 11)
+        tw2 = snap.get('towers_t2', 11)
+        self._tower_lbl.text = (
+            f'[color=44cc44]{tw1}[/color] [color=888888]t[/color] '
+            f'[color=888888]vs[/color] '
+            f'[color=888888]t[/color] [color=dd4444]{tw2}[/color]'
+        )
+        self._tower_lbl.markup = True
+        # Flash score on tower fall
+        prev_tw1, prev_tw2 = self._prev_towers
+        if tw1 < prev_tw1 or tw2 < prev_tw2:
+            self._score_lbl.color = (1.0, 0.55, 0.10, 1)
+            Clock.schedule_once(
+                lambda dt: setattr(self._score_lbl, 'color', _YELLOW), 0.6
+            )
+        self._prev_towers = (tw1, tw2)
 
         # Gold advantage
         gold_diff = tok1 - tok2
@@ -1781,7 +1880,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     # ── Slot helpers ─────────────────────────────────────────────────────────
     _SLOT_W = 80
-    _SLOT_H = 58
+    _SLOT_H = 60
 
     def _make_image_slot(label_text, bg_color, w=_SLOT_W, h=_SLOT_H):
         """Slot that can later show a hero portrait."""
@@ -1793,7 +1892,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         box.bind(pos=lambda w2, _: setattr(_bg_rect, 'pos', w2.pos),
                  size=lambda w2, _: setattr(_bg_rect, 'size', w2.size))
 
-        img = _Img(source='', allow_stretch=True, keep_ratio=False,
+        img = _Img(source='', allow_stretch=True, keep_ratio=True,
                    size_hint_y=None, height=h - 16)
         name_lbl = Label(text=label_text, font_size='8sp', color=(0.85, 0.85, 0.85, 1),
                          size_hint_y=None, height=16,
@@ -1812,6 +1911,33 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         slot._img_widget.source = img_path or ''
         slot._lbl_widget.text   = hname[:12]
         slot._bg_clr.rgba       = tint   # Color.rgba works
+
+    # ── Draft step progress bar ───────────────────────────────────────────────
+    _STEP_COLORS = {
+        ('ban',  'player'): (0.70, 0.15, 0.15, 1),
+        ('ban',  'ai'):     (0.50, 0.08, 0.55, 1),
+        ('pick', 'player'): (0.15, 0.60, 0.25, 1),
+        ('pick', 'ai'):     (0.25, 0.10, 0.55, 1),
+    }
+    step_bar = BoxLayout(size_hint_y=None, height=10, spacing=2, padding=(0, 0))
+    _step_indicators = []
+    for _si, (_sa, _sw, _) in enumerate(DRAFT_SEQ):
+        base = list(_STEP_COLORS.get((_sa, _sw), (0.3, 0.3, 0.3, 1)))
+        _ind = Button(size_hint_x=None, width=14, size_hint_y=1,
+                      background_normal='', background_color=base, disabled=True)
+        _step_indicators.append((_ind, base))
+        step_bar.add_widget(_ind)
+    right.add_widget(step_bar)
+
+    def _refresh_step_bar():
+        cur = draft['step']
+        for i, (_ind, base) in enumerate(_step_indicators):
+            if i < cur:
+                _ind.background_color = [c * 0.5 for c in base[:3]] + [0.7]
+            elif i == cur:
+                _ind.background_color = [min(1, c * 1.6) for c in base[:3]] + [1.0]
+            else:
+                _ind.background_color = base
 
     # ── Draft board ──────────────────────────────────────────────────────────
     board = BoxLayout(orientation='vertical', size_hint_y=None,
@@ -1877,6 +2003,36 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     counter_lbl.bind(size=counter_lbl.setter('text_size'))
     right.add_widget(counter_lbl)
 
+    # Hero hover tooltip
+    hero_tooltip_lbl = Label(
+        text='', markup=True, color=(0.80, 0.85, 0.95, 1),
+        size_hint_y=None, height=18, font_size='10sp',
+        halign='center', valign='middle',
+    )
+    hero_tooltip_lbl.bind(size=hero_tooltip_lbl.setter('text_size'))
+    right.add_widget(hero_tooltip_lbl)
+
+    def _set_hero_tooltip(hname):
+        if not hname:
+            hero_tooltip_lbl.text = ''
+            return
+        parts = []
+        roles = [r for r in ROLE_ORDER if any(h[0] == hname for h in HEROES[r])]
+        if roles:
+            parts.append('/'.join(_ROLE_RU.get(r, r) for r in roles))
+        if hname in _buffed_set:
+            parts.append('[color=44dd66]BUFF[/color]')
+        elif hname in _nerfed_set:
+            parts.append('[color=dd4444]NERF[/color]')
+        try:
+            from logic.heroes import get_counters as _gc
+            ctrs = _gc(hname)
+            if ctrs:
+                parts.append(f'контр: {", ".join(ctrs[:2])}')
+        except Exception:
+            pass
+        hero_tooltip_lbl.text = f'[b]{hname}[/b]  ' + '  •  '.join(parts) if parts else ''
+
     def _update_counter_hints():
         try:
             from logic.heroes import get_counters
@@ -1928,11 +2084,12 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     right.add_widget(filter_bar)
 
     # ── Hero grid with portraits ─────────────────────────────────────────────
-    _CARD_W = 88
-    _CARD_H = 62
+    # 256×144 = ratio 1.78 → card 110×78 (portrait 110×62 = 1.77 ≈ exact fit)
+    _CARD_W = 110
+    _CARD_H = 78
 
     hero_sv   = ScrollView(size_hint=(1, 1))
-    hero_grid = GridLayout(cols=7, size_hint_y=None, spacing=3, padding=(2, 2))
+    hero_grid = GridLayout(cols=6, size_hint_y=None, spacing=3, padding=(2, 2))
     hero_grid.bind(minimum_height=hero_grid.setter('height'))
     hero_sv.add_widget(hero_grid)
     right.add_widget(hero_sv)
@@ -1966,7 +2123,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         # Hero portrait
         portrait_h = _CARD_H - 16
         if img_path:
-            portrait = _Img(source=img_path, allow_stretch=True, keep_ratio=False,
+            portrait = _Img(source=img_path, allow_stretch=True, keep_ratio=True,
                             size_hint=(1, None), height=portrait_h)
         else:
             portrait = Label(text='?', color=(0.60, 0.60, 0.60, 1),
@@ -2012,6 +2169,14 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                 _on_hero_click(role, hero)
                 return True
         card.bind(on_touch_down=_touch)
+
+        # Hover tooltip
+        from kivy.core.window import Window as _W3
+        def _on_card_mouse(win, pos, _c=card, _h=hname):
+            if _c.get_root_window() and _c.collide_point(*_c.to_widget(*pos)):
+                _set_hero_tooltip(_h)
+        _W3.bind(mouse_pos=_on_card_mouse)
+
         return card
 
     def _rebuild_hero_grid():
@@ -2061,9 +2226,37 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         else:
             return f'[color=aaaaaa]AI {"банит" if action=="ban" else "пикает"}...[/color]'
 
+    def _highlight_next_slot():
+        """Pulse the slot that the player will fill next."""
+        step = draft['step']
+        if step >= len(DRAFT_SEQ):
+            return
+        action, who, _ = DRAFT_SEQ[step]
+        if who != 'player':
+            return
+        _PULSE = (0.90, 0.85, 0.15, 1)
+        if action == 'ban':
+            idx = len(draft['player_bans'])
+            if idx < 5:
+                p_ban_slots[idx]._bg_clr.rgba = _PULSE
+                def _restore(dt, _s=p_ban_slots[idx]):
+                    if _s._lbl_widget.text == 'БАН':  # not yet filled
+                        _s._bg_clr.rgba = _PBANN
+                _Clock.schedule_once(_restore, 0.5)
+        else:
+            unpicked = [r for r in ROLE_ORDER if r not in draft['player_picks']]
+            if unpicked:
+                slot = p_pick_slots[unpicked[0]]
+                slot._bg_clr.rgba = _PULSE
+                def _restore2(dt, _s=slot, _r=unpicked[0]):
+                    if _r not in draft['player_picks']:
+                        _s._bg_clr.rgba = _PPICK
+                _Clock.schedule_once(_restore2, 0.5)
+
     def _advance():
         """Process next step(s). If AI — auto-execute with delay."""
         step = draft['step']
+        _refresh_step_bar()
         if step >= len(DRAFT_SEQ):
             draft['done'] = True
             instr_lbl.text = _step_desc(step)
@@ -2077,7 +2270,8 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
         if who == 'ai':
             _Clock.schedule_once(lambda dt: _do_ai_step(), 0.55)
-        # else: wait for player click
+        else:
+            _highlight_next_slot()  # pulse next player slot
 
     def _do_ai_step():
         step = draft['step']

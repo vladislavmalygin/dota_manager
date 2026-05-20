@@ -429,11 +429,20 @@ class MainWindow(BoxLayout):
         )
         top_bar.add_widget(self.tournament_button)
 
+        # Inbox badge button (topbar shortcut)
+        from kivy.uix.label import Label as _L
+        self._inbox_badge_btn = Button(
+            text='', background_color=(0.55, 0.12, 0.12, 1), background_normal='',
+            font_size='12sp', size_hint_x=0.06, markup=True,
+        )
+        self._inbox_badge_btn.bind(on_press=self.on_incoming)
+        top_bar.add_widget(self._inbox_badge_btn)
+
         # Date label
         self.today_date_button = Button(
             text=str(self.date_object),
             background_color=(0.22, 0.32, 0.18, 1), background_normal='',
-            font_size=T.FS_BODY, size_hint_x=0.11,
+            font_size=T.FS_BODY, size_hint_x=0.10,
             on_press=self.on_press,
         )
         top_bar.add_widget(self.today_date_button)
@@ -594,6 +603,39 @@ class MainWindow(BoxLayout):
         main_layout.add_widget(self.main_area)
         self.add_widget(main_layout)
 
+        # ── News ticker ───────────────────────────────────────────────────────
+        from kivy.uix.label import Label as _Lbl
+        ticker_bar = BoxLayout(size_hint_y=None, height=22)
+        with ticker_bar.canvas.before:
+            Color(0.04, 0.06, 0.10, 1)
+            _tbr = Rectangle()
+        ticker_bar.bind(pos=lambda w, _: setattr(_tbr, 'pos', w.pos),
+                        size=lambda w, _: setattr(_tbr, 'size', w.size))
+        self._ticker_lbl = _Lbl(
+            text='', markup=True,
+            color=(0.55, 0.65, 0.80, 1), font_size='11sp',
+            halign='left', valign='middle',
+        )
+        self._ticker_lbl.bind(size=self._ticker_lbl.setter('text_size'))
+        ticker_bar.add_widget(self._ticker_lbl)
+        self.add_widget(ticker_bar)
+        self._ticker_offset = [0.0]
+        self._ticker_items  = []
+        Clock.schedule_once(lambda dt: self._load_ticker(), 1.0)
+        Clock.schedule_interval(self._tick_news, 0.05)
+
+        # ── Keyboard shortcuts ────────────────────────────────────────────────
+        from kivy.core.window import Window as _Win
+        _Win.bind(on_key_down=self._on_key_down)
+
+    def _on_key_down(self, _win, key, _scancode, _codepoint, modifiers):
+        # Space → next day (only if no modifier)
+        if key == 32 and not modifiers:
+            if hasattr(self, '_next_btn') and not self._next_btn.disabled:
+                self.on_next(None)
+            return True
+        return False
+
     # ── Dashboard ─────────────────────────────────────────────────────────────
 
     def _get_budget_display(self):
@@ -618,14 +660,32 @@ class MainWindow(BoxLayout):
             rows = conn.execute(
                 "SELECT name, COALESCE(rating,0) FROM teams ORDER BY COALESCE(rating,0) DESC"
             ).fetchall()
-            my_row = conn.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+            my_row = conn.execute(
+                "SELECT name, id, COALESCE(rating,0) FROM teams WHERE player='yes'"
+            ).fetchone()
             conn.close()
             if not my_row:
                 return 'Рейтинг: —'
-            my_name = my_row[0].strip()
-            for i, (n, r) in enumerate(rows, 1):
-                if n.strip() == my_name:
-                    return f'[b]#{i}[/b]  {int(r)} pts'
+            my_name, my_id, my_rating = my_row[0].strip(), my_row[1], my_row[2]
+            rank = next((i+1 for i, (n, r) in enumerate(rows) if n.strip() == my_name), '?')
+            # Trend from snapshots (last 2)
+            trend_txt = ''
+            try:
+                conn2 = sqlite3.connect(self.db_name)
+                snaps = conn2.execute(
+                    "SELECT rating FROM team_snapshots WHERE team_id=? "
+                    "ORDER BY snap_date DESC LIMIT 2", (my_id,)
+                ).fetchall()
+                conn2.close()
+                if len(snaps) >= 2:
+                    delta = int(snaps[0][0]) - int(snaps[1][0])
+                    if delta > 0:
+                        trend_txt = f'  [color=44dd66]↑{delta}[/color]'
+                    elif delta < 0:
+                        trend_txt = f'  [color=dd4444]↓{abs(delta)}[/color]'
+            except Exception:
+                pass
+            return f'[b]#{rank}[/b]  {int(my_rating)} pts{trend_txt}'
         except Exception:
             pass
         return 'Рейтинг: —'
@@ -1243,6 +1303,33 @@ class MainWindow(BoxLayout):
 
         outer.add_widget(row2)
 
+        # ── Row 3: recent inbox messages ─────────────────────────────────────
+        try:
+            _conn2 = sqlite3.connect(self.db_name)
+            _msgs = _conn2.execute(
+                "SELECT subject, body, created_at, is_read FROM messages "
+                "ORDER BY id DESC LIMIT 6"
+            ).fetchall()
+            _conn2.close()
+            if _msgs:
+                c5 = _card((0.08, 0.10, 0.14, 1))
+                c5.add_widget(_title('Последние сообщения', (0.55, 0.75, 1.00, 1)))
+                for subj, body, cdate, is_read in _msgs:
+                    alpha = 1.0 if not is_read else 0.55
+                    dm = Label(
+                        text=f'  [b]{(subj or "—")[:32]}[/b]   '
+                             f'[color=888888]{(cdate or "")[:10]}[/color]',
+                        markup=True,
+                        color=(0.90, 0.90, 0.95, alpha),
+                        font_size=T.FS_SMALL, size_hint_y=None, height=T.ROW_H_SM,
+                        halign='left', valign='middle',
+                    )
+                    dm.bind(size=dm.setter('text_size'))
+                    c5.add_widget(dm)
+                outer.add_widget(c5)
+        except Exception:
+            pass
+
         sv.add_widget(outer)
         self.main_area.add_widget(sv)
 
@@ -1545,6 +1632,34 @@ class MainWindow(BoxLayout):
     def _update_main_area_rect(self, instance, value):
         self.rect_main_area.pos = self.main_area.pos
         self.rect_main_area.size = self.main_area.size
+
+    def _load_ticker(self):
+        try:
+            conn = sqlite3.connect(self.db_name)
+            rows = conn.execute(
+                "SELECT subject, body FROM messages ORDER BY id DESC LIMIT 12"
+            ).fetchall()
+            conn.close()
+            items = []
+            for subj, body in rows:
+                text = (subj or '').strip() or (body or '')[:60].strip()
+                if text:
+                    items.append(text)
+            sep = '     •     '
+            self._ticker_full = sep.join(items) + sep if items else ''
+            self._ticker_offset[0] = 0.0
+        except Exception:
+            self._ticker_full = ''
+
+    def _tick_news(self, dt):
+        text = getattr(self, '_ticker_full', '')
+        if not text:
+            return
+        spd = 60   # pixels per second
+        self._ticker_offset[0] = (self._ticker_offset[0] + spd * dt) % max(1, len(text) * 8)
+        char_off = int(self._ticker_offset[0] / 8)
+        rotated = text[char_off:] + text[:char_off]
+        self._ticker_lbl.text = rotated[:120]
 
     def get_next_tournament_date(self):
         # During active tournament, next "event" is tomorrow (next match day)
@@ -2305,21 +2420,24 @@ class MainWindow(BoxLayout):
         at = self._get_active_tournament()
         if at:
             # Skip through non-player matches until player match or end
+            _sim_step = [0]
             while True:
                 at2 = self._get_active_tournament()
                 if not at2:
                     break
                 idx = at2['match_idx']
                 queue = at2['match_queue']
-                if idx >= len(queue):
+                total = len(queue)
+                if idx >= total:
                     self._finish_active_tournament(at2)
                     break
                 next_item = queue[idx]
                 if next_item['result_ev'].get('is_player_match') and next_item.get('lineup_ev'):
-                    # Found player match — play it interactively
                     self._play_match_day(suppress_notifications=False)
                     break
-                # Non-player match: silent advance
+                _sim_step[0] += 1
+                if hasattr(self, '_skip_btn'):
+                    self._skip_btn.text = f'Сим {idx}/{total}'
                 self._advance_one_day(suppress_notifications=True)
             _restore_btn()
             return
@@ -2329,7 +2447,12 @@ class MainWindow(BoxLayout):
         if not next_date:
             return
         target = date.fromisoformat(next_date)
+        days_total = (target - self.date_object).days
+        days_done = [0]
         while self.date_object < target:
+            days_done[0] += 1
+            if hasattr(self, '_skip_btn') and days_total > 5:
+                self._skip_btn.text = f'Сим {days_done[0]}/{days_total}д'
             self._advance_one_day(suppress_notifications=True)
         # Trigger tournament start
         if str(self.date_object) == next_date:
@@ -2498,6 +2621,16 @@ class MainWindow(BoxLayout):
             self._budget_lbl.color = color
         if hasattr(self, '_rating_lbl'):
             self._rating_lbl.text = self._get_rating_display()
+        if hasattr(self, '_inbox_badge_btn'):
+            unread = badges.get('Входящие', '')
+            n = unread.strip(' ()') if unread else '0'
+            has = bool(unread)
+            self._inbox_badge_btn.text = (
+                f'[b][color=ff4444]{n}[/color][/b]\nписем' if has else 'Письма'
+            )
+            self._inbox_badge_btn.background_color = (
+                (0.70, 0.08, 0.08, 1) if has else (0.22, 0.28, 0.22, 1)
+            )
 
     def on_press(self, instance):
         print(f'Нажата кнопка: {instance.text}')

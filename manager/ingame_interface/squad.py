@@ -264,13 +264,35 @@ class SetPriorityPopup(Popup):
 class SquadPopup(Popup):
     def __init__(self, db_name, **kwargs):
         super().__init__(**kwargs)
-        self.db_name = db_name
-        self.title = ''
-        self.size_hint = (0.92, 0.92)
+        self.db_name  = db_name
+        self.title    = ''
+        self.size_hint= (0.92, 0.92)
         self.background_color = (1, 1, 1, 0)
+        self._sort_key = 'role'   # 'role' | 'skill' | 'morale' | 'wage' | 'contract'
         self._build()
 
     def _build(self):
+        layout = BoxLayout(orientation='vertical', spacing=4, padding=4)
+
+        # Sort bar
+        sort_bar = BoxLayout(size_hint_y=None, height=30, spacing=4)
+        _SORTS = [('Роль', 'role'), ('Скилл', 'skill'),
+                  ('Мораль', 'morale'), ('Зарплата', 'wage'), ('Контракт', 'contract')]
+        for label, key in _SORTS:
+            active = (key == self._sort_key)
+            sb = Button(
+                text=f'[b]{label}[/b]' if active else label,
+                markup=True,
+                background_color=(0.20, 0.45, 0.20, 1) if active else (0.18, 0.22, 0.30, 1),
+                background_normal='', font_size='11sp',
+            )
+            def _sort_press(_, _k=key):
+                self._sort_key = _k
+                self._rebuild()
+            sb.bind(on_press=_sort_press)
+            sort_bar.add_widget(sb)
+        layout.add_widget(sort_bar)
+
         grid = GridLayout(cols=1, size_hint_y=None, spacing=4, padding=(8, 4))
         grid.bind(minimum_height=grid.setter('height'))
         self._populate(grid)
@@ -284,7 +306,6 @@ class SquadPopup(Popup):
         )
         close_btn.bind(on_press=self.dismiss)
 
-        layout = BoxLayout(orientation='vertical', spacing=4, padding=4)
         layout.add_widget(scroll)
         layout.add_widget(close_btn)
         self.content = layout
@@ -365,6 +386,41 @@ class SquadPopup(Popup):
                 color=(1.0, 0.75, 0.15, 1), height=26,
             ))
 
+        # ── Pre-collect player data for sorting ──────────────────
+        _player_data = []   # (col, sid, p_tuple_or_None)
+        for col, sid in zip(ROLE_ORDER, slot_ids):
+            if sid:
+                cur.execute(
+                    "SELECT name, surname, nickname, country, micro_skills, macro_skills, "
+                    "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
+                    "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
+                    "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0), "
+                    "COALESCE(signature_heroes, '[]'), COALESCE(retirement_age, 35) "
+                    "FROM players WHERE id=?", (int(sid),)
+                )
+                _player_data.append((col, sid, cur.fetchone()))
+            else:
+                _player_data.append((col, sid, None))
+
+        _sk = getattr(self, '_sort_key', 'role')
+        if _sk == 'skill':
+            _player_data.sort(key=lambda x: -(
+                (x[2][4] + x[2][5] + x[2][6]) if x[2] else 0))
+        elif _sk == 'morale':
+            _player_data.sort(key=lambda x: -(x[2][10] if x[2] else 0))
+        elif _sk == 'wage':
+            _player_data.sort(key=lambda x: -(x[2][7] if x[2] else 0))
+        elif _sk == 'contract':
+            def _days(x):
+                try:
+                    if not x[2] or not x[2][15]: return 9999
+                    from datetime import date as _d2
+                    return (_d2.fromisoformat(x[2][15]) - game_today).days
+                except Exception:
+                    return 9999
+            _player_data.sort(key=_days)
+        # else: keep ROLE_ORDER
+
         # Column header bar
         COL_H = 26
         hrow = BoxLayout(size_hint_y=None, height=COL_H, padding=(92, 0, 0, 0))
@@ -391,24 +447,24 @@ class SquadPopup(Popup):
         PHOTO_W = 88   # container width
         PHOTO_SZ = 82  # actual image size (near-square)
 
+        _ROW_EVEN = (0.09, 0.11, 0.15, 1)
+        _ROW_ODD  = (0.07, 0.08, 0.12, 1)
+
         total_wage = 0
 
-        for col, sid in zip(ROLE_ORDER, slot_ids):
+        for _row_idx, (col, sid, p) in enumerate(_player_data):
             role_short = ROLE_SHORT[col]
+            _zebra_bg = _ROW_EVEN if _row_idx % 2 == 0 else _ROW_ODD
             row = BoxLayout(size_hint_y=None, height=ROW_H, spacing=3, padding=(0, 2))
+            with row.canvas.before:
+                from kivy.graphics import Color as _GCz, Rectangle as _GRz
+                _GCz(*_zebra_bg)
+                _zbr = _GRz()
+            _zbr_ref = _zbr
+            row.bind(pos=lambda w, _, _r=_zbr_ref: setattr(_r, 'pos', w.pos),
+                     size=lambda w, _, _r=_zbr_ref: setattr(_r, 'size', w.size))
 
-            if sid:
-                cur.execute(
-                    "SELECT name, surname, nickname, country, micro_skills, macro_skills, "
-                    "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
-                    "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
-                    "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0), "
-                    "COALESCE(signature_heroes, '[]'), COALESCE(retirement_age, 35) "
-                    "FROM players WHERE id=?",
-                    (int(sid),)
-                )
-                p = cur.fetchone()
-                if p:
+            if sid and p:
                     (fname, lname, nick, country,
                      micro, macro, soft, wage, face, skill_cap, morale,
                      priority, age, injured_until, wants_to_leave,
@@ -544,6 +600,30 @@ class SquadPopup(Popup):
                     name_col.add_widget(fullname_lbl)
                     name_col.add_widget(chips_row)
 
+                    # Contract expiry bar
+                    if days_left_contract is not None:
+                        _max_days = 365
+                        _pct = max(0.0, min(1.0, days_left_contract / _max_days))
+                        _bar_clr = cend_color
+                        _cbar = BoxLayout(size_hint_y=None, height=4, spacing=0)
+                        from kivy.uix.widget import Widget as _Wgt
+                        from kivy.graphics import Color as _GCb, Rectangle as _GRb
+                        _fill = _Wgt(size_hint_x=_pct)
+                        with _fill.canvas.before:
+                            _GCb(*_bar_clr)
+                            _fb = _GRb()
+                        _fill.bind(pos=lambda w, _, _r=_fb: setattr(_r, 'pos', w.pos),
+                                   size=lambda w, _, _r=_fb: setattr(_r, 'size', w.size))
+                        _empty = _Wgt(size_hint_x=1 - _pct)
+                        with _empty.canvas.before:
+                            _GCb(0.15, 0.15, 0.18, 1)
+                            _eb = _GRb()
+                        _empty.bind(pos=lambda w, _, _r=_eb: setattr(_r, 'pos', w.pos),
+                                    size=lambda w, _, _r=_eb: setattr(_r, 'size', w.size))
+                        _cbar.add_widget(_fill)
+                        _cbar.add_widget(_empty)
+                        name_col.add_widget(_cbar)
+
                     # helper for centered label in a skill-style column
                     def _cv(txt, color=(1, 1, 1, 1), fs='13sp', sw=0.10):
                         l = Label(text=txt, color=color, font_size=fs,
@@ -636,17 +716,12 @@ class SquadPopup(Popup):
                     det_btn.bind(on_press=lambda _, p=pid: self._open_detail(p))
                     row.add_widget(det_btn)
 
-                else:
-                    row.add_widget(_lbl(f'  [{role_short}]  — нет данных —',
-                                        color=(0.5, 0.5, 0.5, 1)))
             else:
-                # Empty slot
-                empty_box = BoxLayout(size_hint_y=None, height=ROW_H,
-                                      padding=(PHOTO_W + 8, 0))
+                # Empty slot or missing player data
                 empty_lbl = Label(
-                    text=f'[b]{role_short}[/b]  — слот свободен —', markup=True,
-                    color=(0.40, 0.40, 0.42, 1), halign='left', valign='middle',
-                    font_size='13sp',
+                    text=f'[b]{role_short}[/b]  {"— нет данных —" if sid else "— слот свободен —"}',
+                    markup=True, color=(0.40, 0.40, 0.42, 1),
+                    halign='left', valign='middle', font_size='13sp',
                 )
                 empty_lbl.bind(size=empty_lbl.setter('text_size'))
                 row.add_widget(empty_lbl)

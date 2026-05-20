@@ -218,6 +218,41 @@ class FinancesPopup(Popup):
             color_r=bal_color,
         ))
 
+        # Budget breakdown bar: income vs expenses vs surplus
+        from kivy.uix.widget import Widget as _Wgt2
+        from kivy.graphics import Color as _GC2, Rectangle as _GR2
+        _total_bar = max(monthly_income, total_out, 1)
+        _wage_pct  = min(1.0, total_wage / _total_bar)
+        _other_pct = min(1.0, (total_out - total_wage) / _total_bar)
+        _inc_pct   = min(1.0, monthly_income / _total_bar)
+        bbar_box = BoxLayout(orientation='vertical', size_hint_y=None, height=28,
+                             spacing=2, padding=(10, 2))
+        bbar = BoxLayout(size_hint_y=None, height=12)
+        def _seg(pct, clr):
+            w = _Wgt2(size_hint_x=pct)
+            with w.canvas.before:
+                _GC2(*clr)
+                _r = _GR2()
+            w.bind(pos=lambda ww, _, _rr=_r: setattr(_rr, 'pos', ww.pos),
+                   size=lambda ww, _, _rr=_r: setattr(_rr, 'size', ww.size))
+            return w
+        bbar.add_widget(_seg(_wage_pct, (0.80, 0.25, 0.20, 1)))    # wages (red)
+        bbar.add_widget(_seg(_other_pct, (0.80, 0.55, 0.10, 1)))   # other costs (orange)
+        _remain = max(0.0, 1.0 - _wage_pct - _other_pct)
+        if _remain > 0:
+            bbar.add_widget(_seg(_remain, (0.15, 0.15, 0.20, 1)))  # gap
+        legend = Label(
+            text=f'  [color=dd4444]Зарплаты[/color]  [color=cc8820]Прочее[/color]'
+                 f'   Доход: [color=44cc66]+${monthly_income:,}[/color] '
+                 f'/ Расходы: [color=dd4444]-${total_out:,}[/color]',
+            markup=True, color=(0.65, 0.65, 0.65, 1), font_size='10sp',
+            size_hint_y=None, height=14, halign='left', valign='middle',
+        )
+        legend.bind(size=legend.setter('text_size'))
+        bbar_box.add_widget(bbar)
+        bbar_box.add_widget(legend)
+        grid.add_widget(bbar_box)
+
         if balance < 0 and budget > 0:
             months_left = budget // abs(balance)
             runway_color = _GREEN if months_left > 6 else (_GOLD if months_left > 3 else _RED)
