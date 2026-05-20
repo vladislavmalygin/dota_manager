@@ -778,10 +778,11 @@ class MatchLogPopup(Popup):
         if pre_match_team and db_name:
             # Show waiting splash while draft popup opens — don't reveal map yet
             from kivy.uix.label import Label as _WL
+            from kivy.graphics import Color as _GC2, Rectangle as _GR2
             _splash = BoxLayout(orientation='vertical')
             with _splash.canvas.before:
-                _GC(0.05, 0.07, 0.10, 1)
-                _splash_r = _GR()
+                _GC2(0.05, 0.07, 0.10, 1)
+                _splash_r = _GR2()
             _splash.bind(pos=lambda w, _: setattr(_splash_r, 'pos', w.pos),
                          size=lambda w, _: setattr(_splash_r, 'size', w.size))
             _wait_lbl = _WL(
