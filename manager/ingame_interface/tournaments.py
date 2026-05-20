@@ -776,8 +776,23 @@ class MatchLogPopup(Popup):
         self._bo_needed        = best_of // 2 + 1 if best_of > 1 else 1
         self._build()   # builds self._match_content and all live attrs
         if pre_match_team and db_name:
-            self.content = self._match_content  # placeholder until draft opens
-            Clock.schedule_once(lambda dt: self._launch_prematch_draft(), 0.1)
+            # Show waiting splash while draft popup opens — don't reveal map yet
+            from kivy.uix.label import Label as _WL
+            _splash = BoxLayout(orientation='vertical')
+            with _splash.canvas.before:
+                _GC(0.05, 0.07, 0.10, 1)
+                _splash_r = _GR()
+            _splash.bind(pos=lambda w, _: setattr(_splash_r, 'pos', w.pos),
+                         size=lambda w, _: setattr(_splash_r, 'size', w.size))
+            _wait_lbl = _WL(
+                text=f'[b]{team1}  vs  {team2}[/b]\n\nОткрывается драфт...',
+                markup=True, color=(0.35, 0.85, 1.00, 1),
+                font_size='20sp', halign='center', valign='middle',
+            )
+            _wait_lbl.bind(size=_wait_lbl.setter('text_size'))
+            _splash.add_widget(_wait_lbl)
+            self.content = _splash
+            Clock.schedule_once(lambda dt: self._launch_prematch_draft(), 0.2)
         else:
             self.content = self._match_content
             Clock.schedule_once(lambda dt: self._start(), 0.15)
@@ -942,7 +957,7 @@ class MatchLogPopup(Popup):
         phase_nav = BoxLayout(size_hint_y=None, height=30, spacing=4, padding=(4, 2))
         self._phase_positions = {}   # phase_name → character offset in log text
         for phase_label, phase_key in [
-            ('Лайнинг', 'ЛАЙНИНГ'), ('Мидгейм', 'МИДГЕЙМ'), ('Лейтгейм', 'ЛЕЙТГЕЙМ')
+            ('Лайнинг', 'ЛАЙНСТЕЙДЖ'), ('Мидгейм', 'МИДГЕЙМ'), ('Лейтгейм', 'ЛЕЙТГЕЙМ')
         ]:
             pb = Button(
                 text=phase_label, background_normal='',
@@ -1212,10 +1227,15 @@ class MatchLogPopup(Popup):
             on_confirm=self._on_draft_confirmed,
         )
 
+    def _show_match_content(self):
+        """Swap splash → actual match UI and start simulation/playback."""
+        self.content = self._match_content
+
     def _on_draft_confirmed(self, hero_picks, confirmed):
         if hero_picks and confirmed:
             self._auto_skip = False
             self._hero_picks = hero_picks
+            # _run_simulation rebuilds content itself after sim
             Clock.schedule_once(lambda dt: self._run_simulation(), 0.25)
         else:
             self._auto_skip = True
@@ -1249,6 +1269,7 @@ class MatchLogPopup(Popup):
 
             self._sched_idx = 0
             self._elapsed   = 0.0
+            self._show_match_content()
             Clock.schedule_once(lambda dt: self._start(), 0.25)
 
     def _run_simulation(self):
@@ -1368,7 +1389,23 @@ class MatchLogPopup(Popup):
         if not self._schedule:
             Clock.schedule_once(lambda dt: self._finish(), 0)
             return
+        self._user_scrolled = False
+        self._scroll.bind(scroll_y=self._on_log_scroll)
         self._interval = Clock.schedule_interval(self._tick, 0.05)
+
+    def _on_log_scroll(self, sv, val):
+        # If user pulls scroll_y above 0.08, mark as manually scrolled
+        if val > 0.08:
+            self._user_scrolled = True
+        elif val < 0.02:
+            self._user_scrolled = False
+
+    def _scroll_to_bottom(self):
+        if getattr(self, '_user_scrolled', False):
+            return
+        from kivy.animation import Animation
+        Animation.cancel_all(self._scroll, 'scroll_y')
+        Animation(scroll_y=0, d=0.25, t='out_quad').start(self._scroll)
 
     def _tick(self, dt):
         self._elapsed += dt
@@ -1384,7 +1421,7 @@ class MatchLogPopup(Popup):
             else:
                 break
         if changed:
-            Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.02)
+            Clock.schedule_once(lambda dt: self._scroll_to_bottom(), 0.03)
         if self._sched_idx >= len(self._schedule):
             self._finish()
 
@@ -1548,7 +1585,8 @@ class MatchLogPopup(Popup):
                 card += f'\n{sep}\n  [color=aaddff][b]ТАКТИЧЕСКИЙ РАЗБОР[/b][/color]\n{tac_text}'
             card += f'\n{sep}'
             self._log_lbl.text += card
-            Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.05)
+            self._user_scrolled = False
+            Clock.schedule_once(lambda dt: self._scroll_to_bottom(), 0.05)
 
     def _next_map_draft(self):
         """Show CM draft for the next map in a BO series."""
@@ -1569,7 +1607,8 @@ class MatchLogPopup(Popup):
         self._sched_idx = len(self._schedule)
         if self._snapshots:
             self._apply_snap(len(self._snapshots) - 1)
-        Clock.schedule_once(lambda dt: setattr(self._scroll, 'scroll_y', 0), 0.02)
+        self._user_scrolled = False
+        Clock.schedule_once(lambda dt: self._scroll_to_bottom(), 0.02)
         self._finish()
 
     def _build_tactic_analysis(self):

@@ -21,7 +21,7 @@ from ingame_interface.transfers import show_transfers_popup, is_transfer_window 
 from logic.tournaments.invites import invites
 from logic.tournaments.runner import ensure_season_tournaments
 from logic.ai import (update_morale_monthly, update_form_monthly, ai_poach_attempt,
-                       develop_free_agents, ai_buy_offer, ai_team_trades,
+                       develop_free_agents, ai_buy_offer, ai_team_trades, ai_transfers,
                        set_ai_train_priorities)
 from logic.events import random_event_monthly
 from logic.sponsors import ensure_sponsors_table, pay_monthly_income
@@ -653,6 +653,25 @@ class MainWindow(BoxLayout):
             return txt, color
         except Exception:
             return '$—', (0.5, 0.5, 0.5, 1)
+
+    def _show_loading(self, msg='Загрузка...'):
+        """Show a simple loading splash in main_area."""
+        from kivy.uix.label import Label as _LL
+        from kivy.uix.boxlayout import BoxLayout as _BL2
+        self.main_area.clear_widgets()
+        box = _BL2()
+        with box.canvas.before:
+            Color(0.05, 0.07, 0.10, 1)
+            _r = Rectangle()
+        box.bind(pos=lambda w, _: setattr(_r, 'pos', w.pos),
+                 size=lambda w, _: setattr(_r, 'size', w.size))
+        lbl = _LL(text=f'[b]{msg}[/b]', markup=True,
+                  color=(0.35, 0.85, 1.00, 1), font_size='18sp',
+                  halign='center', valign='middle')
+        lbl.bind(size=lbl.setter('text_size'))
+        box.add_widget(lbl)
+        self.main_area.add_widget(box)
+        self._loading_lbl = lbl
 
     def _get_rating_display(self):
         try:
@@ -2419,8 +2438,7 @@ class MainWindow(BoxLayout):
 
         at = self._get_active_tournament()
         if at:
-            # Skip through non-player matches until player match or end
-            _sim_step = [0]
+            self._show_loading('Симуляция матчей...')
             while True:
                 at2 = self._get_active_tournament()
                 if not at2:
@@ -2435,11 +2453,16 @@ class MainWindow(BoxLayout):
                 if next_item['result_ev'].get('is_player_match') and next_item.get('lineup_ev'):
                     self._play_match_day(suppress_notifications=False)
                     break
-                _sim_step[0] += 1
                 if hasattr(self, '_skip_btn'):
                     self._skip_btn.text = f'Сим {idx}/{total}'
+                if hasattr(self, '_loading_lbl'):
+                    stage = next_item['result_ev'].get('stage', '')
+                    self._loading_lbl.text = (
+                        f'[b]Симуляция...[/b]\n{stage}\n{idx}/{total} матчей'
+                    )
                 self._advance_one_day(suppress_notifications=True)
             _restore_btn()
+            self._show_dashboard()
             return
 
         # No active tournament: skip to next tournament start
@@ -2448,11 +2471,17 @@ class MainWindow(BoxLayout):
             return
         target = date.fromisoformat(next_date)
         days_total = (target - self.date_object).days
+        self._show_loading(f'Симуляция {days_total} дн. до турнира...')
         days_done = [0]
         while self.date_object < target:
             days_done[0] += 1
             if hasattr(self, '_skip_btn') and days_total > 5:
                 self._skip_btn.text = f'Сим {days_done[0]}/{days_total}д'
+            if hasattr(self, '_loading_lbl') and days_total > 3:
+                self._loading_lbl.text = (
+                    f'[b]Пропуск {days_done[0]}/{days_total} дней[/b]\n'
+                    f'{self.date_object}'
+                )
             self._advance_one_day(suppress_notifications=True)
         # Trigger tournament start
         if str(self.date_object) == next_date:
@@ -2463,9 +2492,11 @@ class MainWindow(BoxLayout):
             ).fetchone()
             conn2.close()
             if tourn_row:
+                self._show_loading(f'Жеребьёвка: {tourn_row[1]}...')
                 self._init_tournament(tourn_row[0], tourn_row[1])
                 self._play_match_day(suppress_notifications=False)
         _restore_btn()
+        self._show_dashboard()
 
     def _advance_one_day(self, suppress_notifications=False):
         """Advance date by 1 day. Returns True if a notification was triggered."""
@@ -3398,6 +3429,7 @@ class MainWindow(BoxLayout):
             return
 
         # Fresh start
+        self._show_loading(f'Жеребьёвка: {tourn_name}...')
         self._init_tournament(tourn_id, tourn_name)
         at = self._get_active_tournament()
         if at:
