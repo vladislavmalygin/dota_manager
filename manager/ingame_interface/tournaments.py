@@ -1219,12 +1219,15 @@ class MatchLogPopup(Popup):
             self._pre_strat_btns[(phase, key)].background_color = (0.10, 0.45, 0.18, 1)
 
     def _launch_prematch_draft(self):
-        """Open CM draft popup; on confirm start the map."""
-        _open_prematch_popup(
-            self._pre_match_db,
-            self._team1, self._team2, self._pre_match_team,
-            self._best_of,
-            on_confirm=self._on_draft_confirmed,
+        """Show scout report first, then open CM draft popup."""
+        _show_scout_report(
+            self._pre_match_db, self._team1, self._team2, self._pre_match_team,
+            on_ready=lambda: _open_prematch_popup(
+                self._pre_match_db,
+                self._team1, self._team2, self._pre_match_team,
+                self._best_of,
+                on_confirm=self._on_draft_confirmed,
+            )
         )
 
     def _show_match_content(self):
@@ -3861,6 +3864,143 @@ def _open_press_conference(db_name, place):
             p.dismiss()
         btn.bind(on_press=_pick)
         root.add_widget(btn)
+
+    p.content = root
+    p.open()
+
+
+# ── Feature 8: Pre-draft scout report ────────────────────────────────────────
+
+def _show_scout_report(db_name, team1, team2, my_team, on_ready):
+    """Show enemy pick tendencies before the draft, then call on_ready()."""
+    import sqlite3 as _sq
+    import json as _json
+
+    enemy = team2 if my_team == team1 else team1
+
+    # Query last 10 matches of enemy team from draft_history
+    try:
+        conn = _sq.connect(db_name)
+        rows = conn.execute(
+            "SELECT team1, team2, winner, t1_picks, t2_picks "
+            "FROM draft_history "
+            "WHERE team1=? OR team2=? "
+            "ORDER BY id DESC LIMIT 10",
+            (enemy, enemy)
+        ).fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    # Aggregate picks
+    hero_stats = {}  # hero_name -> {picks, wins}
+    for t1, t2, winner, t1p_raw, t2p_raw in rows:
+        is_t1 = (t1 == enemy)
+        picks_raw = t1p_raw if is_t1 else t2p_raw
+        try:
+            picks = _json.loads(picks_raw) if picks_raw else {}
+        except Exception:
+            picks = {}
+        if isinstance(picks, dict):
+            hero_list = list(picks.values())
+        elif isinstance(picks, list):
+            hero_list = picks
+        else:
+            hero_list = []
+        for hero in hero_list:
+            if not hero:
+                continue
+            if hero not in hero_stats:
+                hero_stats[hero] = {'picks': 0, 'wins': 0}
+            hero_stats[hero]['picks'] += 1
+            if winner == enemy:
+                hero_stats[hero]['wins'] += 1
+
+    top5 = sorted(hero_stats.items(), key=lambda x: x[1]['picks'], reverse=True)[:5]
+    total_matches = len(rows)
+
+    # Build popup
+    p = Popup(title='', size_hint=(0.70, 0.65), auto_dismiss=False)
+    root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+
+    hdr = Label(
+        text=f'[b]Разведка: {enemy}[/b]',
+        markup=True, color=(0.35, 0.85, 1.00, 1),
+        size_hint_y=None, height=40, halign='center', valign='middle',
+    )
+    hdr.bind(size=hdr.setter('text_size'))
+    root.add_widget(hdr)
+
+    sub = Label(
+        text=f'Анализ последних {total_matches} матчей',
+        color=(0.65, 0.65, 0.65, 1),
+        size_hint_y=None, height=26, halign='center', valign='middle',
+    )
+    sub.bind(size=sub.setter('text_size'))
+    root.add_widget(sub)
+
+    sv = ScrollView(size_hint=(1, 1))
+    gl = GridLayout(cols=1, size_hint_y=None, spacing=4)
+    gl.bind(minimum_height=gl.setter('height'))
+
+    if not top5:
+        no_data = Label(
+            text='Нет данных о драфте противника.',
+            color=(0.6, 0.6, 0.6, 1),
+            size_hint_y=None, height=30, halign='center', valign='middle',
+        )
+        no_data.bind(size=no_data.setter('text_size'))
+        gl.add_widget(no_data)
+    else:
+        head = Label(
+            text='  Герой                | Пиков | Победы | Winrate',
+            color=(0.50, 0.85, 1.00, 1), markup=True,
+            size_hint_y=None, height=28, halign='left', valign='middle',
+            font_size='12sp',
+        )
+        head.bind(size=head.setter('text_size'))
+        gl.add_widget(head)
+        for hero, stats in top5:
+            picks = stats['picks']
+            wins  = stats['wins']
+            wr    = int(wins / picks * 100) if picks > 0 else 0
+            pick_pct = int(picks / total_matches * 100) if total_matches > 0 else 0
+            wr_clr = '44dd66' if wr >= 55 else ('dd4444' if wr <= 40 else 'dddddd')
+            txt = (f'  {hero[:20]:<20} |  {picks} ({pick_pct}%)  '
+                   f'|  {wins}  |  [color={wr_clr}]{wr}%[/color]')
+            lbl = Label(
+                text=txt, markup=True,
+                color=(0.90, 0.90, 0.90, 1),
+                size_hint_y=None, height=26, halign='left', valign='middle',
+                font_size='12sp',
+            )
+            lbl.bind(size=lbl.setter('text_size'))
+            gl.add_widget(lbl)
+
+    sv.add_widget(gl)
+    root.add_widget(sv)
+
+    btn_row = BoxLayout(size_hint_y=None, height=48, spacing=10)
+
+    def _go(_inst):
+        p.dismiss()
+        on_ready()
+
+    draft_btn = Button(
+        text='Начать драфт', size_hint_x=0.6,
+        background_color=(0.18, 0.55, 0.22, 1), background_normal='',
+    )
+    draft_btn.bind(on_press=_go)
+
+    skip_btn = Button(
+        text='Пропустить', size_hint_x=0.4,
+        background_color=(0.35, 0.35, 0.35, 1), background_normal='',
+    )
+    skip_btn.bind(on_press=_go)
+
+    btn_row.add_widget(draft_btn)
+    btn_row.add_widget(skip_btn)
+    root.add_widget(btn_row)
 
     p.content = root
     p.open()

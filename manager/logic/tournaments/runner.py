@@ -1171,6 +1171,22 @@ def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
 
     save_tournament_results(tourn_id, placements, group_elim, db_name)
 
+    # Award DPC points based on placement
+    _DPC_PTS = [500, 375, 250, 188, 125, 125, 75, 75, 37, 37, 37, 37, 0, 0, 0, 0]
+    try:
+        conn_dpc = sqlite3.connect(db_name)
+        for team, place in placements.items():
+            if 1 <= place <= 16:
+                pts = _DPC_PTS[place - 1]
+                if pts > 0:
+                    conn_dpc.execute(
+                        "UPDATE teams SET dpc_points=COALESCE(dpc_points,0)+? WHERE name=?",
+                        (pts, team)
+                    )
+        conn_dpc.commit(); conn_dpc.close()
+    except Exception:
+        pass
+
     from logic.ai import (update_morale_after_tournament, apply_training_from_games,
                           update_form_after_tournament, ai_transfers)
     from ingame_interface.transfers import is_transfer_window as _itw
@@ -1262,6 +1278,44 @@ def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
                         pass
                 except Exception:
                     pass
+    except Exception:
+        pass
+
+    # Feature 2: Manager reputation based on placement
+    _MGR_REP = {1:15, 2:10, 3:8, 4:6, 5:5, 6:5, 7:4, 8:4, 9:2, 10:2, 11:2, 12:2}
+    try:
+        conn_mrep = sqlite3.connect(db_name)
+        pt_mr = conn_mrep.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        if pt_mr:
+            my_place_mr = placements.get(pt_mr[0].strip())
+            if not my_place_mr:
+                for _idx, (t, _) in enumerate(
+                    sorted(group_elim, key=lambda x: x[1], reverse=True)
+                ):
+                    if t == pt_mr[0].strip():
+                        my_place_mr = 9 + _idx
+                        break
+            delta_mr = _MGR_REP.get(my_place_mr, -3) if my_place_mr else -3
+            conn_mrep.execute(
+                "UPDATE teams SET mgr_reputation=MIN(100,MAX(0,COALESCE(mgr_reputation,20)+?)) "
+                "WHERE player='yes'",
+                (delta_mr,)
+            )
+        conn_mrep.commit(); conn_mrep.close()
+    except Exception:
+        pass
+
+    # Feature 3: High fatigue → form drop
+    try:
+        conn_fat = sqlite3.connect(db_name)
+        pt_fat = conn_fat.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+        if pt_fat:
+            conn_fat.execute(
+                "UPDATE players SET form=MAX(1, COALESCE(form,5)-1) "
+                "WHERE team_id=? AND COALESCE(fatigue,0)>70",
+                (pt_fat[0],)
+            )
+        conn_fat.commit(); conn_fat.close()
     except Exception:
         pass
 

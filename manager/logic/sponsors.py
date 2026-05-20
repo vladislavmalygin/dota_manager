@@ -124,6 +124,19 @@ def pay_monthly_income(db_name):
     return (name, income)
 
 
+def get_market_offers(db_name, n=4):
+    """Return n shuffled available sponsor offers for bidding."""
+    import random as _r
+    conn = sqlite3.connect(db_name)
+    rows = conn.execute(
+        "SELECT id, name, description, monthly_income, condition_type, "
+        "condition_bonus, condition_penalty, term_months "
+        "FROM sponsors WHERE is_active=0 ORDER BY RANDOM() LIMIT ?", (n,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
 def condition_label(ctype):
     return _COND_LABELS.get(ctype, ctype)
 

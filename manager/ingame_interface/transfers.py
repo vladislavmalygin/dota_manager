@@ -803,17 +803,42 @@ class TransferPopup(Popup):
             confirm.add_widget(btn_row)
             p.content = confirm
 
-        # Release
-        rel = Button(
-            text=f'Отпустить {nick} (бесплатно)',
-            size_hint_y=None, height=48,
-            background_color=(0.75, 0.20, 0.10, 1), background_normal='',
-        )
-        rel.bind(on_press=lambda _: _confirm_then(
-            f'Отпустить {nick}', (0.75, 0.20, 0.10, 1),
-            self._release, pid, col
-        ))
-        gl.add_widget(rel)
+        # Release (with auction for high-skill players)
+        avg_skill = (micro + macro) // 2
+        if avg_skill >= 65:
+            # Offer auction first
+            rel = Button(
+                text=f'Аукцион: отпустить {nick} (скилл {avg_skill})',
+                size_hint_y=None, height=48,
+                background_color=(0.70, 0.35, 0.08, 1), background_normal='',
+            )
+            rel.bind(on_press=lambda _: (
+                p.dismiss(),
+                _open_transfer_auction(self.db_name, pid, nick, wage, p)
+            ))
+            gl.add_widget(rel)
+            # Also allow direct release
+            rel_direct = Button(
+                text=f'Отпустить {nick} напрямую (без аукциона)',
+                size_hint_y=None, height=44,
+                background_color=(0.55, 0.15, 0.08, 1), background_normal='',
+            )
+            rel_direct.bind(on_press=lambda _: _confirm_then(
+                f'Отпустить {nick}', (0.75, 0.20, 0.10, 1),
+                self._release, pid, col
+            ))
+            gl.add_widget(rel_direct)
+        else:
+            rel = Button(
+                text=f'Отпустить {nick} (бесплатно)',
+                size_hint_y=None, height=48,
+                background_color=(0.75, 0.20, 0.10, 1), background_normal='',
+            )
+            rel.bind(on_press=lambda _: _confirm_then(
+                f'Отпустить {nick}', (0.75, 0.20, 0.10, 1),
+                self._release, pid, col
+            ))
+            gl.add_widget(rel)
 
         # Sell (transfer window only)
         sell_clr = (0.55, 0.38, 0.05, 1) if in_window else (0.30, 0.30, 0.30, 1)
@@ -1997,4 +2022,197 @@ def show_transfers_popup(db_name, on_dismiss=None):
     p = TransferPopup(db_name=db_name)
     if on_dismiss:
         p.bind(on_dismiss=lambda *_: on_dismiss())
+    p.open()
+
+
+def _open_transfer_auction(db_name, pid, nick, min_wage, popup_to_dismiss):
+    """3-round auction for a released high-skill player."""
+    import random as _rnd
+    from kivy.uix.popup import Popup
+    from kivy.uix.boxlayout import BoxLayout
+    from kivy.uix.gridlayout import GridLayout
+    from kivy.uix.label import Label
+    from kivy.uix.button import Button
+    from kivy.uix.textinput import TextInput
+    from kivy.uix.scrollview import ScrollView
+
+    # Pull 3 random AI teams with budget > min_wage
+    conn = sqlite3.connect(db_name)
+    ai_teams = conn.execute(
+        "SELECT id, name, COALESCE(budget,0) FROM teams "
+        "WHERE player!='yes' AND COALESCE(budget,0)>? "
+        "ORDER BY RANDOM() LIMIT 3",
+        (min_wage,)
+    ).fetchall()
+    my_team_row = conn.execute(
+        "SELECT id, name FROM teams WHERE player='yes'"
+    ).fetchone()
+    conn.close()
+
+    if not ai_teams:
+        # No AI teams can afford — just release
+        _conn = sqlite3.connect(db_name)
+        for slot in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+            _conn.execute(f"UPDATE teams SET {slot}=NULL WHERE {slot}=?", (pid,))
+        _conn.execute("UPDATE players SET team_id=0, wage=0 WHERE id=?", (pid,))
+        _conn.commit(); _conn.close()
+        Popup(content=Label(text=f'{nick} отпущен (нет желающих)'),
+              size_hint=(0.45, 0.22)).open()
+        return
+
+    auction_state = {
+        'round': 1,
+        'ai_bids': {t[1]: 0 for t in ai_teams},
+        'player_bid': 0,
+        'ai_teams': ai_teams,
+    }
+
+    p = Popup(title=f'Трансферный аукцион: {nick}', size_hint=(0.65, 0.75))
+    root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+
+    header_lbl = Label(
+        text=f'[b]Аукцион за {nick}[/b]  (мин. ставка: ${min_wage:,}/мес)',
+        markup=True, color=(1.0, 0.85, 0.20, 1),
+        size_hint_y=None, height=36, halign='center', valign='middle',
+    )
+    header_lbl.bind(size=header_lbl.setter('text_size'))
+    root.add_widget(header_lbl)
+
+    round_lbl = Label(
+        text='Раунд 1/3', color=(0.6, 0.9, 1.0, 1),
+        size_hint_y=None, height=28, halign='center', valign='middle',
+    )
+    round_lbl.bind(size=round_lbl.setter('text_size'))
+    root.add_widget(round_lbl)
+
+    bids_sv = ScrollView(size_hint=(1, 1))
+    bids_grid = GridLayout(cols=1, size_hint_y=None, spacing=3)
+    bids_grid.bind(minimum_height=bids_grid.setter('height'))
+    bids_sv.add_widget(bids_grid)
+    root.add_widget(bids_sv)
+
+    input_row = BoxLayout(size_hint_y=None, height=44, spacing=6)
+    bid_input = TextInput(
+        hint_text=f'Ваша ставка (мин. {min_wage})',
+        input_filter='int', size_hint_x=0.65, multiline=False,
+    )
+    input_row.add_widget(bid_input)
+
+    bid_btn = Button(
+        text='Предложить', size_hint_x=0.35,
+        background_color=(0.20, 0.55, 0.20, 1), background_normal='',
+    )
+    input_row.add_widget(bid_btn)
+    root.add_widget(input_row)
+
+    result_lbl = Label(
+        text='', color=(0.92, 0.92, 0.92, 1),
+        size_hint_y=None, height=32, halign='center', valign='middle',
+    )
+    result_lbl.bind(size=result_lbl.setter('text_size'))
+    root.add_widget(result_lbl)
+
+    def _refresh_bids():
+        bids_grid.clear_widgets()
+        for tname, tbid in auction_state['ai_bids'].items():
+            lbl = Label(
+                text=f'  {tname[:20]}: ${tbid:,}/мес' if tbid > 0 else f'  {tname[:20]}: ожидает...',
+                color=(0.85, 0.85, 0.85, 1),
+                size_hint_y=None, height=26, halign='left', valign='middle',
+            )
+            lbl.bind(size=lbl.setter('text_size'))
+            bids_grid.add_widget(lbl)
+        my_bid = auction_state['player_bid']
+        if my_bid > 0:
+            my_lbl = Label(
+                text=f'  Ваша ставка: ${my_bid:,}/мес',
+                color=(0.35, 1.0, 0.50, 1),
+                size_hint_y=None, height=26, halign='left', valign='middle',
+            )
+            my_lbl.bind(size=my_lbl.setter('text_size'))
+            bids_grid.add_widget(my_lbl)
+
+    def _do_round():
+        r = auction_state['round']
+        # AI bids
+        for tid, tname, tbudget in auction_state['ai_teams']:
+            ai_bid = int(min_wage * _rnd.uniform(1.0, 1.5))
+            ai_bid = round(ai_bid / 500) * 500
+            if ai_bid > auction_state['ai_bids'].get(tname, 0):
+                auction_state['ai_bids'][tname] = ai_bid
+        _refresh_bids()
+        round_lbl.text = f'Раунд {r}/3 — AI сделали ставки'
+
+    def _on_bid(_inst):
+        r = auction_state['round']
+        try:
+            bid = int(bid_input.text or '0')
+        except ValueError:
+            bid = 0
+        if bid < min_wage:
+            result_lbl.text = f'Ставка ниже минимума (${min_wage:,})'
+            return
+        auction_state['player_bid'] = bid
+        _do_round()
+        auction_state['round'] += 1
+        if auction_state['round'] > 3:
+            _finalize()
+        else:
+            round_lbl.text = f'Раунд {auction_state["round"]}/3'
+            bid_input.text = ''
+
+    def _finalize():
+        # Find winner: highest bid overall
+        all_bids = dict(auction_state['ai_bids'])
+        if my_team_row:
+            all_bids[my_team_row[1]] = auction_state['player_bid']
+        winner_name = max(all_bids, key=lambda k: all_bids[k])
+        winner_bid  = all_bids[winner_name]
+
+        bid_btn.disabled = True
+        bid_input.disabled = True
+
+        _conn2 = sqlite3.connect(db_name)
+        # Remove from current team slots
+        for slot in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+            _conn2.execute(f"UPDATE teams SET {slot}=NULL WHERE {slot}=?", (pid,))
+
+        if my_team_row and winner_name == my_team_row[1]:
+            # Player team wins: keep player, update wage
+            _conn2.execute(
+                "UPDATE players SET wage=? WHERE id=?", (winner_bid, pid)
+            )
+            result_lbl.text = f'Ваша команда победила! {nick} остаётся, зарплата ${winner_bid:,}/мес'
+        else:
+            # AI team wins: move player
+            win_row = next((t for t in auction_state['ai_teams'] if t[1] == winner_name), None)
+            if win_row:
+                win_tid = win_row[0]
+                _conn2.execute(
+                    "UPDATE players SET team_id=?, wage=? WHERE id=?",
+                    (win_tid, winner_bid, pid)
+                )
+            else:
+                _conn2.execute("UPDATE players SET team_id=0, wage=0 WHERE id=?", (pid,))
+            result_lbl.text = f'{winner_name} победил! {nick} уходит за ${winner_bid:,}/мес'
+
+        _conn2.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+            (f"Аукцион {nick}: победитель {winner_name}, ставка ${winner_bid:,}/мес.",
+             "Трансферы")
+        )
+        _conn2.commit(); _conn2.close()
+
+    bid_btn.bind(on_press=_on_bid)
+    # Run first round immediately (AI bids)
+    _do_round()
+
+    close_btn = Button(
+        text='Закрыть', size_hint_y=None, height=40,
+        background_color=(0.35, 0.35, 0.35, 1), background_normal='',
+    )
+    close_btn.bind(on_press=p.dismiss)
+    root.add_widget(close_btn)
+
+    p.content = root
     p.open()

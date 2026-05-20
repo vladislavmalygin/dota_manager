@@ -229,6 +229,16 @@ def _pay_streaming_income(db_name, game_date_str):
         except Exception:
             pass
 
+        # Brand multiplier: max +60% at brand_value=300
+        try:
+            brand_row = conn.execute(
+                "SELECT COALESCE(brand_value,0) FROM teams WHERE player='yes'"
+            ).fetchone()
+            brand_mult = 1.0 + (brand_row[0] if brand_row else 0) / 500.0
+            income = int(income * brand_mult)
+        except Exception:
+            pass
+
         conn.execute("UPDATE teams SET budget=budget+? WHERE id=?", (income, team_id))
         conn.execute(
             "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
@@ -271,6 +281,61 @@ def _enforce_conflict_states(db_name):
             conn.execute("UPDATE teams SET cohesion=0 WHERE id=?", (team_id,))
     conn.commit()
     conn.close()
+
+
+def _check_leadership_clash(db_name):
+    """Feature 4: Check if a leadership clash should trigger (monthly, 30% chance)."""
+    import random as _rclash
+    try:
+        conn = sqlite3.connect(db_name)
+        pt = conn.execute(
+            "SELECT id, carry, mid, offlane, partial_support, full_support, "
+            "COALESCE(cohesion,0) FROM teams WHERE player='yes'"
+        ).fetchone()
+        if not pt:
+            conn.close()
+            return None
+        team_id = pt[0]
+        slot_ids = [p for p in pt[1:6] if p]
+        cohesion  = pt[6]
+
+        if not slot_ids or cohesion >= 60:
+            conn.close()
+            return None
+
+        # Get psychotypes
+        ph = ','.join('?' * len(slot_ids))
+        players = conn.execute(
+            f"SELECT id, nickname, COALESCE(psychotype,'team_player') "
+            f"FROM players WHERE id IN ({ph})",
+            slot_ids
+        ).fetchall()
+        conn.close()
+
+        leaders    = [(p[0], p[1]) for p in players if p[2] == 'leader']
+        solo_carry = [(p[0], p[1]) for p in players if p[2] == 'solo_carry']
+
+        has_clash = len(leaders) >= 2 or (len(leaders) >= 1 and len(solo_carry) >= 1)
+        if not has_clash:
+            return None
+
+        if _rclash.random() >= 0.30:
+            return None
+
+        # Pick conflicting pair
+        if len(leaders) >= 2:
+            pair = _rclash.sample(leaders, 2)
+        else:
+            pair = [leaders[0], solo_carry[0]]
+
+        return {
+            'pid1': pair[0][0], 'nick1': pair[0][1],
+            'pid2': pair[1][0], 'nick2': pair[1][1],
+            'cohesion': cohesion,
+            'team_id': team_id,
+        }
+    except Exception:
+        return None
 
 
 _current_game_popup = None   # single-popup-at-a-time tracking
@@ -542,15 +607,18 @@ class MainWindow(BoxLayout):
                 ('Цели',        self.on_goals),
             ]),
             ('ТУРНИРЫ / МИР', [
-                ('Турниры',     self.on_tournaments),
-                ('Команды',     self.on_league),
-                ('Лидерборд',   self.on_leaderboard),
+                ('Турниры',          self.on_tournaments),
+                ('Команды',          self.on_league),
+                ('Лидерборд',        self.on_leaderboard),
+                ('DPC очки',         self.on_dpc_standings),
+                ('Инвитэйшнл',       self.on_organize_invitational),
             ]),
             ('ИСТОРИЯ', [
                 ('История',     self.on_history),
                 ('Трансф. лог', self.on_transfer_history),
                 ('Статистика',  self.on_stats),
                 ('Герои патча', self.on_hero_stats),
+                ('Зал славы',   self.on_hall_of_fame),
             ]),
             ('ПРОЧЕЕ', [
                 ('Входящие',    self.on_incoming),
@@ -1073,10 +1141,44 @@ class MainWindow(BoxLayout):
         c1.add_widget(_bar_row('Репутация орг.', org_reputation, 100, rep_c))
         fans_str = f'{fans:,}' if fans < 1_000_000 else f'{fans/1_000_000:.1f}M'
         c1.add_widget(_row('Фанаты', f'[color=ff88cc]{fans_str}[/color]'))
+        # Feature 2: Manager reputation row
+        try:
+            _mgr_conn = sqlite3.connect(self.db_name)
+            _mgr_rep_row = _mgr_conn.execute(
+                "SELECT COALESCE(mgr_reputation,20) FROM teams WHERE player='yes'"
+            ).fetchone()
+            _mgr_conn.close()
+            if _mgr_rep_row:
+                _mgr_rep = _mgr_rep_row[0]
+                _mrep_c  = T.cohesion_color(_mgr_rep)
+                c1.add_widget(_bar_row('Репутация менеджера', _mgr_rep, 100, _mrep_c))
+        except Exception:
+            pass
         try:
             from logic.meta import patch_description
             c1.add_widget(_row('Мета', patch_description(self.db_name),
                                rc=(0.80, 0.75, 1.00, 1)))
+        except Exception:
+            pass
+        # Feature 9: active mechanic effect in dashboard
+        try:
+            _mech_row = sqlite3.connect(self.db_name).execute(
+                "SELECT COALESCE(mechanic_effect,'') FROM meta_patches WHERE active=1 LIMIT 1"
+            ).fetchone()
+            if _mech_row and _mech_row[0]:
+                _mparts = _mech_row[0].split(':')
+                if len(_mparts) >= 2:
+                    _mkey = _mparts[0]
+                    _mech_descs = {
+                        'support_boost':    'Поддержки усилены: macro support +15%',
+                        'carry_aggression': 'Керри агрессивнее: micro carry +12%',
+                        'vision_meta':      'Мета на контроль карты: micro support +10%',
+                        'offlane_tank':     'Офлейн стал прочнее: macro offlane +13%',
+                        'mid_snowball':     'Мид-сноуболл мета: micro mid +15%',
+                        'teamfight_meta':   'Командные бои: все macro +8%',
+                    }
+                    _md = _mech_descs.get(_mkey, _mkey)
+                    c1.add_widget(_row('Мета-эффект', _md, rc=(0.90, 0.80, 0.40, 1)))
         except Exception:
             pass
         bal_c  = T.balance_color(balance)
@@ -1389,6 +1491,43 @@ class MainWindow(BoxLayout):
                 UNIQUE(team_id, snap_date)
             )
         """)
+        # Feature migrations: hall_of_fame, brand_value, dpc_points, is_ti
+        for ddl2 in [
+            "ALTER TABLE teams ADD COLUMN brand_value INTEGER DEFAULT 0",
+            "ALTER TABLE teams ADD COLUMN dpc_points INTEGER DEFAULT 0",
+            "ALTER TABLE tournaments ADD COLUMN is_ti INTEGER DEFAULT 0",
+            "ALTER TABLE tournaments ADD COLUMN is_custom INTEGER DEFAULT 0",
+            # Feature 2: Manager reputation
+            "ALTER TABLE teams ADD COLUMN mgr_reputation INTEGER DEFAULT 20",
+            # Feature 3: Form history
+            "ALTER TABLE players ADD COLUMN form_history TEXT DEFAULT '[]'",
+            # Feature 9: Big patch mechanic
+            "ALTER TABLE meta_patches ADD COLUMN mechanic_effect TEXT DEFAULT ''",
+            # Feature 6: Investor condition
+            "ALTER TABLE teams ADD COLUMN investor_condition TEXT DEFAULT ''",
+        ]:
+            try:
+                conn.execute(ddl2)
+            except Exception:
+                pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS hall_of_fame (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id      INTEGER,
+                nickname       TEXT,
+                retired_year   INTEGER,
+                retired_age    INTEGER,
+                career_games   INTEGER DEFAULT 0,
+                career_earnings INTEGER DEFAULT 0,
+                peak_skill     INTEGER DEFAULT 0,
+                final_team     TEXT
+            )
+        """)
+        # Feature 9: big_patch_date in save
+        try:
+            conn.execute("ALTER TABLE save ADD COLUMN big_patch_date TEXT DEFAULT ''")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         _migrate2(db_name)
@@ -1837,6 +1976,60 @@ class MainWindow(BoxLayout):
         # Monthly AI roster maintenance: fill empty slots from free agents
         ai_transfers(self.db_name)
 
+        # Feature 2: Low mgr_rep warning (monthly)
+        try:
+            _mrc = sqlite3.connect(self.db_name)
+            _mrep_val = _mrc.execute(
+                "SELECT COALESCE(mgr_reputation,20) FROM teams WHERE player='yes'"
+            ).fetchone()
+            if _mrep_val and _mrep_val[0] < 10:
+                _mrc.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    ('Организация недовольна результатами. Следующий сезон может стать последним.',
+                     str(self.date_object), 'Организация')
+                )
+            _mrc.commit(); _mrc.close()
+        except Exception:
+            pass
+
+        # Feature 3: Monthly form_history tracking
+        try:
+            import json as _fjson
+            conn_fh = sqlite3.connect(self.db_name)
+            pt_fh = conn_fh.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+            if pt_fh:
+                for p_row in conn_fh.execute(
+                    "SELECT id, COALESCE(form,5), COALESCE(form_history,'[]') "
+                    "FROM players WHERE team_id=?",
+                    (pt_fh[0],)
+                ).fetchall():
+                    pid_fh, form_val, fh_json = p_row
+                    try:
+                        fh = _fjson.loads(fh_json)
+                    except Exception:
+                        fh = []
+                    fh.append(form_val)
+                    if len(fh) > 6:
+                        fh = fh[-6:]
+                    conn_fh.execute(
+                        "UPDATE players SET form_history=? WHERE id=?",
+                        (_fjson.dumps(fh), pid_fh)
+                    )
+            conn_fh.commit(); conn_fh.close()
+        except Exception:
+            pass
+
+        # Feature 4: Leadership clash check (monthly)
+        try:
+            _clash = _check_leadership_clash(self.db_name)
+            if _clash:
+                from kivy.clock import Clock as _ClkC
+                _ClkC.schedule_once(
+                    lambda dt, ev=_clash: self._show_leadership_clash(ev), 1.0
+                )
+        except Exception:
+            pass
+
         # Streaming / merch income
         _pay_streaming_income(self.db_name, str(self.date_object))
 
@@ -2128,11 +2321,14 @@ class MainWindow(BoxLayout):
             c = conn.cursor()
 
             # Team stats
-            team = c.execute("SELECT id, name, COALESCE(rating,0), COALESCE(fans,0) "
-                             "FROM teams WHERE player='yes'").fetchone()
+            team = c.execute(
+                "SELECT id, name, COALESCE(rating,0), COALESCE(fans,0), "
+                "COALESCE(mgr_reputation,20) "
+                "FROM teams WHERE player='yes'"
+            ).fetchone()
             if not team:
                 conn.close(); return
-            tid, tname, rating, fans = team
+            tid, tname, rating, fans, mgr_rep = team
 
             # Tournament results this year
             results = []
@@ -2244,18 +2440,628 @@ class MainWindow(BoxLayout):
             gl.add_widget(_lbl(f'Фанаты: {fans:,}', (1.0, 0.55, 0.80, 1), 26))
             gl.add_widget(_lbl(f'Цели выполнены: {goals_done}/{goals_total}',
                                (0.25, 0.90, 0.42, 1) if goals_done else _WHITE, 26))
+            # Feature 2: Manager reputation in review
+            gl.add_widget(_lbl(f'Репутация менеджера: {mgr_rep}/100',
+                               (0.80, 0.65, 1.00, 1), 26))
+            if mgr_rep < 15:
+                gl.add_widget(_lbl('ВНИМАНИЕ: Организация требует результатов.',
+                                   (1.0, 0.35, 0.25, 1), 26))
+            elif mgr_rep >= 75:
+                gl.add_widget(_lbl('Ваша репутация привлекает другие организации.',
+                                   (0.35, 0.85, 1.00, 1), 26))
+
+            # Check active sponsor
+            _has_sponsor = False
+            try:
+                _sp_conn = sqlite3.connect(self.db_name)
+                _sp_row = _sp_conn.execute(
+                    "SELECT COUNT(*) FROM sponsors WHERE is_active=1"
+                ).fetchone()
+                _sp_conn.close()
+                _has_sponsor = bool(_sp_row and _sp_row[0] > 0)
+            except Exception:
+                pass
+            if not _has_sponsor:
+                gl.add_widget(_lbl(
+                    'Спонсорский контракт истёк — посетите рынок спонсоров.',
+                    (1.0, 0.75, 0.20, 1), 26,
+                ))
 
             sv.add_widget(gl)
             root.add_widget(sv)
 
             close = Button(text='Начать новый сезон', size_hint_y=None, height=48,
                            background_color=(0.18, 0.50, 0.22, 1), background_normal='')
-            close.bind(on_press=p.dismiss)
+
+            def _on_close_review(_inst):
+                p.dismiss()
+                # Reset DPC points for new season
+                try:
+                    _dpc_c = sqlite3.connect(self.db_name)
+                    _dpc_c.execute("UPDATE teams SET dpc_points=0")
+                    _dpc_c.commit(); _dpc_c.close()
+                except Exception:
+                    pass
+                # Feature 2: job offer if mgr_rep >= 75
+                if mgr_rep >= 75:
+                    from kivy.clock import Clock as _ClkJ
+                    _ClkJ.schedule_once(lambda dt: self._show_job_offer_popup(), 0.8)
+
+            close.bind(on_press=_on_close_review)
             root.add_widget(close)
             p.content = root
             p.open()
         except Exception as _e:
             T.log_err('season_review', _e)
+
+    # ── Feature 2: Job offer popup (mgr_rep >= 75) ──────────────────────────
+
+    def _show_job_offer_popup(self):
+        try:
+            import random as _rjob
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            conn_jb = sqlite3.connect(self.db_name)
+            ai_teams = conn_jb.execute(
+                "SELECT name FROM teams WHERE player!='yes' ORDER BY RANDOM() LIMIT 1"
+            ).fetchone()
+            conn_jb.close()
+            if not ai_teams:
+                return
+            offer_team = ai_teams[0].strip()
+
+            pop = Popup(title='', size_hint=(0.65, 0.55))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            def _jlbl(text, color=(0.92, 0.92, 0.92, 1), height=30, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_jlbl('ПРЕДЛОЖЕНИЕ РАБОТЫ', (1.0, 0.85, 0.20, 1), 38, True))
+            root.add_widget(_jlbl(
+                f'Команда [b]{offer_team}[/b] предлагает вам пост менеджера.',
+                bold=False, height=32
+            ))
+            root.add_widget(_jlbl('Принять предложение?', height=26))
+
+            btn_row = BoxLayout(size_hint_y=None, height=48, spacing=10)
+
+            def _accept(_inst):
+                pop.dismiss()
+                _ac = sqlite3.connect(self.db_name)
+                _ac.execute(
+                    "UPDATE teams SET mgr_reputation=MIN(100,COALESCE(mgr_reputation,20)+10),"
+                    "budget=budget+50000 WHERE player='yes'"
+                )
+                _ac.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'Вы приняли предложение от {offer_team}. Бонус: +$50,000. Репутация +10.',
+                     str(self.date_object), 'Карьера')
+                )
+                _ac.commit(); _ac.close()
+
+            def _decline(_inst):
+                pop.dismiss()
+                _dc = sqlite3.connect(self.db_name)
+                _dc.execute(
+                    "UPDATE teams SET mgr_reputation=MIN(100,COALESCE(mgr_reputation,20)+3) "
+                    "WHERE player='yes'"
+                )
+                _dc.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'Вы отказали {offer_team}. Репутация +3 за лояльность.',
+                     str(self.date_object), 'Карьера')
+                )
+                _dc.commit(); _dc.close()
+
+            accept_btn = Button(
+                text='Принять (+$50k, Реп+10)',
+                background_color=(0.18, 0.50, 0.22, 1), background_normal='',
+            )
+            accept_btn.bind(on_press=_accept)
+            decline_btn = Button(
+                text='Остаться (Реп+3)',
+                background_color=(0.45, 0.20, 0.20, 1), background_normal='',
+            )
+            decline_btn.bind(on_press=_decline)
+            btn_row.add_widget(accept_btn)
+            btn_row.add_widget(decline_btn)
+            root.add_widget(btn_row)
+            pop.content = root
+            pop.open()
+        except Exception as _e:
+            T.log_err('_show_job_offer_popup', _e)
+
+    # ── Feature 4: Leadership clash popup ────────────────────────────────────
+
+    def _show_leadership_clash(self, clash_data):
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            nick1    = clash_data['nick1']
+            nick2    = clash_data['nick2']
+            pid1     = clash_data['pid1']
+            pid2     = clash_data['pid2']
+            team_id  = clash_data['team_id']
+
+            pop = Popup(title='', size_hint=(0.65, 0.55))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            def _clbl(text, color=(0.92, 0.92, 0.92, 1), height=30, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_clbl('КОНФЛИКТ ЛИДЕРОВ', (1.0, 0.60, 0.20, 1), 36, True))
+            root.add_widget(_clbl(
+                f'{nick1} и {nick2} не могут поделить авторитет в команде.',
+                height=32
+            ))
+            root.add_widget(_clbl('Выберите решение:', height=26))
+
+            def _apply_and_close(action):
+                pop.dismiss()
+                _cc = sqlite3.connect(self.db_name)
+                if action == 'support1':
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-5) WHERE id=?",
+                        (team_id,)
+                    )
+                    _cc.execute(
+                        "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+2) WHERE id=?",
+                        (pid1,)
+                    )
+                    _cc.execute(
+                        "UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?",
+                        (pid2,)
+                    )
+                elif action == 'equal':
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+3) WHERE id=?",
+                        (team_id,)
+                    )
+                    _cc.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                        ('Конфликт улажен — равные права.', str(self.date_object), 'Состав')
+                    )
+                elif action == 'kick1':
+                    # Remove pid1 from slot
+                    for _slot in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+                        _row = _cc.execute(
+                            f"SELECT {_slot} FROM teams WHERE id=?", (team_id,)
+                        ).fetchone()
+                        if _row and _row[0] == pid1:
+                            _cc.execute(
+                                f"UPDATE teams SET {_slot}=NULL WHERE id=?", (team_id,)
+                            )
+                            break
+                    _cc.execute(
+                        "UPDATE players SET wants_to_leave=1 WHERE id=?", (pid1,)
+                    )
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+8) WHERE id=?",
+                        (team_id,)
+                    )
+                _cc.commit(); _cc.close()
+
+            btn_row = BoxLayout(size_hint_y=None, height=46, spacing=6)
+            b1 = Button(
+                text=f'Поддержать {nick1[:10]}',
+                background_color=(0.18, 0.40, 0.65, 1), background_normal='',
+            )
+            b1.bind(on_press=lambda _: _apply_and_close('support1'))
+            b2 = Button(
+                text='Равные права',
+                background_color=(0.25, 0.55, 0.25, 1), background_normal='',
+            )
+            b2.bind(on_press=lambda _: _apply_and_close('equal'))
+            b3 = Button(
+                text=f'Отчислить {nick1[:10]}',
+                background_color=(0.65, 0.20, 0.18, 1), background_normal='',
+            )
+            b3.bind(on_press=lambda _: _apply_and_close('kick1'))
+            btn_row.add_widget(b1)
+            btn_row.add_widget(b2)
+            btn_row.add_widget(b3)
+            root.add_widget(btn_row)
+            pop.content = root
+            pop.open()
+        except Exception as _e:
+            T.log_err('_show_leadership_clash', _e)
+
+    # ── Feature 1: Year-end processing ───────────────────────────────────────
+
+    def _year_end_processing(self, year, conn):
+        """Age all players, retire veterans to Hall of Fame, generate youth, DPC reset."""
+        import random as _rnd
+        try:
+            # Age all players by 1
+            conn.execute("UPDATE players SET age=COALESCE(age,22)+1")
+
+            # Find players past retirement age that are on a team
+            retiring = conn.execute(
+                "SELECT p.id, p.nickname, p.age, p.retirement_age, "
+                "       t.name, COALESCE(p.comp_exp,0), "
+                "       COALESCE(p.micro_skills,50)+COALESCE(p.macro_skills,50) "
+                "FROM players p "
+                "JOIN teams t ON t.id=p.team_id "
+                "WHERE COALESCE(p.age,22) >= COALESCE(p.retirement_age,35) "
+                "  AND p.team_id != 0"
+            ).fetchall()
+
+            retired_count = 0
+            for pid, nick, age, ret_age, team_name, career_games, peak_skill in retiring:
+                # Compute career earnings
+                earnings_row = conn.execute(
+                    "SELECT COALESCE(SUM(earnings),0) FROM player_career_stats WHERE player_id=?",
+                    (pid,)
+                ).fetchone()
+                career_earnings = earnings_row[0] if earnings_row else 0
+
+                # Remove from roster slot
+                for slot in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+                    conn.execute(
+                        f"UPDATE teams SET {slot}=NULL WHERE {slot}=?", (pid,)
+                    )
+                # Free the player
+                conn.execute(
+                    "UPDATE players SET team_id=0, wage=0 WHERE id=?", (pid,)
+                )
+                # Insert into hall_of_fame
+                conn.execute(
+                    "INSERT INTO hall_of_fame "
+                    "(player_id, nickname, retired_year, retired_age, "
+                    " career_games, career_earnings, peak_skill, final_team) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (pid, nick, year, age, career_games, career_earnings,
+                     peak_skill // 2, team_name)
+                )
+                retired_count += 1
+
+            # Generate 1-2 new youth players per AI team
+            ai_teams = conn.execute(
+                "SELECT id FROM teams WHERE player!='yes' AND id!=0"
+            ).fetchall()
+            for (tid,) in ai_teams:
+                for _ in range(_rnd.randint(1, 2)):
+                    yage = _rnd.randint(16, 18)
+                    ys   = _rnd.randint(30, 50)
+                    roles = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
+                    yrole = _rnd.choice(roles)
+                    ret   = _rnd.randint(32, 38)
+                    conn.execute(
+                        "INSERT INTO players "
+                        "(nickname, name, surname, role, micro_skills, macro_skills, "
+                        " age, retirement_age, team_id, is_youth, wage, expected_wage, morale) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,1,?,?,5)",
+                        (f'Youth_{yage}_{_rnd.randint(100,999)}',
+                         'New', 'Talent', yrole, ys, ys,
+                         yage, ret, tid, 3_000, 3_000)
+                    )
+
+            # DPC reset happens in season review close; send message now
+            if retired_count > 0:
+                conn.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f"Итоги сезона {year}: {retired_count} игроков ушли на пенсию.",
+                     str(self.date_object), 'Новости')
+                )
+        except Exception as _e:
+            T.log_err('_year_end_processing', _e)
+
+    # ── Feature 1: Hall of Fame popup ────────────────────────────────────────
+
+    def _show_hall_of_fame(self):
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.gridlayout import GridLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+            from kivy.uix.scrollview import ScrollView
+
+            conn = sqlite3.connect(self.db_name)
+            rows = conn.execute(
+                "SELECT nickname, retired_year, retired_age, career_games, "
+                "career_earnings, peak_skill, final_team "
+                "FROM hall_of_fame ORDER BY career_earnings DESC LIMIT 50"
+            ).fetchall()
+            conn.close()
+
+            p = Popup(title='', size_hint=(0.70, 0.80))
+            root = BoxLayout(orientation='vertical', padding=10, spacing=6)
+
+            def _lbl(text, color=(0.92, 0.92, 0.92, 1), height=28, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_lbl('ЗАЛ СЛАВЫ', (1.0, 0.85, 0.20, 1), 44, True))
+
+            sv = ScrollView(size_hint=(1, 1))
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=3)
+            gl.bind(minimum_height=gl.setter('height'))
+
+            if not rows:
+                gl.add_widget(_lbl('Пока никто не вышел на пенсию.', (0.6, 0.6, 0.6, 1)))
+            else:
+                gl.add_widget(_lbl(
+                    '  Ник   |  Год  |  Возраст  |  Игр  |  Призовые  |  Команда',
+                    (0.50, 0.85, 1.00, 1), 26, True
+                ))
+                for nick, yr, age, games, earn, peak, team in rows:
+                    txt = (f'  {nick}  |  {yr}  |  {age} лет  |  {games} игр  '
+                           f'|  ${earn:,}  |  {(team or "—")[:18]}')
+                    gl.add_widget(_lbl(txt, height=24))
+
+            sv.add_widget(gl)
+            root.add_widget(sv)
+            close = Button(text='Закрыть', size_hint_y=None, height=44,
+                           background_color=(0.50, 0.15, 0.15, 1), background_normal='')
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            p.open()
+        except Exception as _e:
+            T.log_err('_show_hall_of_fame', _e)
+
+    def on_hall_of_fame(self, instance):
+        self._show_hall_of_fame()
+
+    # ── Feature 2: DPC standings popup ───────────────────────────────────────
+
+    def on_dpc_standings(self, instance):
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.gridlayout import GridLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+            from kivy.uix.scrollview import ScrollView
+
+            conn = sqlite3.connect(self.db_name)
+            rows = conn.execute(
+                "SELECT name, COALESCE(dpc_points,0), player "
+                "FROM teams ORDER BY COALESCE(dpc_points,0) DESC"
+            ).fetchall()
+            conn.close()
+
+            p = Popup(title='', size_hint=(0.60, 0.75))
+            root = BoxLayout(orientation='vertical', padding=10, spacing=6)
+
+            def _lbl(text, color=(0.92, 0.92, 0.92, 1), height=28, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_lbl('DPC ОЧКИ СЕЗОНА', (0.35, 0.85, 1.00, 1), 40, True))
+
+            sv = ScrollView(size_hint=(1, 1))
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=2)
+            gl.bind(minimum_height=gl.setter('height'))
+
+            for rank, (name, pts, is_player) in enumerate(rows, 1):
+                clr = (1.0, 0.85, 0.20, 1) if is_player == 'yes' else (0.88, 0.88, 0.88, 1)
+                txt = f'  #{rank}  {name.strip()[:22]}  —  {pts} очков'
+                gl.add_widget(_lbl(txt, clr, 26))
+
+            sv.add_widget(gl)
+            root.add_widget(sv)
+            close = Button(text='Закрыть', size_hint_y=None, height=44,
+                           background_color=(0.30, 0.30, 0.30, 1), background_normal='')
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            p.open()
+        except Exception as _e:
+            T.log_err('on_dpc_standings', _e)
+
+    # ── Feature 9: Invitational ───────────────────────────────────────────────
+
+    def on_organize_invitational(self, instance):
+        try:
+            from ingame_interface.invitational import InvitationalSetupPopup
+            popup = InvitationalSetupPopup(
+                db_name=self.db_name,
+                on_launch=self._run_invitational,
+            )
+            popup.open()
+        except Exception as _e:
+            T.log_err('on_organize_invitational', _e)
+
+    def _run_invitational(self, prizepool, fmt, teams):
+        """Run a custom invitational tournament."""
+        import random as _rnd
+        try:
+            conn = sqlite3.connect(self.db_name)
+            budget = conn.execute(
+                "SELECT COALESCE(budget,0) FROM teams WHERE player='yes'"
+            ).fetchone()
+            if not budget or budget[0] < prizepool:
+                conn.close()
+                from kivy.uix.popup import Popup
+                from kivy.uix.label import Label
+                Popup(content=Label(text='Недостаточно бюджета'),
+                      size_hint=(0.45, 0.22)).open()
+                return
+            # Deduct prizepool
+            conn.execute(
+                "UPDATE teams SET budget=budget-? WHERE player='yes'", (prizepool,)
+            )
+            # Create tournament entry
+            game_date = conn.execute("SELECT date FROM save WHERE id=1").fetchone()
+            gd_str = game_date[0] if game_date else str(self.date_object)
+            conn.execute(
+                "INSERT INTO tournaments (name, start_date, end_date, prizepool, "
+                "ratingpool, is_custom) VALUES (?,?,?,?,?,1)",
+                (f'Invitational {gd_str[:4]}', gd_str, gd_str, prizepool, 0)
+            )
+            tourn_id = conn.execute(
+                "SELECT last_insert_rowid()"
+            ).fetchone()[0]
+            conn.commit()
+            conn.close()
+
+            # Run mini round-robin
+            from logic.tournaments.runner import generate_tournament_events
+            events, placements, group_elim = generate_tournament_events(
+                teams, self.db_name,
+                tournament_name=f'Invitational {gd_str[:4]}',
+            )
+
+            # Save results
+            from logic.tournaments.runner import save_tournament_results
+            save_tournament_results(tourn_id, placements, group_elim, self.db_name)
+
+            # Awards
+            my_team_row = sqlite3.connect(self.db_name).execute(
+                "SELECT name FROM teams WHERE player='yes'"
+            ).fetchone()
+            my_team = my_team_row[0].strip() if my_team_row else ''
+            my_place = placements.get(my_team, 99)
+
+            fans_gain  = prizepool // 500
+            rep_gain   = 5 if my_place == 1 else 3
+            conn2 = sqlite3.connect(self.db_name)
+            conn2.execute(
+                "UPDATE teams SET fans=COALESCE(fans,0)+? WHERE player='yes'", (fans_gain,)
+            )
+            conn2.execute(
+                "UPDATE characters SET reputation=COALESCE(reputation,0)+?",(rep_gain,)
+            )
+            conn2.execute(
+                "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                (f"Invitational завершён! {my_team} — {my_place}-е место. "
+                 f"+{fans_gain} фанатов, +{rep_gain} репутации.",
+                 gd_str, 'Новости')
+            )
+            conn2.commit(); conn2.close()
+
+            # Show results
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+            root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+            root.add_widget(Label(
+                text=f'[b]Invitational завершён![/b]',
+                markup=True, color=(1, 0.85, 0.2, 1),
+                size_hint_y=None, height=40, halign='center', valign='middle',
+            ))
+            top3 = sorted(placements.items(), key=lambda x: x[1])[:3]
+            for team, place in top3:
+                lbl = Label(
+                    text=f'  #{place}  {team}',
+                    color=(1, 1, 1, 1),
+                    size_hint_y=None, height=30, halign='left', valign='middle',
+                )
+                lbl.bind(size=lbl.setter('text_size'))
+                root.add_widget(lbl)
+            p = Popup(title='', content=root, size_hint=(0.55, 0.45))
+            close = Button(text='Закрыть', size_hint_y=None, height=44,
+                           background_normal='', background_color=(0.3, 0.3, 0.3, 1))
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            p.open()
+        except Exception as _e:
+            T.log_err('_run_invitational', _e)
+
+    # ── Feature 9: Big patch ─────────────────────────────────────────────────
+
+    def _trigger_big_patch(self):
+        try:
+            import random as _rnd
+            from logic.meta import rotate_patch
+
+            patch_name, favored_role = rotate_patch(self.db_name, str(self.date_object))
+
+            _MECHANICS = [
+                ('support_boost',    'Поддержки усилены: macro support +15%',     'full_support', 'macro', 1.15),
+                ('carry_aggression', 'Керри агрессивнее: micro carry +12%',        'carry',        'micro', 1.12),
+                ('vision_meta',      'Мета на контроль карты: micro support +10%', 'partial_support','micro', 1.10),
+                ('offlane_tank',     'Офлейн стал прочнее: macro offlane +13%',    'offlane',      'macro', 1.13),
+                ('mid_snowball',     'Мид-сноуболл мета: micro mid +15%',          'mid',          'micro', 1.15),
+                ('teamfight_meta',   'Командные бои: все macro +8%',               'all',          'macro', 1.08),
+            ]
+            mechanic = _rnd.choice(_MECHANICS)
+            mech_key, mech_desc, mech_role, mech_stat, mech_mult = mechanic
+
+            conn_bp = sqlite3.connect(self.db_name)
+            conn_bp.execute(
+                "UPDATE meta_patches SET mechanic_effect=? WHERE active=1",
+                (f"{mech_key}:{mech_role}:{mech_stat}:{mech_mult}",)
+            )
+            conn_bp.execute(
+                "UPDATE save SET big_patch_date=? WHERE id=1",
+                (str(self.date_object),)
+            )
+            conn_bp.execute(
+                "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                (f"КРУПНЫЙ ПАТЧ {patch_name}: {mech_desc}",
+                 str(self.date_object), 'Патч-ноутс')
+            )
+            conn_bp.commit(); conn_bp.close()
+
+            from kivy.clock import Clock as _Clk
+            _Clk.schedule_once(
+                lambda dt: self._show_big_patch_popup(patch_name, mech_desc), 0.5
+            )
+        except Exception as _e:
+            T.log_err('_trigger_big_patch', _e)
+
+    def _show_big_patch_popup(self, patch_name, mech_desc):
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            pop = Popup(title='', size_hint=(0.55, 0.35))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            def _bplbl(text, color=(0.92, 0.92, 0.92, 1), height=32, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_bplbl(
+                f'КРУПНЫЙ ПАТЧ {patch_name}',
+                (1.0, 0.85, 0.20, 1), 36, True
+            ))
+            root.add_widget(_bplbl(mech_desc, height=34))
+            close_btn = Button(
+                text='Понял', size_hint_y=None, height=42,
+                background_color=(0.18, 0.40, 0.65, 1), background_normal='',
+            )
+            close_btn.bind(on_press=pop.dismiss)
+            root.add_widget(close_btn)
+            pop.content = root
+            pop.open()
+        except Exception as _e:
+            T.log_err('_show_big_patch_popup', _e)
 
     def _check_planned_bootcamp(self, conn):
         today = str(self.date_object)
@@ -2518,6 +3324,7 @@ class MainWindow(BoxLayout):
             if self.date_object.month != prev_month and self.date_object.day == 1:
                 self._deduct_salaries(conn)
                 if self.date_object.year != prev_year:
+                    self._year_end_processing(prev_year, conn)
                     from kivy.clock import Clock as _Clk
                     _Clk.schedule_once(
                         lambda dt: self._show_season_review(prev_year), 0.5
@@ -2529,6 +3336,26 @@ class MainWindow(BoxLayout):
 
             # Planned bootcamp auto-fire
             self._check_planned_bootcamp(conn)
+
+            # Feature 9: Big patch check every 90 days
+            try:
+                _bp_row = conn.execute(
+                    "SELECT COALESCE(big_patch_date,'') FROM save WHERE id=1"
+                ).fetchone()
+                _last_bp_str = _bp_row[0] if _bp_row else ''
+                _bp_due = True
+                if _last_bp_str:
+                    try:
+                        from datetime import date as _bpd
+                        _diff = (self.date_object - _bpd.fromisoformat(_last_bp_str)).days
+                        _bp_due = _diff >= 90
+                    except Exception:
+                        _bp_due = False
+                if _bp_due:
+                    from kivy.clock import Clock as _ClkBP
+                    _ClkBP.schedule_once(lambda dt: self._trigger_big_patch(), 1.5)
+            except Exception:
+                pass
 
             conn.commit()
 

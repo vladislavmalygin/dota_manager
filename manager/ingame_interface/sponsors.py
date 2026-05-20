@@ -11,6 +11,7 @@ from kivy.graphics import Color, Rectangle
 from logic.sponsors import (
     get_active_sponsor, get_available_offers,
     sign_sponsor, drop_sponsor, condition_label,
+    get_market_offers,
 )
 
 _ACCENT = (0.35, 0.85, 1.00, 1)
@@ -71,6 +72,14 @@ class SponsorsPopup(Popup):
                 '  Нет активного спонсора. Выберите предложение ниже.',
                 height=36, color=_DIM,
             ))
+            # Feature 5: Sponsor market button
+            market_btn = Button(
+                text='Рынок спонсоров',
+                size_hint_y=None, height=44,
+                background_color=(0.20, 0.45, 0.65, 1), background_normal='',
+            )
+            market_btn.bind(on_press=lambda _: _open_sponsor_market(self.db_name, self))
+            root.add_widget(market_btn)
 
         root.add_widget(_lbl('  Доступные предложения', height=38, color=_ACCENT, bold=True))
 
@@ -259,6 +268,123 @@ class SponsorsPopup(Popup):
         drop_sponsor(self.db_name)
         self.dismiss()
         SponsorsPopup(self.db_name).open()
+
+
+def _open_sponsor_market(db_name, parent_popup=None):
+    """Feature 5: Open the sponsor bidding market."""
+    import sqlite3 as _sq
+    from kivy.uix.popup import Popup
+    from kivy.uix.scrollview import ScrollView
+    from kivy.uix.gridlayout import GridLayout
+    from kivy.uix.button import Button
+
+    offers = get_market_offers(db_name, 4)
+
+    market_pop = Popup(title='', size_hint=(0.75, 0.80))
+    root = _BgBox(bg=_BG_DARK, orientation='vertical', spacing=6, padding=8)
+
+    root.add_widget(_lbl('  РЫНОК СПОНСОРОВ', height=40, color=_ACCENT, bold=True))
+
+    scroll = ScrollView(size_hint=(1, 1))
+    grid = GridLayout(cols=1, size_hint_y=None, spacing=6)
+    grid.bind(minimum_height=grid.setter('height'))
+
+    _shown_offers = list(offers)  # mutable list for "withdraw" simulation
+
+    def _rebuild_market():
+        grid.clear_widgets()
+        if not _shown_offers:
+            grid.add_widget(_lbl('  Предложений нет.', color=_DIM))
+            return
+        for offer_row in list(_shown_offers):
+            sid, sname, sdesc, sincome, scond, sbonus, spenalty, sterm = offer_row
+            card = _BgBox(bg=_BG_PANEL, orientation='vertical',
+                          size_hint_y=None, height=160, padding=(10, 6), spacing=3)
+            card.add_widget(_lbl(f'  {sname}', height=32, color=_ACCENT, bold=True))
+            card.add_widget(_lbl(f'  {sdesc}', height=24, color=_WHITE))
+            card.add_widget(_lbl(f'  Доход: ${sincome:,}/мес', height=24, color=_GOLD))
+            cond_str = condition_label(scond)
+            if sbonus:
+                cond_str += f'  → бонус +${sbonus:,}'
+            card.add_widget(_lbl(f'  Условие: {cond_str}', height=24, color=_DIM))
+
+            btn_row2 = _BgBox(bg=_BG_PANEL, orientation='horizontal',
+                              size_hint_y=None, height=40, spacing=6)
+
+            def _accept_offer(_inst, _sid=sid, _sname=sname, _sincome=sincome):
+                _conn = _sq.connect(db_name)
+                _gd = _conn.execute("SELECT date FROM save WHERE id=1").fetchone()
+                _gd_str = _gd[0] if _gd else '2024-01-01'
+                sign_sponsor(db_name, _sid, _gd_str)
+                _conn.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'Подписан спонсор {_sname} через рынок: ${_sincome:,}/мес.',
+                     _gd_str, 'Организация')
+                )
+                _conn.commit(); _conn.close()
+                market_pop.dismiss()
+                if parent_popup:
+                    parent_popup.dismiss()
+                SponsorsPopup(db_name).open()
+
+            def _bargain(_inst, _offer=offer_row):
+                import random as _rbarg
+                _sid2, _sn2, _sd2, _si2, _sc2, _sb2, _sp2, _st2 = _offer
+                # Success based on org_reputation/100
+                _conn2 = _sq.connect(db_name)
+                _or = _conn2.execute(
+                    "SELECT COALESCE(org_reputation,20) FROM teams WHERE player='yes'"
+                ).fetchone()
+                _conn2.close()
+                _rep = (_or[0] if _or else 20) / 100.0
+                _success = _rbarg.random() < max(0.60, _rep)
+                if _success:
+                    # Offer improved: +5k income, term -3 months min 1
+                    new_income = _si2 + 5_000
+                    new_term   = max(1, _st2 - 3)
+                    _conn3 = _sq.connect(db_name)
+                    _conn3.execute(
+                        "UPDATE sponsors SET monthly_income=?, term_months=? WHERE id=?",
+                        (new_income, new_term, _sid2)
+                    )
+                    _conn3.commit(); _conn3.close()
+                    # Re-read updated offer and replace in list
+                    updated = (_sid2, _sn2, _sd2, new_income, _sc2, _sb2, _sp2, new_term)
+                    idx = _shown_offers.index(_offer)
+                    _shown_offers[idx] = updated
+                else:
+                    # Sponsor withdraws
+                    if _offer in _shown_offers:
+                        _shown_offers.remove(_offer)
+                _rebuild_market()
+
+            acc_btn = Button(
+                text='Принять',
+                background_color=(0.15, 0.55, 0.25, 1), background_normal='',
+            )
+            acc_btn.bind(on_press=_accept_offer)
+            barg_btn = Button(
+                text='Торговаться (+$5k, −3мес)',
+                background_color=(0.45, 0.35, 0.10, 1), background_normal='',
+            )
+            barg_btn.bind(on_press=_bargain)
+            btn_row2.add_widget(acc_btn)
+            btn_row2.add_widget(barg_btn)
+            card.add_widget(btn_row2)
+            grid.add_widget(card)
+
+    _rebuild_market()
+    scroll.add_widget(grid)
+    root.add_widget(scroll)
+
+    close_mkt = Button(
+        text='Закрыть', size_hint_y=None, height=44,
+        background_color=(0.55, 0.18, 0.18, 1), background_normal='',
+    )
+    close_mkt.bind(on_press=market_pop.dismiss)
+    root.add_widget(close_mkt)
+    market_pop.content = root
+    market_pop.open()
 
 
 def show_sponsors_popup(db_name):

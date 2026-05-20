@@ -224,6 +224,38 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
     except Exception:
         pass
 
+    # Feature 9: Apply active mechanic effect from big patch
+    try:
+        import sqlite3 as _sq3
+        conn_m = _sq3.connect(db_name)
+        mech = conn_m.execute(
+            "SELECT COALESCE(mechanic_effect,'') FROM meta_patches WHERE active=1 LIMIT 1"
+        ).fetchone()
+        conn_m.close()
+        if mech and mech[0]:
+            parts = mech[0].split(':')
+            if len(parts) == 4:
+                _, mech_role, mech_stat, mech_mult_str = parts
+                try:
+                    mult = float(mech_mult_str)
+                except Exception:
+                    mult = 1.0
+                _ROLE_KEYS = {
+                    'carry':            'team{}_carry',
+                    'mid':              'team{}_mid',
+                    'offlane':          'team{}_offlane',
+                    'partial_support':  'team{}_partial_support',
+                    'full_support':     'team{}_full_support',
+                }
+                for team_key in ('team1', 'team2'):
+                    for role_key, role_data in skills.get(team_key, {}).items():
+                        role_short = role_key.replace(f'{team_key}_', '')
+                        if mech_role == 'all' or role_short == mech_role:
+                            if mech_stat in role_data:
+                                role_data[mech_stat] = max(1, int(role_data[mech_stat] * mult))
+    except Exception:
+        pass
+
     return skills
 
 

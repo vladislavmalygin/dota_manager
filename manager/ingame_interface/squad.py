@@ -395,7 +395,8 @@ class SquadPopup(Popup):
                     "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
                     "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
                     "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0), "
-                    "COALESCE(signature_heroes, '[]'), COALESCE(retirement_age, 35) "
+                    "COALESCE(signature_heroes, '[]'), COALESCE(retirement_age, 35), "
+                    "COALESCE(form_history, '[]') "
                     "FROM players WHERE id=?", (int(sid),)
                 )
                 _player_data.append((col, sid, cur.fetchone()))
@@ -469,7 +470,7 @@ class SquadPopup(Popup):
                      micro, macro, soft, wage, face, skill_cap, morale,
                      priority, age, injured_until, wants_to_leave,
                      contract_end, form, secondary_role, fatigue,
-                     sig_heroes_json, retirement_age) = p
+                     sig_heroes_json, retirement_age, form_history_json) = p
                     micro = micro or 0; macro = macro or 0; soft = soft or 0
                     wage  = wage  or 0; skill_cap = skill_cap or 300
                     total_wage += wage
@@ -652,6 +653,28 @@ class SquadPopup(Popup):
                     )
                     f_lbl.bind(size=f_lbl.setter('text_size'))
                     morale_col.add_widget(f_lbl)
+                    # Feature 3: Form trend indicator
+                    try:
+                        import json as _fjson3
+                        _fh = _fjson3.loads(form_history_json) if form_history_json else []
+                        if len(_fh) >= 2:
+                            _last_f = _fh[-1]
+                            _prev_f = _fh[-2]
+                            if _last_f > _prev_f:
+                                _trend_txt = '[color=44ff88]↑[/color]'
+                            elif _last_f < _prev_f:
+                                _trend_txt = '[color=ff5555]↓[/color]'
+                            else:
+                                _trend_txt = '[color=888888]→[/color]'
+                            _trend_lbl = Label(
+                                text=_trend_txt, markup=True,
+                                font_size='9sp', size_hint_y=None, height=13,
+                                halign='center', valign='middle',
+                            )
+                            _trend_lbl.bind(size=_trend_lbl.setter('text_size'))
+                            morale_col.add_widget(_trend_lbl)
+                    except Exception:
+                        pass
                     row.add_widget(morale_col)
 
                     # ── Wage column ───────────────────────────────
@@ -707,14 +730,45 @@ class SquadPopup(Popup):
                     bench_btn.bind(on_press=lambda _, p=pid, c=col: self._bench_player(p, c))
                     row.add_widget(bench_btn)
 
-                    # ── Detail button ─────────────────────────────
-                    det_btn = Button(
-                        text='>', size_hint_x=0.07,
-                        background_color=(0.15, 0.25, 0.45, 1),
-                        background_normal='', font_size='16sp',
-                    )
-                    det_btn.bind(on_press=lambda _, p=pid: self._open_detail(p))
-                    row.add_widget(det_btn)
+                    # ── Feature 3: Rest button (fatigue > 50, not injured) ────
+                    if fatigue > 50 and not is_injured:
+                        def _do_rest(_, _pid=pid, _nick=nick):
+                            from datetime import date as _rd, timedelta as _rdt
+                            import sqlite3 as _rsq
+                            _rc = _rsq.connect(self.db_name)
+                            _gd = _rc.execute("SELECT date FROM save WHERE id=1").fetchone()
+                            _today = _rd.fromisoformat(_gd[0]) if _gd else _rd.today()
+                            _until = str(_today + _rdt(days=7))
+                            _rc.execute(
+                                "UPDATE players SET injured_until=?, "
+                                "fatigue=MAX(0,COALESCE(fatigue,0)-25), "
+                                "form=MIN(10,COALESCE(form,5)+1) WHERE id=?",
+                                (_until, _pid)
+                            )
+                            _rc.execute(
+                                "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                                (f'Игрок {_nick} взял 7 дней отдыха.',
+                                 str(_today), 'Состав')
+                            )
+                            _rc.commit(); _rc.close()
+                            self._rebuild()
+
+                        rest_btn = Button(
+                            text='Отдых\n7д', size_hint_x=0.07, height=38,
+                            background_color=(0.20, 0.40, 0.55, 1),
+                            background_normal='', font_size='9sp',
+                        )
+                        rest_btn.bind(on_press=_do_rest)
+                        row.add_widget(rest_btn)
+                    else:
+                        # ── Detail button ─────────────────────────────
+                        det_btn = Button(
+                            text='>', size_hint_x=0.07,
+                            background_color=(0.15, 0.25, 0.45, 1),
+                            background_normal='', font_size='16sp',
+                        )
+                        det_btn.bind(on_press=lambda _, p=pid: self._open_detail(p))
+                        row.add_widget(det_btn)
 
             else:
                 # Empty slot or missing player data
