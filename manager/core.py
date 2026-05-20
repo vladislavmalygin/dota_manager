@@ -619,6 +619,7 @@ class MainWindow(BoxLayout):
                 ('Статистика',  self.on_stats),
                 ('Герои патча', self.on_hero_stats),
                 ('Зал славы',   self.on_hall_of_fame),
+                ('Календарь',   self.on_season_calendar),
             ]),
             ('ПРОЧЕЕ', [
                 ('Входящие',    self.on_incoming),
@@ -664,6 +665,10 @@ class MainWindow(BoxLayout):
             Color(0.06, 0.08, 0.11, 0.82)
             self.rect_main_area = Rectangle(pos=self.main_area.pos, size=self.main_area.size)
         self.main_area.bind(size=self._update_main_area_rect)
+
+        # ── Notification queue (Feature 9) ───────────────────────────────────
+        self._notif_queue    = []
+        self._notif_showing  = False
 
         self._show_dashboard()
 
@@ -1272,6 +1277,13 @@ class MainWindow(BoxLayout):
                     groups_row.add_widget(gcol)
                 c2.add_widget(groups_row)
                 _next_match_row(c2)
+                _bracket_btn = Button(
+                    text='Сетка', size_hint_y=None, height=30,
+                    background_color=(0.25, 0.15, 0.45, 1), background_normal='',
+                    font_size='11sp',
+                )
+                _bracket_btn.bind(on_press=lambda _: self._show_live_bracket())
+                c2.add_widget(_bracket_btn)
                 row1.add_widget(c1)
                 row1.add_widget(c2)
 
@@ -1292,6 +1304,13 @@ class MainWindow(BoxLayout):
                         f'[color={tc}]{pts} pts[/color]',
                     ))
                 _next_match_row(c2)
+                _bracket_btn2 = Button(
+                    text='Сетка', size_hint_y=None, height=30,
+                    background_color=(0.25, 0.15, 0.45, 1), background_normal='',
+                    font_size='11sp',
+                )
+                _bracket_btn2.bind(on_press=lambda _: self._show_live_bracket())
+                c2.add_widget(_bracket_btn2)
                 row1.add_widget(c1)
                 row1.add_widget(c2)
 
@@ -1361,6 +1380,13 @@ class MainWindow(BoxLayout):
                         ))
 
                 _next_match_row(c2)
+                _bracket_btn3 = Button(
+                    text='Сетка', size_hint_y=None, height=30,
+                    background_color=(0.25, 0.15, 0.45, 1), background_normal='',
+                    font_size='11sp',
+                )
+                _bracket_btn3.bind(on_press=lambda _: self._show_live_bracket())
+                c2.add_widget(_bracket_btn3)
                 row1.add_widget(c1)
                 row1.add_widget(c2)
 
@@ -1684,10 +1710,9 @@ class MainWindow(BoxLayout):
                                 "SELECT COALESCE(SUM(earnings),0) FROM player_career_stats WHERE player_id=?",
                                 (pid,)
                             ).fetchone() or (0,))[0]
-                            from kivy.clock import Clock as _Clk
-                            _Clk.schedule_once(
-                                lambda dt, _n=nick, _a=player_age, _g=total_games, _e=total_earn:
-                                    self._show_retirement_ceremony(_n, _a, _g, _e), 0.5
+                            self._queue_popup(
+                                lambda _n=nick, _a=player_age, _g=total_games, _e=total_earn:
+                                    self._make_retirement_popup(_n, _a, _g, _e)
                             )
                     except Exception:
                         pass
@@ -2023,9 +2048,8 @@ class MainWindow(BoxLayout):
         try:
             _clash = _check_leadership_clash(self.db_name)
             if _clash:
-                from kivy.clock import Clock as _ClkC
-                _ClkC.schedule_once(
-                    lambda dt, ev=_clash: self._show_leadership_clash(ev), 1.0
+                self._queue_popup(
+                    lambda ev=_clash: self._build_leadership_clash_popup(ev)
                 )
         except Exception:
             pass
@@ -2250,6 +2274,47 @@ class MainWindow(BoxLayout):
             p.open()
         except Exception:
             pass
+
+    def _make_retirement_popup(self, nick, age, total_games, total_earn):
+        """Build and return (without opening) a retirement ceremony popup."""
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            p    = Popup(title='Прощание с игроком', size_hint=(0.55, 0.52))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            lines = [
+                f'[b][color=ffd700]{nick}[/color][/b] завершает карьеру.',
+                f'{age} лет  ·  {total_games} матчей в карьере',
+            ]
+            if total_earn:
+                lines.append(f'Призовые за карьеру: ${total_earn:,}')
+            lines.append('')
+            lines.append('Спасибо за всё, что ты сделал для команды. Удачи!')
+
+            for line in lines:
+                lbl = Label(
+                    text=line, markup=True,
+                    color=(0.92, 0.92, 0.92, 1) if not line.startswith('[b]') else (1, 1, 1, 1),
+                    size_hint_y=None, height=30,
+                    halign='center', valign='middle', font_size='13sp',
+                )
+                lbl.bind(size=lbl.setter('text_size'))
+                root.add_widget(lbl)
+
+            close = Button(
+                text='Проводить игрока', size_hint_y=None, height=46,
+                background_color=(0.18, 0.35, 0.60, 1), background_normal='',
+            )
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            return p
+        except Exception:
+            return None
 
     def _check_player_milestones(self):
         """Generate inbox messages for player career milestones."""
@@ -2682,6 +2747,295 @@ class MainWindow(BoxLayout):
         except Exception as _e:
             T.log_err('_show_leadership_clash', _e)
 
+    # ── Feature 9: Notification queue ────────────────────────────────────────
+
+    def _queue_popup(self, factory):
+        """Add a popup-creating callable to the notification queue."""
+        self._notif_queue.append(factory)
+        if not self._notif_showing:
+            Clock.schedule_once(lambda dt: self._show_next_notif(), 0.1)
+
+    def _show_next_notif(self, *_):
+        if not self._notif_queue:
+            self._notif_showing = False
+            return
+        self._notif_showing = True
+        factory = self._notif_queue.pop(0)
+        try:
+            popup = factory()
+        except Exception as _e:
+            T.log_err('_show_next_notif factory', _e)
+            self._notif_showing = False
+            Clock.schedule_once(lambda dt: self._show_next_notif(), 0.1)
+            return
+        if popup:
+            _orig = popup.dismiss
+            def _after(*a, **kw):
+                _orig(*a, **kw)
+                self._notif_showing = False
+                Clock.schedule_once(lambda dt: self._show_next_notif(), 0.4)
+            popup.dismiss = _after
+            popup.open()
+        else:
+            self._notif_showing = False
+            Clock.schedule_once(lambda dt: self._show_next_notif(), 0.1)
+
+    # ── Feature 6: Live tournament bracket ───────────────────────────────────
+
+    def _show_live_bracket(self):
+        from kivy.uix.popup import Popup
+        from kivy.uix.label import Label
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.gridlayout import GridLayout
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.button import Button
+
+        at = self._get_active_tournament()
+        if not at:
+            return
+
+        queue     = at['match_queue']
+        idx       = at['match_idx']
+        standings = at['standings']
+        pt_teams  = at.get('player_teams', set())
+
+        pop  = Popup(title=at['name'], size_hint=(0.80, 0.88))
+        root = BoxLayout(orientation='vertical', spacing=4, padding=6)
+
+        sv = ScrollView(size_hint=(1, 1))
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=3, padding=(6, 4))
+        gl.bind(minimum_height=gl.setter('height'))
+
+        _ACC   = (0.35, 0.85, 1.00, 1)
+        _GOLD  = (1.00, 0.85, 0.25, 1)
+        _GREEN = (0.25, 0.90, 0.42, 1)
+        _DIM   = (0.45, 0.45, 0.50, 1)
+        _MY    = (0.30, 1.00, 0.55, 1)
+
+        def _lbl(text, color=_ACC, height=22, bold=False):
+            t = f'[b]{text}[/b]' if bold else text
+            l = Label(text=t, markup=True, color=color,
+                      size_hint_y=None, height=height,
+                      halign='left', valign='middle', font_size='11sp')
+            l.bind(size=l.setter('text_size'))
+            return l
+
+        # Group standings (if available)
+        draw_ev = at.get('draw_ev') or {}
+        groups  = draw_ev.get('groups', [])
+        if groups:
+            gl.add_widget(_lbl('ГРУППЫ', _ACC, 26, True))
+            for gi, grp in enumerate(groups[:2]):
+                gl.add_widget(_lbl(f'  Группа {gi+1}:', _GOLD, 20, True))
+                sorted_grp = sorted(
+                    [(t, standings.get(t, 0)) for t in grp],
+                    key=lambda x: x[1], reverse=True
+                )
+                for rank, (team, pts) in enumerate(sorted_grp):
+                    is_my = team in pt_teams
+                    clr   = _MY if is_my else (
+                            _GREEN if rank == 0 else (
+                            _DIM if rank >= 4 else _ACC))
+                    arrow = 'Q' if rank < 4 else 'X'
+                    gl.add_widget(_lbl(
+                        f'    [{arrow}] {rank+1}. {team[:20]}  {pts} pts',
+                        clr, 20))
+
+        # Played matches by stage
+        from collections import OrderedDict
+        stages_played = OrderedDict()
+        for i in range(min(idx, len(queue))):
+            ev = queue[i]['result_ev']
+            st = ev.get('stage', '?')
+            stages_played.setdefault(st, []).append(ev)
+
+        if stages_played:
+            gl.add_widget(_lbl('СЫГРАННЫЕ МАТЧИ', _ACC, 26, True))
+
+        PLAYOFF_KW = ('UB', 'LB', 'Grand', 'Гранд', 'Финал')
+        for stage, matches in stages_played.items():
+            if any(kw in stage for kw in PLAYOFF_KW):
+                gl.add_widget(_lbl(f'  {stage}', _GOLD, 20, True))
+                for m in matches:
+                    w   = m.get('winner', '')
+                    t1_ = m['team1']; t2_ = m['team2']
+                    s1  = m.get('score_t1', 0); s2 = m.get('score_t2', 0)
+                    is_p = t1_ in pt_teams or t2_ in pt_teams
+                    won1 = '[color=44ff88]' if w == t1_ else '[color=ff5555]'
+                    won2 = '[color=44ff88]' if w == t2_ else '[color=ff5555]'
+                    gl.add_widget(_lbl(
+                        f'    {won1}{t1_[:16]}[/color]  {s1}:{s2}  '
+                        f'{won2}{t2_[:16]}[/color]',
+                        _MY if is_p else _DIM, 20))
+
+        # Upcoming matches
+        upcoming = []
+        for i in range(idx, min(idx + 6, len(queue))):
+            ev = queue[i]['result_ev']
+            st = ev.get('stage', '')
+            if any(kw in st for kw in PLAYOFF_KW) or 'Группа' in st:
+                upcoming.append(ev)
+        if upcoming:
+            gl.add_widget(_lbl('ПРЕДСТОЯЩИЕ', _ACC, 26, True))
+            for ev in upcoming[:5]:
+                t1_ = ev['team1']; t2_ = ev['team2']
+                is_p = t1_ in pt_teams or t2_ in pt_teams
+                clr  = _MY if is_p else (0.75, 0.75, 0.80, 1)
+                gl.add_widget(_lbl(
+                    f'  → {t1_[:18]}  vs  {t2_[:18]}   [{ev.get("stage", "?")}]',
+                    clr, 22))
+
+        sv.add_widget(gl)
+        root.add_widget(sv)
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.60, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=pop.dismiss)
+        root.add_widget(close)
+        pop.content = root
+        pop.open()
+
+    # ── Feature 8: Season calendar ────────────────────────────────────────────
+
+    def on_season_calendar(self, instance):
+        from kivy.uix.popup import Popup
+        from kivy.uix.label import Label
+        from kivy.uix.scrollview import ScrollView
+        from kivy.uix.gridlayout import GridLayout
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.button import Button
+        from datetime import date as _date
+
+        try:
+            conn     = sqlite3.connect(self.db_name)
+            cur_year = self.date_object.year
+            today    = self.date_object
+
+            tournaments = conn.execute("""
+                SELECT name, start_date, end_date, prizepool,
+                       CASE WHEN place1 IS NOT NULL THEN 1 ELSE 0 END as done
+                FROM tournaments
+                WHERE start_date LIKE ? OR start_date LIKE ?
+                ORDER BY start_date
+            """, (f'{cur_year}%', f'{cur_year + 1}%')).fetchall()
+
+            player_team = conn.execute(
+                "SELECT id FROM teams WHERE player='yes'"
+            ).fetchone()
+            contracts = []
+            if player_team:
+                contracts = conn.execute("""
+                    SELECT nickname, role, contract_end FROM players
+                    WHERE team_id=? AND contract_end IS NOT NULL
+                    ORDER BY contract_end
+                """, (player_team[0],)).fetchall()
+
+            bootcamp = conn.execute(
+                "SELECT planned_bootcamp_date FROM teams WHERE player='yes'"
+            ).fetchone()
+            conn.close()
+
+            pop  = Popup(title=f'Календарь сезона {cur_year}', size_hint=(0.78, 0.88))
+            root = BoxLayout(orientation='vertical', spacing=4, padding=6)
+            sv   = ScrollView(size_hint=(1, 1))
+            gl   = GridLayout(cols=1, size_hint_y=None, spacing=2, padding=(8, 4))
+            gl.bind(minimum_height=gl.setter('height'))
+
+            _ACC  = (0.35, 0.85, 1.00, 1)
+            _GOLD = (1.00, 0.85, 0.25, 1)
+            _GREEN= (0.25, 0.90, 0.42, 1)
+            _DIM  = (0.50, 0.50, 0.55, 1)
+            _RED  = (0.90, 0.30, 0.25, 1)
+            _WARN = (1.00, 0.70, 0.20, 1)
+
+            def _row_cal(label, value, lc=_DIM, vc=(0.90, 0.90, 0.90, 1)):
+                r  = BoxLayout(size_hint_y=None, height=28)
+                ll = Label(text=label, markup=True, color=lc, font_size='11sp',
+                           size_hint_x=0.55, halign='left', valign='middle')
+                ll.bind(size=ll.setter('text_size'))
+                vl = Label(text=value, markup=True, color=vc, font_size='11sp',
+                           size_hint_x=0.45, halign='right', valign='middle')
+                vl.bind(size=vl.setter('text_size'))
+                r.add_widget(ll); r.add_widget(vl)
+                return r
+
+            def _hdr(text, color=_ACC):
+                l = Label(text=f'[b]{text}[/b]', markup=True, color=color,
+                          size_hint_y=None, height=30, halign='left', valign='middle',
+                          font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            # Tournaments
+            gl.add_widget(_hdr('ТУРНИРЫ', _ACC))
+            for tname, tstart, tend, prize, done in tournaments:
+                is_ti    = 'International' in tname or 'TI' in tname
+                in_past  = tstart < str(today)
+                clr      = _DIM if done else (
+                           _GOLD if is_ti else (
+                           _GREEN if not in_past else _DIM))
+                try:
+                    days_away = (_date.fromisoformat(tstart) - today).days
+                    if days_away > 0:
+                        status = f'+{days_away}д'
+                    elif days_away >= -7:
+                        status = 'СЕЙЧАС'
+                    else:
+                        status = 'прошёл'
+                except Exception:
+                    status = 'done' if done else '?'
+                if done:
+                    status = 'DONE'
+                prize_str = f'${prize//1000}k' if prize else '—'
+                gl.add_widget(_row_cal(
+                    f'  {"[TI] " if is_ti else ""}{tname[:30]}',
+                    f'{tstart[:10]}  {prize_str}  [{status}]',
+                    lc=clr, vc=clr
+                ))
+
+            # Transfer windows
+            gl.add_widget(_hdr('ТРАНСФЕРНЫЕ ОКНА', _WARN))
+            for month, label in [('01', 'Январь'), ('08', 'Август')]:
+                w_date = f'{cur_year}-{month}-01'
+                w_end  = f'{cur_year}-{month}-31'
+                in_now = w_date <= str(today) <= w_end
+                gl.add_widget(_row_cal(
+                    f'  Окно: {label} {cur_year}',
+                    'ОТКРЫТО' if in_now else w_date,
+                    vc=_GREEN if in_now else _WARN
+                ))
+
+            # Contract expirations
+            if contracts:
+                gl.add_widget(_hdr('КОНТРАКТЫ', _RED))
+                for nick, role, cend in contracts:
+                    try:
+                        days = (_date.fromisoformat(cend) - today).days
+                        clr  = _RED if days < 60 else (_WARN if days < 180 else _DIM)
+                        gl.add_widget(_row_cal(
+                            f'  {nick} ({(role or "?")[:8]})',
+                            f'{cend}  ({days}д)',
+                            vc=clr
+                        ))
+                    except Exception:
+                        pass
+
+            # Planned bootcamp
+            if bootcamp and bootcamp[0]:
+                gl.add_widget(_hdr('БУТКЕМП', (0.40, 0.80, 0.40, 1)))
+                gl.add_widget(_row_cal('  Запланирован буткемп', bootcamp[0],
+                                       vc=(0.40, 0.80, 0.40, 1)))
+
+            sv.add_widget(gl)
+            root.add_widget(sv)
+            close = Button(text='Закрыть', size_hint_y=None, height=44,
+                           background_color=(0.60, 0.18, 0.18, 1), background_normal='')
+            close.bind(on_press=pop.dismiss)
+            root.add_widget(close)
+            pop.content = root
+            pop.open()
+        except Exception as _e:
+            T.log_err('on_season_calendar', _e)
+
     # ── Feature 1: Year-end processing ───────────────────────────────────────
 
     def _year_end_processing(self, year, conn):
@@ -3022,9 +3376,9 @@ class MainWindow(BoxLayout):
             )
             conn_bp.commit(); conn_bp.close()
 
-            from kivy.clock import Clock as _Clk
-            _Clk.schedule_once(
-                lambda dt: self._show_big_patch_popup(patch_name, mech_desc), 0.5
+            self._queue_popup(
+                lambda _pn=patch_name, _md=mech_desc:
+                    self._make_big_patch_popup(_pn, _md)
             )
         except Exception as _e:
             T.log_err('_trigger_big_patch', _e)
@@ -3062,6 +3416,144 @@ class MainWindow(BoxLayout):
             pop.open()
         except Exception as _e:
             T.log_err('_show_big_patch_popup', _e)
+
+    def _make_big_patch_popup(self, patch_name, mech_desc):
+        """Build and return (without opening) a big patch popup."""
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            pop  = Popup(title='', size_hint=(0.55, 0.35))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            def _bplbl(text, color=(0.92, 0.92, 0.92, 1), height=32, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_bplbl(
+                f'КРУПНЫЙ ПАТЧ {patch_name}',
+                (1.0, 0.85, 0.20, 1), 36, True
+            ))
+            root.add_widget(_bplbl(mech_desc, height=34))
+            close_btn = Button(
+                text='Понял', size_hint_y=None, height=42,
+                background_color=(0.18, 0.40, 0.65, 1), background_normal='',
+            )
+            close_btn.bind(on_press=pop.dismiss)
+            root.add_widget(close_btn)
+            pop.content = root
+            return pop
+        except Exception as _e:
+            T.log_err('_make_big_patch_popup', _e)
+            return None
+
+    def _build_leadership_clash_popup(self, clash_data):
+        """Build and return (without opening) a leadership clash popup."""
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            nick1   = clash_data['nick1']
+            nick2   = clash_data['nick2']
+            pid1    = clash_data['pid1']
+            pid2    = clash_data['pid2']
+            team_id = clash_data['team_id']
+
+            pop  = Popup(title='', size_hint=(0.65, 0.55))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            def _clbl(text, color=(0.92, 0.92, 0.92, 1), height=30, bold=False):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_clbl('КОНФЛИКТ ЛИДЕРОВ', (1.0, 0.60, 0.20, 1), 36, True))
+            root.add_widget(_clbl(
+                f'{nick1} и {nick2} не могут поделить авторитет в команде.',
+                height=32
+            ))
+            root.add_widget(_clbl('Выберите решение:', height=26))
+
+            def _apply_and_close(action):
+                pop.dismiss()
+                _cc = sqlite3.connect(self.db_name)
+                if action == 'support1':
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-5) WHERE id=?",
+                        (team_id,)
+                    )
+                    _cc.execute(
+                        "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+2) WHERE id=?",
+                        (pid1,)
+                    )
+                    _cc.execute(
+                        "UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?",
+                        (pid2,)
+                    )
+                elif action == 'equal':
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+3) WHERE id=?",
+                        (team_id,)
+                    )
+                    _cc.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                        ('Конфликт улажен — равные права.', str(self.date_object), 'Состав')
+                    )
+                elif action == 'kick1':
+                    for _slot in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+                        _row = _cc.execute(
+                            f"SELECT {_slot} FROM teams WHERE id=?", (team_id,)
+                        ).fetchone()
+                        if _row and _row[0] == pid1:
+                            _cc.execute(
+                                f"UPDATE teams SET {_slot}=NULL WHERE id=?", (team_id,)
+                            )
+                            break
+                    _cc.execute(
+                        "UPDATE players SET wants_to_leave=1 WHERE id=?", (pid1,)
+                    )
+                    _cc.execute(
+                        "UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+8) WHERE id=?",
+                        (team_id,)
+                    )
+                _cc.commit(); _cc.close()
+
+            btn_row = BoxLayout(size_hint_y=None, height=46, spacing=6)
+            b1 = Button(
+                text=f'Поддержать {nick1[:10]}',
+                background_color=(0.18, 0.40, 0.65, 1), background_normal='',
+            )
+            b1.bind(on_press=lambda _: _apply_and_close('support1'))
+            b2 = Button(
+                text='Равные права',
+                background_color=(0.25, 0.55, 0.25, 1), background_normal='',
+            )
+            b2.bind(on_press=lambda _: _apply_and_close('equal'))
+            b3 = Button(
+                text=f'Отчислить {nick1[:10]}',
+                background_color=(0.65, 0.20, 0.18, 1), background_normal='',
+            )
+            b3.bind(on_press=lambda _: _apply_and_close('kick1'))
+            btn_row.add_widget(b1)
+            btn_row.add_widget(b2)
+            btn_row.add_widget(b3)
+            root.add_widget(btn_row)
+            pop.content = root
+            return pop
+        except Exception as _e:
+            T.log_err('_build_leadership_clash_popup', _e)
+            return None
 
     def _check_planned_bootcamp(self, conn):
         today = str(self.date_object)

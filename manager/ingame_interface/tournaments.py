@@ -774,6 +774,9 @@ class MatchLogPopup(Popup):
         # BO per-map state
         self._map_wins         = {team1: 0, team2: 0}
         self._bo_needed        = best_of // 2 + 1 if best_of > 1 else 1
+        # Speed multiplier
+        self._speed_mult       = 1.0
+        self._speed_btns       = {}
         self._build()   # builds self._match_content and all live attrs
         if pre_match_team and db_name:
             # Show waiting splash while draft popup opens — don't reveal map yet
@@ -1006,6 +1009,21 @@ class MatchLogPopup(Popup):
         # ── buttons ───────────────────────────────────────────
         btn_bar = _BgBox(bg=_BG_DARK, orientation='horizontal',
                          size_hint_y=None, height=48, spacing=6, padding=(6, 4))
+        # Speed buttons ×1 / ×2 / ×5
+        for _lbl_txt, _mult in [('×1', 1.0), ('×2', 2.0), ('×5', 5.0)]:
+            _sb = Button(
+                text=_lbl_txt, size_hint_x=None, width=44,
+                background_color=(0.20, 0.55, 0.20, 1) if _mult == 1.0 else (0.25, 0.35, 0.50, 1),
+                background_normal='',
+                font_size='12sp',
+            )
+            def _press(_, m=_mult):
+                self._set_speed(m)
+                for _m2, _b2 in self._speed_btns.items():
+                    _b2.background_color = (0.20, 0.55, 0.20, 1) if _m2 == m else (0.25, 0.35, 0.50, 1)
+            _sb.bind(on_press=_press)
+            self._speed_btns[_mult] = _sb
+            btn_bar.add_widget(_sb)
         self._skip_btn = Button(text='Пропустить',
                                background_color=(0.45, 0.45, 0.15, 1),
                                background_normal='')
@@ -1411,8 +1429,11 @@ class MatchLogPopup(Popup):
         Animation.cancel_all(self._scroll, 'scroll_y')
         Animation(scroll_y=0, d=0.25, t='out_quad').start(self._scroll)
 
+    def _set_speed(self, mult):
+        self._speed_mult = mult
+
     def _tick(self, dt):
-        self._elapsed += dt
+        self._elapsed += dt * self._speed_mult
         changed = False
         while self._sched_idx < len(self._schedule):
             target_t, line = self._schedule[self._sched_idx]
@@ -1923,7 +1944,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     # ── Slot helpers ─────────────────────────────────────────────────────────
     _SLOT_W = 80
-    _SLOT_H = 60
+    _SLOT_H = 62   # portrait 80×46 ≈ 256/144 ratio; +16 name label = 62
 
     def _make_image_slot(label_text, bg_color, w=_SLOT_W, h=_SLOT_H):
         """Slot that can later show a hero portrait."""
@@ -1936,7 +1957,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                  size=lambda w2, _: setattr(_bg_rect, 'size', w2.size))
 
         img = _Img(source='', allow_stretch=True, keep_ratio=True,
-                   size_hint_y=None, height=h - 16)
+                   size_hint=(1, None), height=h - 16, mipmap=True)
         name_lbl = Label(text=label_text, font_size='8sp', color=(0.85, 0.85, 0.85, 1),
                          size_hint_y=None, height=16,
                          halign='center', valign='middle')
@@ -1983,8 +2004,9 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                 _ind.background_color = base
 
     # ── Draft board ──────────────────────────────────────────────────────────
+    # height: 24 (header) + 2 (spacing) + _SLOT_H (bans) + 2 (spacing) + _SLOT_H (picks) + 4 (padding)
     board = BoxLayout(orientation='vertical', size_hint_y=None,
-                      height=_SLOT_H * 2 + 30, spacing=2, padding=(0, 2))
+                      height=_SLOT_H * 2 + 32, spacing=2, padding=(0, 2))
 
     # Team name labels row
     team_hdr = BoxLayout(size_hint_y=None, height=24)
@@ -2167,7 +2189,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         portrait_h = _CARD_H - 16
         if img_path:
             portrait = _Img(source=img_path, allow_stretch=True, keep_ratio=True,
-                            size_hint=(1, None), height=portrait_h)
+                            size_hint=(1, None), height=portrait_h, mipmap=True)
         else:
             portrait = Label(text='?', color=(0.60, 0.60, 0.60, 1),
                              size_hint=(1, None), height=portrait_h,

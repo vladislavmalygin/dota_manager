@@ -614,6 +614,8 @@ def dota_simulation_logged(team1, team2, skills):
         ('башню трона', 'T'),
     ]
 
+    _specials_fired = set()
+
     while abs(tokens[team1] - tokens[team2]) < 24:
         s1 = sum(_ls1(r, k) for r in all_r1 for k in ('macro_skills', 'micro_skills'))
         s2 = sum(_ls2(r, k) for r in all_r2 for k in ('macro_skills', 'micro_skills'))
@@ -652,6 +654,44 @@ def dota_simulation_logged(team1, team2, skills):
             _add(f'  {_K}{minute} мин: {hero} — {team2} уничтожает {obj}! +{ks} килов{_X}',
                  'lategame', 'kill', winner_team=team2)
         minute += 5
+
+        # ── Special events (fire at most once per game) ───────────────────────
+        token_diff = abs(tokens[team1] - tokens[team2])
+        leading  = team1 if tokens[team1] >= tokens[team2] else team2
+        trailing = team2 if leading == team1 else team1
+
+        # Mega Creeps — when one team is clearly ahead, trailing fights back
+        if ('mega' not in _specials_fired and token_diff > 16
+                and random.random() < 0.30):
+            _specials_fired.add('mega')
+            trailing_t = t1 if trailing == team1 else t2
+            _add(f'  {_R}МЕГА КРИПЫ активированы у {leading}! '
+                 f'{trailing_t["carry"]} организует контратаку!  '
+                 f'[{kills[team1]}:{kills[team2]}]{_X}', 'lategame', 'mega_creeps')
+            tokens[trailing] += 6
+            minute += 3
+
+        # Aghanim's Scepter spike
+        if 'aghanim' not in _specials_fired and random.random() < 0.18:
+            _specials_fired.add('aghanim')
+            sup = (t1 if leading == team1 else t2)['fs']
+            _add(f'  {_R}{minute} мин: {sup} активирует Aghanim\'s! '
+                 f'Массовый контроль — {leading} добивает команду!  '
+                 f'[{kills[team1]}:{kills[team2]}]{_X}', 'lategame', 'aghanim')
+            tokens[leading] += 3
+            kills[leading]  += random.randint(2, 4)
+            minute += 2
+
+        # Black Hole (Enigma)
+        if 'black_hole' not in _specials_fired and random.random() < 0.15:
+            _specials_fired.add('black_hole')
+            mid_t = (t1 if leading == team1 else t2)['mid']
+            _add(f'  {_R}{minute} мин: {mid_t} — Чёрная дыра! '
+                 f'{leading} уничтожает 5 героев!  '
+                 f'[{kills[team1]}:{kills[team2]}]{_X}', 'lategame', 'black_hole')
+            tokens[leading] += 5
+            kills[leading]  += 5
+            minute += 3
 
     winner = team1 if tokens[team1] > tokens[team2] else team2
     _sep('lategame')
