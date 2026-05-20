@@ -129,16 +129,71 @@ class AcademyPopup(Popup):
         sv = ScrollView(size_hint=(1, 0.65))
         grid = GridLayout(cols=1, size_hint_y=None, spacing=2)
         grid.bind(minimum_height=grid.setter('height'))
+        _PROMOTE_THRESHOLD = 55  # avg skill to allow promotion
+
         if youth:
-            grid.add_widget(_lbl('  Ник             Роль     Micro  Macro  Soft   Потенциал',
-                                  _DIM, height=22))
+            grid.add_widget(_lbl('  Молодёжный состав:', _ACCENT, height=24, bold=True))
             for pid, nick, role, mi, mx, so, cap in youth:
                 stars = _potential(cap)
-                grid.add_widget(_lbl(
-                    f'  {(nick or "?")[:14]:<14}  {_ROLE_SHORT.get(role,"?"):<8} '
-                    f'{mi:3d}    {mx:3d}    {so:3d}   {stars}',
-                    _WHITE, height=22
-                ))
+                avg = ((mi or 0) + (mx or 0)) // 2
+                can_promote = avg >= _PROMOTE_THRESHOLD
+                can_train = budget >= 5_000
+
+                prow = BoxLayout(size_hint_y=None, height=44, spacing=4)
+                info_txt = (
+                    f'[b]{(nick or "?")[:12]}[/b]  {_ROLE_SHORT.get(role,"?")}  '
+                    f'M{mi}/Ma{mx}/S{so}  {stars}'
+                )
+                if can_promote:
+                    info_txt += '  [color=ffd700][ГОТОВ][/color]'
+                info_lbl = Label(text=info_txt, markup=True, color=_WHITE,
+                                 halign='left', valign='middle', font_size='12sp')
+                info_lbl.bind(size=info_lbl.setter('text_size'))
+                prow.add_widget(info_lbl)
+
+                # Train button ($5k → weakest skill +1)
+                train_btn = Button(
+                    text='Трен.', size_hint=(None, None), width=70, height=38,
+                    background_color=(0.20, 0.40, 0.20, 1) if can_train else (0.3, 0.3, 0.3, 1),
+                    background_normal='', font_size='12sp',
+                    disabled=not can_train,
+                )
+                def _train(_, _pid=pid, _mi=mi, _mx=mx, _so=so):
+                    weakest = min(
+                        [('micro_skills', _mi), ('macro_skills', _mx), ('soft_skills', _so)],
+                        key=lambda x: x[1]
+                    )[0]
+                    conn2 = sqlite3.connect(self.db_name)
+                    conn2.execute("UPDATE teams SET budget=MAX(0,budget-5000) WHERE id=?", (team_id,))
+                    conn2.execute(f"UPDATE players SET {weakest}=MIN(100,COALESCE({weakest},0)+1) WHERE id=?", (_pid,))
+                    conn2.commit(); conn2.close()
+                    self._build()
+                train_btn.bind(on_press=_train)
+                prow.add_widget(train_btn)
+
+                # Promote button
+                promote_btn = Button(
+                    text='В основу', size_hint=(None, None), width=90, height=38,
+                    background_color=(0.55, 0.38, 0.05, 1) if can_promote else (0.3, 0.3, 0.3, 1),
+                    background_normal='', font_size='12sp',
+                    disabled=not can_promote,
+                )
+                def _promote(_, _pid=pid, _nick=nick):
+                    conn3 = sqlite3.connect(self.db_name)
+                    conn3.execute(
+                        "UPDATE players SET is_youth=0, morale=MIN(10,COALESCE(morale,5)+2), "
+                        "time_in_team=COALESCE(time_in_team,0)+1 WHERE id=?", (_pid,)
+                    )
+                    conn3.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+                        (f'{_nick} повышен из академии в основной состав! Лояльность +2 мораль.',
+                         'Академия')
+                    )
+                    conn3.commit(); conn3.close()
+                    self._build()
+                promote_btn.bind(on_press=_promote)
+                prow.add_widget(promote_btn)
+                grid.add_widget(prow)
         else:
             grid.add_widget(_lbl('  Нет молодёжи в команде.', _DIM))
         sv.add_widget(grid)

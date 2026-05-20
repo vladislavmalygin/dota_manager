@@ -26,6 +26,8 @@ _EVENTS = [
     ('controversy',          3),
     # Feature 8: Investors
     ('investor_offer',       3),
+    # Sponsor acquisition
+    ('sponsor_offer',        5),
     # Feature 9: Injuries
     ('player_injury',        5),
     # Feature 10: Force-majeure
@@ -34,6 +36,10 @@ _EVENTS = [
     ('sponsor_viral_moment', 4),
     ('equipment_theft',      2),
     ('no_event',             3),
+    # Psychotype-driven events
+    ('leader_demands',       4),
+    ('wildcard_incident',    3),
+    ('solo_carry_demands',   3),
 ]
 _EVENT_NAMES, _EVENT_WEIGHTS = zip(*_EVENTS)
 
@@ -397,6 +403,31 @@ def _apply(cur, event, team_id, player_ids, today=None):
              'game_date': str(today)},
         )
 
+    # ── Sponsor acquisition ──────────────────────────────────────────────────
+    if event == 'sponsor_offer':
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM sponsors WHERE is_active=1"
+            )
+            if (cur.fetchone() or (0,))[0] > 0:
+                return None  # already has sponsor
+            cur.execute(
+                "SELECT id, name, monthly_income FROM sponsors "
+                "WHERE is_active=0 ORDER BY RANDOM() LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            sid, sname, sincome = row
+        except Exception:
+            return None
+        return (
+            'Интерес спонсора',
+            f'{sname} хочет стать партнёром команды (${sincome:,}/мес). '
+            f'Рассмотрите предложение в разделе Спонсоры.',
+            'popup',
+        )
+
     # ── Feature 9: Injuries ──────────────────────────────────────────────────
     if event == 'player_injury':
         if not today:
@@ -498,6 +529,88 @@ def _apply(cur, event, team_id, player_ids, today=None):
         ]
         return ('Вирусный момент',
                 f'Спонсор в восторге — {random.choice(moments)}. Бонус: +${bonus:,}.')
+
+    # ── Psychotype events ─────────────────────────────────────────────────────
+    if event == 'leader_demands':
+        # Leader psychotype demands recognition — either morale boost (accept) or conflict
+        cur.execute(
+            "SELECT id, nickname FROM players "
+            "WHERE id IN ({}) AND COALESCE(psychotype,'team_player')='leader'".format(
+                ','.join('?' * len(player_ids))),
+            list(player_ids)
+        )
+        leaders = cur.fetchall()
+        if not leaders:
+            return None
+        pid, nick = random.choice(leaders)
+        accept = random.random() < 0.60
+        if accept:
+            cur.execute("UPDATE players SET morale=MIN(10,COALESCE(morale,5)+2) WHERE id=?", (pid,))
+            cur.execute("UPDATE teams SET cohesion=MIN(100,COALESCE(cohesion,0)+5) WHERE id=?", (team_id,))
+            return ('Лидер команды',
+                    f'{nick} получил признание капитана. +2 мораль, +5 сыгранность.')
+        else:
+            cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?", (pid,))
+            cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-10) WHERE id=?", (team_id,))
+            return ('Требование лидера',
+                    f'{nick} недоволен своим статусом в команде. −1 мораль, −10 сыгранность.',
+                    'popup')
+
+    if event == 'wildcard_incident':
+        cur.execute(
+            "SELECT id, nickname FROM players "
+            "WHERE id IN ({}) AND COALESCE(psychotype,'team_player')='wildcard'".format(
+                ','.join('?' * len(player_ids))),
+            list(player_ids)
+        )
+        wildcards = cur.fetchall()
+        if not wildcards:
+            return None
+        pid, nick = random.choice(wildcards)
+        outcomes = [
+            ('positive', f'{nick} удивил всех нестандартным решением — вирусный момент! +5 репутации.'),
+            ('negative', f'{nick} устроил скандал в соцсетях — репутация −3, штраф.'),
+            ('neutral',  f'{nick} отказался от стандартной тренировки — конфликт с тренером.'),
+        ]
+        outcome, msg = random.choice(outcomes)
+        fine = random.choice([5_000, 10_000])
+        if outcome == 'positive':
+            try:
+                cur.execute("UPDATE teams SET org_reputation=MIN(100,org_reputation+5) WHERE id=?", (team_id,))
+            except Exception:
+                pass
+        elif outcome == 'negative':
+            cur.execute("UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (fine, team_id))
+            try:
+                cur.execute("UPDATE teams SET org_reputation=MAX(0,org_reputation-3) WHERE id=?", (team_id,))
+            except Exception:
+                pass
+        else:
+            cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?", (pid,))
+        return ('Wildcard выходка', msg, 'popup')
+
+    if event == 'solo_carry_demands':
+        cur.execute(
+            "SELECT id, nickname FROM players "
+            "WHERE id IN ({}) AND COALESCE(psychotype,'team_player')='solo_carry'".format(
+                ','.join('?' * len(player_ids))),
+            list(player_ids)
+        )
+        solos = cur.fetchall()
+        if not solos:
+            return None
+        pid, nick = random.choice(solos)
+        # Solo carry demands more resources — accept = cohesion loss but morale up; decline = morale down
+        accept = random.random() < 0.50
+        if accept:
+            cur.execute("UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?", (pid,))
+            cur.execute("UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-8) WHERE id=?", (team_id,))
+            return ('Ресурсы для керри',
+                    f'{nick} получил больше фарма — мораль +1, но сыгранность −8 (команда недовольна).')
+        else:
+            cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-2) WHERE id=?", (pid,))
+            return ('Конфликт с керри',
+                    f'{nick} требовал приоритет фарма — отказ. Мораль −2.', 'popup')
 
     if event == 'equipment_theft':
         loss = random.choice([15_000, 20_000, 25_000])

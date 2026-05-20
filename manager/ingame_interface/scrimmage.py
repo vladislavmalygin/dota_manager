@@ -168,52 +168,72 @@ class ScrimmagePopup(Popup):
         self._my_team, budget = row
 
         c.execute(
-            "SELECT name, COALESCE(rating,0) FROM teams WHERE player!='yes' "
-            "ORDER BY RANDOM() LIMIT 20"
+            "SELECT name, COALESCE(rating,0), COALESCE(region,'?') FROM teams "
+            "WHERE player!='yes' AND carry IS NOT NULL "
+            "ORDER BY COALESCE(rating,0) DESC"
         )
-        opponents = c.fetchall()
+        self._all_opponents = c.fetchall()
+
+        # Check daily limit
+        gd = c.execute("SELECT date FROM save WHERE id=1").fetchone()
+        self._game_date_str = gd[0] if gd else None
+        last_scrim = c.execute(
+            "SELECT last_scrimmage_date FROM teams WHERE player='yes'"
+        ).fetchone()
+        self._already_played_today = bool(
+            last_scrim and last_scrim[0] == self._game_date_str
+        )
         conn.close()
 
         root = BoxLayout(orientation='vertical', spacing=4, padding=6)
+        self._root_box = root
 
-        # Check daily limit
-        try:
-            gd = c.execute("SELECT date FROM save WHERE id=1").fetchone()
-            self._game_date_str = gd[0] if gd else None
-            last_scrim = c.execute(
-                "SELECT last_scrimmage_date FROM teams WHERE player='yes'"
-            ).fetchone()
-            self._already_played_today = (
-                last_scrim and last_scrim[0] == self._game_date_str
-            )
-        except Exception:
-            self._game_date_str = None
-            self._already_played_today = False
+        info_clr = (1.0, 0.4, 0.3, 1) if self._already_played_today else _ACCENT
+        info_txt = ('X  Уже сыграли клан вар сегодня. Завтра можно снова.'
+                    if self._already_played_today
+                    else 'Кланвары: 1 раз в день. Победа: +0.8 XP, +1 мораль, +3 сыгранность.')
+        root.add_widget(_lbl(info_txt, color=info_clr, height=32, halign='center'))
 
-        if self._already_played_today:
-            root.add_widget(_lbl(
-                'X  Уже сыграли клан вар сегодня. Завтра можно снова.',
-                color=(1.0, 0.4, 0.3, 1), height=34, halign='center',
-            ))
-        else:
-            root.add_widget(_lbl(
-                'Кланвары: 1 раз в день. +1 сыгранность всегда. Победа: +0.8 XP, +1 мораль.',
-                color=_ACCENT, height=34, halign='center',
-            ))
-        root.add_widget(_lbl(
-            'Поражение: +0.3 XP. Сыгранность не растёт при активном конфликте в команде.',
-            color=_DIM, height=30, halign='center', font_size='13sp',
+        # ── Search / filter bar ───────────────────────────────
+        from kivy.uix.textinput import TextInput
+        filter_bar = BoxLayout(size_hint_y=None, height=34, spacing=6)
+        filter_bar.add_widget(_lbl('Поиск:', height=34, color=_DIM))
+        self._search_inp = TextInput(
+            hint_text='название команды...', multiline=False,
+            size_hint_x=0.60, font_size='14sp',
+        )
+        self._search_inp.bind(text=self._apply_search)
+        filter_bar.add_widget(self._search_inp)
+        root.add_widget(filter_bar)
+
+        self._sv   = ScrollView(size_hint=(1, 1))
+        self._grid = GridLayout(cols=1, size_hint_y=None, spacing=3)
+        self._grid.bind(minimum_height=self._grid.setter('height'))
+        self._fill_grid('')
+        self._sv.add_widget(self._grid)
+        root.add_widget(self._sv)
+
+        root.add_widget(Button(
+            text='Отмена', size_hint_y=None, height=46,
+            background_color=(0.55, 0.18, 0.18, 1), background_normal='',
+            on_press=self.dismiss,
         ))
+        self.content = root
 
-        sv   = ScrollView(size_hint=(1, 1))
-        grid = GridLayout(cols=1, size_hint_y=None, spacing=3)
-        grid.bind(minimum_height=grid.setter('height'))
+    def _apply_search(self, _inp, text):
+        self._fill_grid(text.strip().lower())
 
-        for opp_name, opp_rating in opponents:
+    def _fill_grid(self, query):
+        self._grid.clear_widgets()
+        shown = [
+            (n, r, reg) for n, r, reg in self._all_opponents
+            if not query or query in n.lower()
+        ]
+        for opp_name, opp_rating, region in shown:
             row_box = _BgBox(bg=_BG_MED, orientation='horizontal',
                              size_hint_y=None, height=44, padding=(8, 0), spacing=6)
             row_box.add_widget(_lbl(
-                f'{opp_name}  (рейтинг {int(opp_rating)})',
+                f'{opp_name}  [{region}]  рейт. {int(opp_rating)}',
                 height=44,
             ))
             btn = Button(
@@ -225,16 +245,7 @@ class ScrimmagePopup(Popup):
             )
             btn.bind(on_press=lambda _, opp=opp_name: self._play(opp))
             row_box.add_widget(btn)
-            grid.add_widget(row_box)
-
-        sv.add_widget(grid)
-        root.add_widget(sv)
-        root.add_widget(Button(
-            text='Отмена', size_hint_y=None, height=46,
-            background_color=(0.55, 0.18, 0.18, 1), background_normal='',
-            on_press=self.dismiss,
-        ))
-        self.content = root
+            self._grid.add_widget(row_box)
 
     def _play(self, opponent):
         from ingame_interface.tournaments import MatchLogPopup

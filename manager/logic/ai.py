@@ -426,7 +426,15 @@ def apply_training_from_games(db_name, games_played, season=None, placements=Non
                 continue
 
             lr_factor = learning_rate / 5.0
-            xp_gain = (competence / 5.0) * _BASE_XP_PER_GAME * n_games * lr_factor
+            # Analyst skill: +10% XP per level for player team
+            analyst_mult = 1.0
+            if is_player_team:
+                try:
+                    from logic.manager_skills import get_skill_level as _gsl
+                    analyst_mult = 1.0 + _gsl(db_name, 'analyst') * 0.10
+                except Exception:
+                    pass
+            xp_gain = (competence / 5.0) * _BASE_XP_PER_GAME * n_games * lr_factor * analyst_mult
             new_xp = (xp or 0.0) + xp_gain
 
             gained = 0
@@ -800,6 +808,22 @@ def ai_poach_attempt(db_name, game_date_str):
     conn.close()
 
 
+def _transfer_fee(micro, macro, contract_end_str, game_date_str):
+    """Transfer fee: avg_skill^1.8 * 400, modified by contract length. Floor $15k."""
+    from datetime import date as _date
+    avg = max(1, ((micro or 1) + (macro or 1)) // 2)
+    base = int((avg ** 1.8) * 400)
+    try:
+        days = (_date.fromisoformat(contract_end_str) -
+                _date.fromisoformat(game_date_str)).days
+        months = max(0, days / 30)
+    except Exception:
+        months = 12
+    contract_mult = 0.75 + min(0.40, months / 60)
+    fee = int(base * contract_mult)
+    return max(15_000, round(fee / 5_000) * 5_000)
+
+
 def ai_buy_offer(db_name):
     """Monthly: AI teams may send purchase offers for player's best players."""
     import random as _r
@@ -850,7 +874,6 @@ def ai_buy_offer(db_name):
         # Find an AI team that can afford
         gd = cur.execute("SELECT date FROM save WHERE id=1").fetchone()
         gd_str = gd[0] if gd else '2024-01-01'
-        from ingame_interface.transfers import _transfer_fee
         fee = _transfer_fee(micro, macro, cend or gd_str, gd_str)
 
         cur.execute("""

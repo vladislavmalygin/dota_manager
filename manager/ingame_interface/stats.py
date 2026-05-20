@@ -247,3 +247,115 @@ class StatsPopup(Popup):
 
 def show_stats_popup(db_name):
     StatsPopup(db_name=db_name).open()
+
+
+class LeaderboardPopup(Popup):
+    """Global player skill & experience leaderboard."""
+
+    def __init__(self, db_name, **kw):
+        super().__init__(**kw)
+        self.title = 'Топ игроки сцены'
+        self.size_hint = (0.82, 0.88)
+        self._build(db_name)
+
+    def _build(self, db_name):
+        import sqlite3 as _sq
+        conn = _sq.connect(db_name)
+        c = conn.cursor()
+
+        my_pids = set()
+        my_row = c.execute("SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE player='yes'").fetchone()
+        if my_row:
+            my_pids = {str(p) for p in my_row if p}
+
+        # Top by skill
+        top_skill = c.execute("""
+            SELECT p.nickname, p.role, p.micro_skills+p.macro_skills as sk,
+                   COALESCE(p.age,22), t.name, p.id
+            FROM players p JOIN teams t ON t.id=p.team_id
+            WHERE p.team_id != 0
+            ORDER BY sk DESC LIMIT 15
+        """).fetchall()
+
+        # Top by experience (comp_exp)
+        top_exp = c.execute("""
+            SELECT p.nickname, p.role, COALESCE(p.comp_exp,0) as exp,
+                   COALESCE(p.age,22), t.name, p.id
+            FROM players p JOIN teams t ON t.id=p.team_id
+            WHERE p.team_id != 0
+            ORDER BY exp DESC LIMIT 10
+        """).fetchall()
+
+        conn.close()
+
+        _BG = (0.07, 0.09, 0.13, 1)
+        _ACC = (0.35, 0.85, 1.00, 1)
+        _GOLD = (1.00, 0.85, 0.25, 1)
+        _W = (0.92, 0.92, 0.92, 1)
+        _D = (0.55, 0.55, 0.55, 1)
+        _MY = (0.50, 0.90, 1.00, 1)
+
+        def _lbl2(text, color=_W, height=26, sw=1.0, halign='left'):
+            l = Label(text=text, markup=True, color=color, size_hint_x=sw,
+                      size_hint_y=None, height=height,
+                      halign=halign, valign='middle', font_size='12sp')
+            l.bind(size=l.setter('text_size'))
+            return l
+
+        root = BoxLayout(orientation='vertical', padding=8, spacing=6)
+
+        sv = ScrollView(size_hint=(1, 1))
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=4)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        # Top by skill
+        hdr1 = Label(text='[b]ТОП-15 ПО СКИЛЛУ (micro+macro)[/b]', markup=True,
+                     color=_ACC, size_hint_y=None, height=30,
+                     halign='center', valign='middle', font_size='13sp')
+        hdr1.bind(size=hdr1.setter('text_size'))
+        gl.add_widget(hdr1)
+
+        _ROLE_SHORT2 = {'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Off',
+                       'partial_support': 'Sup4', 'full_support': 'Sup5'}
+        for i, (nick, role, sk, age, team, pid) in enumerate(top_skill, 1):
+            is_my = str(pid) in my_pids
+            clr = _MY if is_my else (_GOLD if i == 1 else _W)
+            row = BoxLayout(size_hint_y=None, height=26)
+            row.add_widget(_lbl2(f'{i}.', clr, sw=0.07, halign='right'))
+            row.add_widget(_lbl2(f'[b]{nick}[/b]' if is_my else nick, clr, sw=0.25))
+            row.add_widget(_lbl2(_ROLE_SHORT2.get(role, role or '?'), _D, sw=0.10))
+            row.add_widget(_lbl2(f'{sk}', clr, sw=0.10, halign='center'))
+            row.add_widget(_lbl2(f'{age}л', _D, sw=0.08, halign='center'))
+            row.add_widget(_lbl2(team.strip()[:20] if team else '—', _D, sw=0.40))
+            gl.add_widget(row)
+
+        # Top by experience
+        hdr2 = Label(text='[b]ТОП-10 ВЕТЕРАНЫ (опыт матчей)[/b]', markup=True,
+                     color=_ACC, size_hint_y=None, height=30,
+                     halign='center', valign='middle', font_size='13sp')
+        hdr2.bind(size=hdr2.setter('text_size'))
+        gl.add_widget(hdr2)
+
+        for i, (nick, role, exp, age, team, pid) in enumerate(top_exp, 1):
+            is_my = str(pid) in my_pids
+            clr = _MY if is_my else (_GOLD if i == 1 else _W)
+            row = BoxLayout(size_hint_y=None, height=26)
+            row.add_widget(_lbl2(f'{i}.', clr, sw=0.07, halign='right'))
+            row.add_widget(_lbl2(f'[b]{nick}[/b]' if is_my else nick, clr, sw=0.25))
+            row.add_widget(_lbl2(f'{exp} матчей', clr, sw=0.20, halign='center'))
+            row.add_widget(_lbl2(f'{age}л', _D, sw=0.08, halign='center'))
+            row.add_widget(_lbl2(team.strip()[:24] if team else '—', _D, sw=0.40))
+            gl.add_widget(row)
+
+        sv.add_widget(gl)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+
+def show_leaderboard_popup(db_name):
+    LeaderboardPopup(db_name=db_name).open()

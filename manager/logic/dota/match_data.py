@@ -196,6 +196,30 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
         pass
 
     conn.close()
+
+    # Tactician skill: +5% per level to player team skills only
+    try:
+        from logic.manager_skills import get_skill_level as _gsl
+        tac_lvl = _gsl(db_name, 'tactician')
+        if tac_lvl > 0:
+            import sqlite3 as _sq2
+            _pt = _sq2.connect(db_name).execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+            if _pt:
+                player_team_name = _pt[0].strip()
+                tac_mult = 1.0 + tac_lvl * 0.05
+                team_key = None
+                if team1.strip() == player_team_name:
+                    team_key = 'team1'
+                elif team2.strip() == player_team_name:
+                    team_key = 'team2'
+                if team_key:
+                    for rk in skills[team_key]:
+                        for sk in ('micro_skills', 'macro_skills', 'soft_skills'):
+                            if sk in skills[team_key][rk]:
+                                skills[team_key][rk][sk] = max(1, int(skills[team_key][rk][sk] * tac_mult))
+    except Exception:
+        pass
+
     return skills
 
 

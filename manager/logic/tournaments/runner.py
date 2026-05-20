@@ -861,7 +861,7 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
                 (rating_pts, tid),
             )
 
-    # Cohesion +5 for all 16 participating teams
+    # Cohesion +30 for all 16 participating teams
     all_participants = list(placements.keys()) + [t for t, _ in group_eliminated]
     for team_name in all_participants:
         tid = id_map.get(team_name.strip())
@@ -908,7 +908,7 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
     except Exception:
         pass
 
-    # Rival tracking (Feature 3)
+    # Rival tracking + story events
     try:
         player_row = cur.execute(
             "SELECT id, rival_team_id FROM teams WHERE player='yes'"
@@ -918,9 +918,9 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
             if rival_id:
                 rival_name_row = cur.execute("SELECT name FROM teams WHERE id=?", (rival_id,)).fetchone()
                 rival_name_str = rival_name_row[0].strip() if rival_name_row else ''
-                player_place = placements.get(
-                    cur.execute("SELECT name FROM teams WHERE id=?", (ptid,)).fetchone()[0].strip()
-                    if ptid else '', 99)
+                my_name_row = cur.execute("SELECT name FROM teams WHERE id=?", (ptid,)).fetchone()
+                my_name_str = my_name_row[0].strip() if my_name_row else ''
+                player_place = placements.get(my_name_str, 99)
                 rival_place = placements.get(rival_name_str, 99)
                 if rival_place < 99 and player_place < 99:
                     if player_place < rival_place:
@@ -928,16 +928,43 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
                             "UPDATE teams SET rival_wins=COALESCE(rival_wins,0)+1 WHERE id=?",
                             (ptid,)
                         )
+                        # Story event: we beat rival
+                        import random as _rnd
+                        morale_msgs = [
+                            f'Обошли {rival_name_str}! Команда заряжена — +1 мораль всем.',
+                            f'{rival_name_str} позади нас. Победа над соперником вдохновляет!',
+                        ]
+                        conn.execute("INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                                     (_rnd.choice(morale_msgs), 'now', 'Соперничество'))
+                        # +1 morale to all player roster
+                        slots = cur.execute("SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?", (ptid,)).fetchone() or ()
+                        for pid in slots:
+                            if pid:
+                                cur.execute("UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?", (pid,))
                     elif rival_place < player_place:
                         cur.execute(
                             "UPDATE teams SET rival_losses=COALESCE(rival_losses,0)+1 WHERE id=?",
                             (ptid,)
                         )
+                        # Rival triumph story: morale hit
+                        import random as _rnd
+                        if rival_place == 1:
+                            msg = f'{rival_name_str} выиграли турнир пока мы заняли {player_place}-е место. Обидно. −1 мораль.'
+                        else:
+                            msg = f'{rival_name_str} снова впереди нас ({rival_place} vs {player_place}). Команда расстроена. −1 мораль.'
+                        conn.execute("INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                                     (msg, 'now', 'Соперничество'))
+                        slots = cur.execute("SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?", (ptid,)).fetchone() or ()
+                        for pid in slots:
+                            if pid:
+                                cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?", (pid,))
     except Exception:
         pass
 
-    # Org reputation boost based on placement (Feature 4)
-    rep_by_place = {1: 15, 2: 10, 3: 7, 4: 5, 5: 3, 6: 3, 7: 2, 8: 2}
+    # Org reputation + fans boost based on placement
+    rep_by_place  = {1: 15, 2: 10, 3: 7, 4: 5, 5: 3, 6: 3, 7: 2, 8: 2}
+    fans_by_place = {1: 50_000, 2: 30_000, 3: 20_000, 4: 15_000,
+                     5: 8_000,  6: 8_000,  7: 5_000,  8: 5_000}
     for i, team_name in enumerate(final_standings):
         if not team_name:
             continue
@@ -945,11 +972,19 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
         if not tid:
             continue
         place = i + 1
-        rep_gain = rep_by_place.get(place, 1)
+        rep_gain  = rep_by_place.get(place, 1)
+        fans_gain = fans_by_place.get(place, 2_000)
         try:
             cur.execute(
                 "UPDATE teams SET org_reputation=MIN(100, COALESCE(org_reputation,20)+?) WHERE id=?",
                 (rep_gain, tid),
+            )
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                "UPDATE teams SET fans=COALESCE(fans,0)+? WHERE id=?",
+                (fans_gain, tid),
             )
         except Exception:
             pass
@@ -1120,6 +1155,29 @@ def finalize_tournament(db_name, tourn_id, tourn_name, final_ev, minor_ev=None,
 
     if _itw(game_date or ''):
         ai_transfers(db_name, placements=placements, group_eliminated=group_elim)
+
+    # Tournament mini-objective resolution
+    try:
+        from logic.objectives import resolve_objective
+        conn_pt = sqlite3.connect(db_name)
+        pt_name = conn_pt.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        conn_pt.close()
+        if pt_name:
+            resolve_objective(db_name, tourn_id, placements, group_elim, pt_name[0].strip())
+    except Exception:
+        pass
+
+    # Award manager skill point for participating in a tournament
+    try:
+        from ingame_interface.skills import award_skill_point, ensure_skills_tables
+        ensure_skills_tables(db_name)
+        conn_sp = sqlite3.connect(db_name)
+        pt_sp = conn_sp.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        conn_sp.close()
+        if pt_sp and pt_sp[0].strip() in placements:
+            award_skill_point(db_name, tourn_name)
+    except Exception:
+        pass
 
     # Player result message
     try:

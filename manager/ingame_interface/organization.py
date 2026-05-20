@@ -214,6 +214,43 @@ class OrganizationPopup(Popup):
                      cg=coh_gain, mg=morale_gain: _do_bootcamp(db, tid, c, cg, mg, self))
             grid.add_widget(btn)
 
+        # Bootcamp planner button
+        try:
+            planned = conn.execute(
+                "SELECT planned_bootcamp_date, planned_bootcamp_cost FROM teams WHERE id=?",
+                (team_id,)
+            ).fetchone() if False else None  # conn already closed above — re-query
+        except Exception:
+            planned = None
+        conn3 = sqlite3.connect(db_name)
+        planned = conn3.execute(
+            "SELECT COALESCE(planned_bootcamp_date,''), COALESCE(planned_bootcamp_cost,0) "
+            "FROM teams WHERE id=?", (team_id,)
+        ).fetchone()
+        conn3.close()
+        if planned and planned[0]:
+            grid.add_widget(self._row(
+                f'  Запланирован буткемп на [b]{planned[0]}[/b]  (${planned[1]:,})',
+                height=36,
+            ))
+            cancel_plan_btn = Button(
+                text='Отменить запланированный буткемп',
+                size_hint_y=None, height=40,
+                background_color=(0.55, 0.20, 0.20, 1), background_normal='',
+            )
+            cancel_plan_btn.bind(on_press=lambda _, db=db_name, tid=team_id:
+                                 _cancel_planned_bootcamp(db, tid, self))
+            grid.add_widget(cancel_plan_btn)
+        else:
+            plan_btn = Button(
+                text='Запланировать буткемп',
+                size_hint_y=None, height=44,
+                background_color=(0.18, 0.35, 0.50, 1), background_normal='',
+            )
+            plan_btn.bind(on_press=lambda _, db=db_name, tid=team_id, bud=budget:
+                          _open_bootcamp_planner(db, tid, bud, self))
+            grid.add_widget(plan_btn)
+
         # Loan button — only if budget < 2 months wages
         if total_wage > 0 and budget < total_wage * 2:
             loan_btn = Button(
@@ -333,6 +370,79 @@ def _pick_rival(db_name, team_id, parent_popup):
     sv.add_widget(grid)
     root.add_widget(sv)
     popup.open()
+
+
+def _cancel_planned_bootcamp(db_name, team_id, popup):
+    conn = sqlite3.connect(db_name)
+    conn.execute(
+        "UPDATE teams SET planned_bootcamp_date=NULL, planned_bootcamp_cost=0 WHERE id=?",
+        (team_id,)
+    )
+    conn.commit(); conn.close()
+    popup.dismiss()
+
+
+def _open_bootcamp_planner(db_name, team_id, budget, popup):
+    from kivy.uix.popup import Popup
+    from kivy.uix.boxlayout import BoxLayout
+    from kivy.uix.gridlayout import GridLayout
+    from kivy.uix.label import Label
+    from kivy.uix.button import Button
+    from datetime import date as _d, timedelta
+    import sqlite3 as _sq
+
+    gd = _sq.connect(db_name).execute("SELECT date FROM save WHERE id=1").fetchone()
+    today = _d.fromisoformat(gd[0]) if gd else _d.today()
+
+    p = Popup(title='Запланировать буткемп', size_hint=(0.55, 0.55))
+    root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+    root.add_widget(Label(
+        text='Выберите тип и срок буткемпа (дней от сегодня):',
+        size_hint_y=None, height=36, color=(0.8, 0.8, 1.0, 1),
+    ))
+
+    gl = GridLayout(cols=1, size_hint_y=None, spacing=6)
+    gl.bind(minimum_height=gl.setter('height'))
+
+    options = [
+        (30,  15_000, 10, 0, 'Через 30 дн — лёгкий ($15k → +10 сыгр.)'),
+        (60,  15_000, 10, 0, 'Через 60 дн — лёгкий ($15k → +10 сыгр.)'),
+        (30,  25_000, 15, 1, 'Через 30 дн — серьёзный ($25k → +15 сыгр. +1 мораль)'),
+        (60,  25_000, 15, 1, 'Через 60 дн — серьёзный ($25k → +15 сыгр. +1 мораль)'),
+        (90,  25_000, 15, 1, 'Через 90 дн — серьёзный ($25k → +15 сыгр. +1 мораль)'),
+    ]
+    for days, cost, coh, mor, label in options:
+        can = budget >= cost
+        target = str(today + timedelta(days=days))
+        b = Button(
+            text=f'{label}  [{target}]',
+            size_hint_y=None, height=44,
+            background_color=(0.18, 0.40, 0.20, 1) if can else (0.3, 0.3, 0.3, 1),
+            background_normal='',
+            disabled=not can,
+        )
+        def _plan(_, _target=target, _cost=cost):
+            c2 = _sq.connect(db_name)
+            c2.execute(
+                "UPDATE teams SET planned_bootcamp_date=?, planned_bootcamp_cost=? WHERE id=?",
+                (_target, _cost, team_id)
+            )
+            c2.commit(); c2.close()
+            p.dismiss()
+            popup.dismiss()
+        b.bind(on_press=_plan)
+        gl.add_widget(b)
+
+    from kivy.uix.scrollview import ScrollView
+    sv = ScrollView()
+    sv.add_widget(gl)
+    root.add_widget(sv)
+    cancel = Button(text='Отмена', size_hint_y=None, height=44,
+                    background_color=(0.5, 0.15, 0.15, 1), background_normal='')
+    cancel.bind(on_press=p.dismiss)
+    root.add_widget(cancel)
+    p.content = root
+    p.open()
 
 
 def show_organization_popup(db_name):

@@ -187,17 +187,50 @@ class HistoryPopup(Popup):
                     results.append((t_name, t_date, i, prize))
                     break
 
+        # Re-fetch with tournament IDs for bracket links
+        c.execute("""
+            SELECT t.id, t.name, t.start_date,
+                   place1,place2,place3,place4,place5,place6,place7,place8,
+                   COALESCE(prizepool,0)
+            FROM tournaments t WHERE place1 IS NOT NULL
+            ORDER BY t.start_date DESC
+        """)
+        t_results_with_id = []
+        for row in c.fetchall():
+            tid_r, tname_r, tdate_r = row[0], row[1], row[2]
+            places = row[3:11]
+            prize_r = row[11]
+            for i, p in enumerate(places, 1):
+                if p == team_id:
+                    t_results_with_id.append((tid_r, tname_r, tdate_r, i, prize_r))
+                    break
+
         if not results:
             grid.add_widget(_lbl('Ещё нет сыгранных турниров.', color=_DIM))
         else:
             for t_name, t_date, place, prize in results:
                 color = _place_color(place)
+                # Find tournament id for bracket link
+                t_id_for_bracket = next(
+                    (tid_r for tid_r, tname_r, _, pl_r, _ in t_results_with_id
+                     if tname_r == t_name and pl_r == place), None
+                )
+
                 r = BoxLayout(size_hint_y=None, height=34)
-                r.add_widget(_lbl(t_name, sw=0.45, color=color, height=34, halign='left'))
-                r.add_widget(_lbl(t_date[:7] if t_date else '—', sw=0.18, color=color, height=34))
-                r.add_widget(_lbl(_place_medal(place), sw=0.17, color=color, height=34))
+                r.add_widget(_lbl(t_name, sw=0.40, color=color, height=34, halign='left'))
+                r.add_widget(_lbl(t_date[:7] if t_date else '—', sw=0.15, color=color, height=34))
+                r.add_widget(_lbl(_place_medal(place), sw=0.15, color=color, height=34))
                 prize_txt = f'${prize:,}' if prize else '—'
-                r.add_widget(_lbl(prize_txt, sw=0.20, color=color, height=34))
+                r.add_widget(_lbl(prize_txt, sw=0.17, color=color, height=34))
+                if t_id_for_bracket:
+                    bkt_btn = Button(
+                        text='Сетка', size_hint_x=None, width=55, height=30,
+                        background_color=(0.18, 0.30, 0.55, 1), background_normal='',
+                        font_size='11sp',
+                    )
+                    bkt_btn.bind(on_press=lambda _, _tid=t_id_for_bracket:
+                                 show_bracket_popup(db_name, _tid))
+                    r.add_widget(bkt_btn)
                 grid.add_widget(r)
 
             wins        = sum(1 for _, _, p, _ in results if p == 1)
@@ -277,3 +310,182 @@ class HistoryPopup(Popup):
 
 def show_history_popup(db_name):
     HistoryPopup(db_name=db_name).open()
+
+
+class TransferHistoryPopup(Popup):
+    """Season transfer feed — all transfers from inbox messages."""
+
+    def __init__(self, db_name, **kw):
+        super().__init__(**kw)
+        self.title = 'История трансферов'
+        self.size_hint = (0.80, 0.88)
+        self.background_color = _BG
+        self._build(db_name)
+
+    def _build(self, db_name):
+        conn = sqlite3.connect(db_name)
+        c = conn.cursor()
+
+        # Get game date for year filter
+        gd = c.execute("SELECT date FROM save WHERE id=1").fetchone()
+        year = gd[0][:4] if gd else '2024'
+        my_team_row = c.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
+        my_team = my_team_row[0].strip() if my_team_row else ''
+
+        # All transfer messages this year
+        rows = c.execute("""
+            SELECT text, date FROM messages
+            WHERE author LIKE '%Трансфер%'
+              AND (date >= ? OR date = 'now')
+            ORDER BY id DESC LIMIT 100
+        """, (f'{year}-01-01',)).fetchall()
+        conn.close()
+
+        root = BoxLayout(orientation='vertical', padding=8, spacing=6)
+
+        sv = ScrollView(size_hint=(1, 1))
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=3)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        if not rows:
+            gl.add_widget(_lbl('Трансферов ещё не было в этом сезоне.', color=_DIM))
+        else:
+            for text, date in rows:
+                involves_my_team = my_team.lower() in text.lower() if my_team else False
+                color = _WIN if involves_my_team else _WHITE
+                row_box = BoxLayout(size_hint_y=None, height=36, spacing=4)
+                date_lbl = _lbl(date[:10] if date and date != 'now' else '—',
+                                sw=0.14, color=_DIM, height=36)
+                row_box.add_widget(date_lbl)
+                txt_lbl = _lbl(text[:80], sw=0.86, color=color, height=36, halign='left')
+                row_box.add_widget(txt_lbl)
+                gl.add_widget(row_box)
+
+        sv.add_widget(gl)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+
+def show_transfer_history_popup(db_name):
+    TransferHistoryPopup(db_name=db_name).open()
+
+
+class BracketPopup(Popup):
+    """Visual tournament bracket from the last completed tournament."""
+
+    def __init__(self, db_name, tourn_id=None, **kw):
+        super().__init__(**kw)
+        self.title = ''
+        self.size_hint = (0.92, 0.90)
+        self.background_color = _BG
+        self._build(db_name, tourn_id)
+
+    def _build(self, db_name, tourn_id):
+        conn = sqlite3.connect(db_name)
+        c = conn.cursor()
+
+        if not tourn_id:
+            row = c.execute(
+                "SELECT id, name FROM tournaments WHERE place1 IS NOT NULL "
+                "ORDER BY start_date DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                self.content = Label(text='Нет завершённых турниров')
+                conn.close(); return
+            tourn_id, tourn_name = row
+        else:
+            tourn_name = (c.execute("SELECT name FROM tournaments WHERE id=?",
+                                    (tourn_id,)).fetchone() or ('?',))[0]
+
+        # Load all place columns
+        places_row = c.execute(
+            "SELECT " + ",".join(f"place{i}" for i in range(1, 17)) +
+            " FROM tournaments WHERE id=?", (tourn_id,)
+        ).fetchone()
+
+        team_map = {r[0]: r[1].strip() for r in c.execute("SELECT id, name FROM teams").fetchall()}
+        my_tid = (c.execute("SELECT id FROM teams WHERE player='yes'").fetchone() or (None,))[0]
+        conn.close()
+
+        placements = {}
+        if places_row:
+            for i, tid in enumerate(places_row, 1):
+                if tid and tid in team_map:
+                    placements[i] = team_map[tid]
+                    placements[team_map[tid]] = i
+
+        def _card(place, width=160):
+            team = placements.get(place, f'—')
+            is_my = (my_tid and placements.get(team) == place and
+                     placements.get(place) == team)
+            color = _GOLD if place == 1 else _WIN if place <= 4 else _WHITE
+            if is_my:
+                color = (0.50, 0.90, 1.00, 1)
+            box = BoxLayout(size_hint=(None, None), width=width, height=34,
+                            padding=(4, 0))
+            lbl = Label(text=f'{place}. {team[:16]}', color=color,
+                        halign='left', valign='middle', font_size='11sp')
+            lbl.bind(size=lbl.setter('text_size'))
+            box.add_widget(lbl)
+            return box
+
+        root = BoxLayout(orientation='vertical', padding=8, spacing=6)
+        hdr = Label(text=f'[b]{tourn_name}[/b]', markup=True,
+                    color=_ACCENT, size_hint_y=None, height=38,
+                    halign='center', valign='middle', font_size='14sp')
+        hdr.bind(size=hdr.setter('text_size'))
+        root.add_widget(hdr)
+
+        # Bracket laid out as columns: GF / Finals / SF / QF / R1 / Groups
+        sv = ScrollView(size_hint=(1, 1))
+        bracket = BoxLayout(orientation='horizontal', spacing=10,
+                            size_hint=(None, None), padding=8)
+        bracket.bind(minimum_width=bracket.setter('width'),
+                     minimum_height=bracket.setter('height'))
+
+        # Stages and place ranges
+        stages = [
+            ('Группа\n(13-16)',   range(13, 17)),
+            ('Группа\n(9-12)',    range(9, 13)),
+            ('LB Р1\n(7-8)',      range(7, 9)),
+            ('LB Р2\n(5-6)',      range(5, 7)),
+            ('Полуфиналы\n(3-4)', range(3, 5)),
+            ('Финал\n(2)',        [2]),
+            ('Чемпион\n(1)',      [1]),
+        ]
+
+        for stage_name, places in stages:
+            col = BoxLayout(orientation='vertical', size_hint=(None, None),
+                            width=170, spacing=4)
+            col.bind(minimum_height=col.setter('height'))
+
+            hdr_lbl = Label(
+                text=stage_name, color=_ACCENT,
+                size_hint_y=None, height=32, font_size='11sp',
+                halign='center', valign='middle',
+            )
+            hdr_lbl.bind(size=hdr_lbl.setter('text_size'))
+            col.add_widget(hdr_lbl)
+
+            for place in places:
+                col.add_widget(_card(place))
+
+            bracket.add_widget(col)
+
+        sv.add_widget(bracket)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+
+def show_bracket_popup(db_name, tourn_id=None):
+    BracketPopup(db_name=db_name, tourn_id=tourn_id).open()

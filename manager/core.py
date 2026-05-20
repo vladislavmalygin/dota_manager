@@ -208,20 +208,20 @@ def _pay_streaming_income(db_name, game_date_str):
     conn = sqlite3.connect(db_name)
     try:
         row = conn.execute(
-            "SELECT t.id, COALESCE(t.rating,0) FROM teams t WHERE t.player='yes'"
+            "SELECT t.id, COALESCE(t.rating,0), COALESCE(t.fans,0) FROM teams t WHERE t.player='yes'"
         ).fetchone()
         if not row:
             conn.close()
             return
-        team_id, rating = row
+        team_id, rating, fans = row
         rep_row = conn.execute(
             "SELECT COALESCE(reputation,0) FROM characters LIMIT 1"
         ).fetchone()
         reputation = rep_row[0] if rep_row else 0
 
-        # Streaming/merch: reputation drives income more than raw rating
-        # Without tournament results/rep income won't cover wages alone
-        income = max(1_000, int(rating * 50 + reputation * 180))
+        # Fans add passive income: 1k per 10k fans (fan merch / tickets)
+        fans_income = (fans // 10_000) * 1_000
+        income = max(1_000, int(rating * 50 + reputation * 180 + fans_income))
         income = round(income / 500) * 500
         try:
             from logic.achievements import apply_monthly_bonuses
@@ -250,7 +250,8 @@ def _enforce_conflict_states(db_name):
     )
     # Check if conflict_targets are still on the team; clear if all gone
     row = conn.execute(
-        "SELECT id, conflict_targets FROM teams WHERE player='yes' AND conflict_targets IS NOT NULL"
+        "SELECT id, conflict_targets FROM teams WHERE player='yes' "
+        "AND conflict_targets IS NOT NULL AND conflict_targets != ''"
     ).fetchone()
     if row:
         team_id, ct = row
@@ -533,13 +534,16 @@ class MainWindow(BoxLayout):
             ('ТУРНИРЫ', [
                 ('Турниры',    self.on_tournaments),
                 ('Команды',    self.on_league),
-                ('История',    self.on_history),
+                ('История',       self.on_history),
+                ('Трансферы 📋', self.on_transfer_history),
                 ('Статистика', self.on_stats),
+                ('Лидерборд',  self.on_leaderboard),
             ]),
             ('ПРОЧЕЕ', [
                 ('Входящие',    self.on_incoming),
                 ('Достижения',  self.on_achievements),
                 ('Мой профиль', self.on_profile),
+                ('Навыки',      self.on_manager_skills),
                 ('Настройки',   self.on_settings),
                 ('Сохранить',   self.on_manual_save),
                 ('Главное меню',self.on_main_menu),
@@ -611,11 +615,8 @@ class MainWindow(BoxLayout):
             rows = conn.execute(
                 "SELECT name, COALESCE(rating,0) FROM teams ORDER BY COALESCE(rating,0) DESC"
             ).fetchall()
+            my_row = conn.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
             conn.close()
-            my = conn = None
-            conn2 = sqlite3.connect(self.db_name)
-            my_row = conn2.execute("SELECT name FROM teams WHERE player='yes'").fetchone()
-            conn2.close()
             if not my_row:
                 return 'Рейтинг: —'
             my_name = my_row[0].strip()
@@ -717,7 +718,7 @@ class MainWindow(BoxLayout):
             team = c.execute(
                 "SELECT name, COALESCE(budget,0), COALESCE(rating,0), COALESCE(cohesion,0), "
                 "carry, mid, offlane, partial_support, full_support, "
-                "COALESCE(org_reputation,20) "
+                "COALESCE(org_reputation,20), COALESCE(fans,0) "
                 "FROM teams WHERE player='yes'"
             ).fetchone()
             if not team:
@@ -725,8 +726,9 @@ class MainWindow(BoxLayout):
                 return
 
             t_name, budget, rating, cohesion, *_rest = team
-            org_reputation = _rest[-1]
-            slot_ids = [s for s in _rest[:-1] if s]
+            fans         = _rest[-1]
+            org_reputation = _rest[-2]
+            slot_ids = [s for s in _rest[:-2] if s]
 
             # Avg morale + wages
             avg_morale, total_wage = 5, 0
@@ -771,7 +773,8 @@ class MainWindow(BoxLayout):
             sp = c.execute("SELECT monthly_income FROM sponsors WHERE is_active=1 LIMIT 1").fetchone()
             if sp:
                 sponsor_income = sp[0] or 0
-            streaming = max(1_000, int(rating * 50 + org_reputation * 180))
+            fans_income = (fans // 10_000) * 1_000
+            streaming = max(1_000, int(rating * 50 + org_reputation * 180 + fans_income))
             monthly_in = sponsor_income + streaming
             balance = monthly_in - total_wage
 
@@ -948,6 +951,8 @@ class MainWindow(BoxLayout):
         rep_c = T.cohesion_color(org_reputation)
         c1.add_widget(_row('Репутация',
                            f'[color={_mc(rep_c)}]{org_reputation}/100[/color]'))
+        fans_str = f'{fans:,}' if fans < 1_000_000 else f'{fans/1_000_000:.1f}M'
+        c1.add_widget(_row('Фанаты', f'[color=ff88cc]{fans_str}[/color]'))
         try:
             from logic.meta import patch_description
             c1.add_widget(_row('Мета', patch_description(self.db_name),
@@ -1218,6 +1223,9 @@ class MainWindow(BoxLayout):
             "ALTER TABLE players ADD COLUMN secondary_role TEXT",
             "ALTER TABLE players ADD COLUMN secondary_comp INTEGER DEFAULT 5",
             "ALTER TABLE teams ADD COLUMN last_bootcamp_date TEXT",
+            "ALTER TABLE teams ADD COLUMN planned_bootcamp_date TEXT",
+            "ALTER TABLE teams ADD COLUMN planned_bootcamp_cost INTEGER DEFAULT 0",
+            "ALTER TABLE players ADD COLUMN achievement_flags TEXT DEFAULT ''",
         ]:
             try:
                 conn.execute(ddl)
@@ -1295,6 +1303,52 @@ class MainWindow(BoxLayout):
                 generate_season_goals(db_name, _yr)
         except Exception as _e:
             T.log_err('generate_season_goals', _e)
+
+    def _return_loan_players(self, conn):
+        """Return players from outgoing loans whose loan_until has passed."""
+        cur = conn.cursor()
+        today = str(self.date_object)
+        cur.execute(
+            """SELECT id, nickname, loan_team_id, role FROM players
+               WHERE loan_team_id IS NOT NULL AND loan_until IS NOT NULL
+                 AND loan_until <= ?""",
+            (today,),
+        )
+        returning = cur.fetchall()
+        for pid, nick, loan_tid, role in returning:
+            if not role:
+                continue
+            # Find which slot the player occupies on loan team
+            for col in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+                cur.execute(f"SELECT {col} FROM teams WHERE id=?", (loan_tid,))
+                slot = cur.fetchone()
+                if slot and str(slot[0]) == str(pid):
+                    cur.execute(f"UPDATE teams SET {col}=NULL WHERE id=?", (loan_tid,))
+                    break
+            # Find player's slot back on player team (same role)
+            cur.execute(f"SELECT {role} FROM teams WHERE player='yes'")
+            slot_back = cur.fetchone()
+            if slot_back and not slot_back[0]:
+                cur.execute(f"UPDATE teams SET {role}=? WHERE player='yes'", (pid,))
+                pt = cur.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+                cur.execute(
+                    "UPDATE players SET team_id=?, loan_team_id=NULL, loan_until=NULL, loan_fee=0 WHERE id=?",
+                    (pt[0] if pt else 0, pid),
+                )
+                conn.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'{nick} вернулся из аренды.', today, 'Трансфер'),
+                )
+            else:
+                # Slot taken — player becomes FA
+                cur.execute(
+                    "UPDATE players SET team_id=0, loan_team_id=NULL, loan_until=NULL, loan_fee=0 WHERE id=?",
+                    (pid,),
+                )
+                conn.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'{nick} вернулся из аренды (слот занят — стал СА).', today, 'Трансфер'),
+                )
 
     def _expire_contracts(self, conn):
         """Release players whose contract_end has passed."""
@@ -1481,6 +1535,18 @@ class MainWindow(BoxLayout):
                     (ai_wages, ai_tid),
                 )
 
+        # AI operational expenses: bootcamps, scouting, travel (~15-35k/month)
+        cursor.execute(
+            "SELECT id, COALESCE(rating,0) FROM teams WHERE player!='yes'"
+        )
+        for ai_tid, ai_rating in cursor.fetchall():
+            base = 15_000 + int(ai_rating * 20)   # better teams spend more
+            expenses = _random.randint(base, base + 20_000)
+            cursor.execute(
+                "UPDATE teams SET budget=MAX(50_000, budget-?) WHERE id=?",
+                (expenses, ai_tid),
+            )
+
         # Monthly team snapshot for dashboard trend
         snap_row = cursor.execute(
             "SELECT id, COALESCE(rating,0), COALESCE(budget,0) FROM teams WHERE player='yes'"
@@ -1492,6 +1558,7 @@ class MainWindow(BoxLayout):
                 (snap_row[0], str(self.date_object), int(snap_row[1]), snap_row[2]),
             )
 
+        self._return_loan_players(conn)
         self._expire_contracts(conn)
         self._notify_expiring_contracts(conn)
         self._repay_loan(conn)
@@ -1500,6 +1567,19 @@ class MainWindow(BoxLayout):
 
         update_morale_monthly(self.db_name)
         update_form_monthly(self.db_name)
+        # Motivator skill: +1 morale to all roster players
+        try:
+            from logic.manager_skills import get_skill_level
+            mot_lvl = get_skill_level(self.db_name, 'motivator')
+            if mot_lvl > 0:
+                _mc = sqlite3.connect(self.db_name)
+                _mc.execute("""
+                    UPDATE players SET morale=MIN(10,COALESCE(morale,5)+?)
+                    WHERE team_id IN (SELECT id FROM teams WHERE player='yes')
+                """, (mot_lvl,))
+                _mc.commit(); _mc.close()
+        except Exception:
+            pass
         # Monthly XP flush: apply accumulated train_xp to player skills
         try:
             from ingame_interface.scrimmage import _flush_scrim_xp
@@ -1551,6 +1631,9 @@ class MainWindow(BoxLayout):
         coh_row = conn.execute("SELECT COALESCE(cohesion,0) FROM teams WHERE player='yes'").fetchone()
         if coh_row:
             update_goal(self.db_name, year, 'cohesion_target', coh_row[0])
+
+        # Player career milestones
+        self._check_player_milestones()
 
         # Monthly news
         from logic.news import generate_monthly_news
@@ -1698,6 +1781,239 @@ class MainWindow(BoxLayout):
         if dialogue:
             self._show_player_dialogue(dialogue)
 
+    def _check_player_milestones(self):
+        """Generate inbox messages for player career milestones."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+            pt = c.execute("SELECT id, carry,mid,offlane,partial_support,full_support "
+                           "FROM teams WHERE player='yes'").fetchone()
+            if not pt:
+                conn.close(); return
+            pids = [p for p in pt[1:] if p]
+            if not pids:
+                conn.close(); return
+
+            today = str(self.date_object)
+            msgs = []
+
+            for pid in pids:
+                p = c.execute(
+                    "SELECT nickname, COALESCE(comp_exp,0), "
+                    "COALESCE(micro_skills,0)+COALESCE(macro_skills,0), "
+                    "COALESCE(achievement_flags,'')"
+                    " FROM players WHERE id=?", (pid,)
+                ).fetchone()
+                if not p:
+                    continue
+                nick, exp, skill_sum, flags_str = p
+                flags = set(flags_str.split(',')) if flags_str else set()
+                new_flags = set(flags)
+
+                # Comp_exp milestones
+                for milestone, label in [(50, '50 матчей'), (100, '100 матчей'), (200, '200 матчей'), (500, '500 матчей')]:
+                    flag = f'exp{milestone}'
+                    if exp >= milestone and flag not in flags:
+                        new_flags.add(flag)
+                        msgs.append(f'{nick} сыграл {label} в профессиональной сцене — настоящий ветеран!')
+
+                # Skill milestones
+                for threshold, label in [(140, 'ТОП-класс'), (160, 'элита'), (180, 'легенда сцены')]:
+                    flag = f'sk{threshold}'
+                    if skill_sum >= threshold and flag not in flags:
+                        new_flags.add(flag)
+                        msgs.append(f'{nick} достиг уровня «{label}» — micro+macro = {skill_sum}!')
+
+                if new_flags != flags:
+                    c.execute("UPDATE players SET achievement_flags=? WHERE id=?",
+                              (','.join(sorted(new_flags)), pid))
+
+            conn.commit()
+            for msg in msgs:
+                conn.execute("INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                             (msg, today, 'Карьера'))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def _show_season_review(self, year):
+        """Pop up season summary when the year rolls over."""
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.gridlayout import GridLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+            from kivy.uix.scrollview import ScrollView
+
+            conn = sqlite3.connect(self.db_name)
+            c = conn.cursor()
+
+            # Team stats
+            team = c.execute("SELECT id, name, COALESCE(rating,0), COALESCE(fans,0) "
+                             "FROM teams WHERE player='yes'").fetchone()
+            if not team:
+                conn.close(); return
+            tid, tname, rating, fans = team
+
+            # Tournament results this year
+            results = []
+            for row in c.execute(f"""
+                SELECT t.name, t.place1,t.place2,t.place3,t.place4,
+                       t.place5,t.place6,t.place7,t.place8
+                FROM tournaments t
+                WHERE strftime('%Y',t.start_date)='{year}'
+                  AND t.place1 IS NOT NULL
+            """).fetchall():
+                tname_t = row[0]
+                for i, p in enumerate(row[1:], 1):
+                    if p == tid:
+                        results.append((tname_t, i)); break
+
+            # MVP (player with most career_stats games this season)
+            mvp = c.execute(f"""
+                SELECT p.nickname, SUM(cs.games) as g
+                FROM player_career_stats cs JOIN players p ON p.id=cs.player_id
+                WHERE cs.season={year} AND p.team_id={tid}
+                GROUP BY cs.player_id ORDER BY g DESC LIMIT 1
+            """).fetchone()
+
+            # Goals achieved
+            goals_done = c.execute(
+                f"SELECT COUNT(*) FROM season_goals WHERE year={year} AND completed=1"
+            ).fetchone()[0]
+            goals_total = c.execute(
+                f"SELECT COUNT(*) FROM season_goals WHERE year={year}"
+            ).fetchone()[0]
+
+            conn.close()
+
+            # Build popup
+            _BG = (0.07, 0.09, 0.13, 1)
+            _ACC = (0.35, 0.85, 1.00, 1)
+            _GOLD = (1.00, 0.85, 0.25, 1)
+            _WHITE = (0.92, 0.92, 0.92, 1)
+
+            p = Popup(title='', size_hint=(0.60, 0.75))
+            root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+
+            def _lbl(text, color=_WHITE, height=32, bold=False, fs='13sp'):
+                t = f'[b]{text}[/b]' if bold else text
+                l = Label(text=t, markup=True, color=color,
+                          size_hint_y=None, height=height,
+                          halign='center', valign='middle', font_size=fs)
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            root.add_widget(_lbl(f'ИТОГИ {year} СЕЗОНА', _ACC, 44, True, '18sp'))
+            root.add_widget(_lbl(f'{tname.strip()}', _WHITE, 28, False, '14sp'))
+
+            sv = ScrollView(size_hint=(1, 1))
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=4)
+            gl.bind(minimum_height=gl.setter('height'))
+
+            if results:
+                gl.add_widget(_lbl('Турниры:', _ACC, 28, True))
+                MEDALS = {1: '🏆 1-е', 2: '2-е', 3: '3-е', 4: '4-е'}
+                for tn, place in results:
+                    pc = _GOLD if place == 1 else _WHITE
+                    gl.add_widget(_lbl(f'{MEDALS.get(place, f"{place}-е")}  {tn[:30]}', pc, 26))
+            else:
+                gl.add_widget(_lbl('Турниры: не участвовали', (0.5, 0.5, 0.5, 1), 26))
+
+            if mvp:
+                gl.add_widget(_lbl(f'MVP сезона: {mvp[0]}  ({mvp[1]} матчей)', _GOLD, 28, True))
+
+            gl.add_widget(_lbl(f'Рейтинг: {int(rating)} pts', _WHITE, 26))
+            gl.add_widget(_lbl(f'Фанаты: {fans:,}', (1.0, 0.55, 0.80, 1), 26))
+            gl.add_widget(_lbl(f'Цели выполнены: {goals_done}/{goals_total}',
+                               (0.25, 0.90, 0.42, 1) if goals_done else _WHITE, 26))
+
+            sv.add_widget(gl)
+            root.add_widget(sv)
+
+            close = Button(text='Начать новый сезон', size_hint_y=None, height=48,
+                           background_color=(0.18, 0.50, 0.22, 1), background_normal='')
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            p.open()
+        except Exception as _e:
+            T.log_err('season_review', _e)
+
+    def _check_planned_bootcamp(self, conn):
+        today = str(self.date_object)
+        row = conn.execute(
+            "SELECT id, COALESCE(planned_bootcamp_date,''), COALESCE(planned_bootcamp_cost,0), "
+            "COALESCE(budget,0) FROM teams WHERE player='yes'"
+        ).fetchone()
+        if not row:
+            return
+        tid, pbd, pbc, budget = row
+        if not pbd or pbd > today:
+            return
+        # Fire bootcamp
+        cost = pbc or 15_000
+        coh_gain = 15 if cost >= 25_000 else 10
+        mor_gain = 1  if cost >= 25_000 else 0
+        if budget >= cost:
+            conn.execute(
+                "UPDATE teams SET budget=budget-?, cohesion=MIN(100,COALESCE(cohesion,0)+?), "
+                "last_bootcamp_date=?, planned_bootcamp_date=NULL, planned_bootcamp_cost=0 WHERE id=?",
+                (cost, coh_gain, today, tid),
+            )
+            if mor_gain:
+                slots = conn.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+                    (tid,)
+                ).fetchone() or ()
+                for pid in slots:
+                    if pid:
+                        conn.execute(
+                            "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?",
+                            (pid,)
+                        )
+            conn.execute(
+                "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                (f'Запланированный буткемп проведён: +{coh_gain} сыгранности'
+                 + (f', +{mor_gain} мораль' if mor_gain else '') + f'  −${cost:,}',
+                 today, 'Организация'),
+            )
+        else:
+            # Not enough budget — clear planned
+            conn.execute(
+                "UPDATE teams SET planned_bootcamp_date=NULL, planned_bootcamp_cost=0 WHERE id=?",
+                (tid,)
+            )
+            conn.execute(
+                "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                ('Запланированный буткемп отменён — недостаточно средств.', today, 'Организация'),
+            )
+
+    def _send_weekly_standings(self, conn):
+        rows = conn.execute(
+            "SELECT name, COALESCE(rating,0), player FROM teams "
+            "ORDER BY COALESCE(rating,0) DESC LIMIT 5"
+        ).fetchall()
+        if not rows:
+            return
+        lines = []
+        for i, (name, rating, pl) in enumerate(rows, 1):
+            tag = ' ← вы' if pl == 'yes' else ''
+            lines.append(f'  {i}. {name.strip()} — {int(rating)} pts{tag}')
+        my_row = conn.execute(
+            "SELECT COALESCE(rating,0) FROM teams WHERE player='yes'"
+        ).fetchone()
+        my_rank = next((i+1 for i, (n, r, p) in enumerate(
+            conn.execute("SELECT name,COALESCE(rating,0),player FROM teams ORDER BY COALESCE(rating,0) DESC").fetchall()
+        ) if p == 'yes'), '?')
+        msg = f'Рейтинг-лист недели — вы #{my_rank}:\n' + '\n'.join(lines)
+        conn.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+            (msg, str(self.date_object), 'Рейтинг'),
+        )
+
     def _trim_messages(self, conn):
         """Keep only recent messages per noisy category, cap total."""
         # Noisy authors: keep last 25 each
@@ -1837,6 +2153,7 @@ class MainWindow(BoxLayout):
     def _advance_one_day(self, suppress_notifications=False):
         """Advance date by 1 day. Returns True if a notification was triggered."""
         prev_month = self.date_object.month
+        prev_year  = self.date_object.year
         self.date_object += timedelta(days=1)
         database = self.db_name
         conn = None
@@ -1852,6 +2169,18 @@ class MainWindow(BoxLayout):
 
             if self.date_object.month != prev_month and self.date_object.day == 1:
                 self._deduct_salaries(conn)
+                if self.date_object.year != prev_year:
+                    from kivy.clock import Clock as _Clk
+                    _Clk.schedule_once(
+                        lambda dt: self._show_season_review(prev_year), 0.5
+                    )
+
+            # Weekly standings update (every 7 days)
+            if self.date_object.toordinal() % 7 == 0:
+                self._send_weekly_standings(conn)
+
+            # Planned bootcamp auto-fire
+            self._check_planned_bootcamp(conn)
 
             conn.commit()
 
@@ -2030,9 +2359,17 @@ class MainWindow(BoxLayout):
         from ingame_interface.history import HistoryPopup
         self._show_inline(HistoryPopup(self.db_name), 'История')
 
+    def on_transfer_history(self, instance):
+        from ingame_interface.history import show_transfer_history_popup
+        show_transfer_history_popup(self.db_name)
+
     def on_stats(self, instance):
         from ingame_interface.stats import StatsPopup
         self._show_inline(StatsPopup(self.db_name), 'Статистика')
+
+    def on_leaderboard(self, instance):
+        from ingame_interface.stats import show_leaderboard_popup
+        show_leaderboard_popup(self.db_name)
 
     def on_goals(self, instance):
         from ingame_interface.goals import GoalsPopup
@@ -2211,6 +2548,10 @@ class MainWindow(BoxLayout):
     def on_profile(self, instance):
         from ingame_interface.profile import ProfilePopup
         self._show_inline(ProfilePopup(self.db_name), 'Мой профиль')
+
+    def on_manager_skills(self, instance):
+        from ingame_interface.skills import show_skills_popup
+        show_skills_popup(self.db_name)
 
     def on_main_menu(self, instance):
         from ingame_interface.exit_screen import show_exit_screen

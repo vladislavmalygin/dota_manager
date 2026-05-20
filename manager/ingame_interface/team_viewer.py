@@ -260,28 +260,73 @@ class TeamViewerPopup(Popup):
 class LeaguePopup(Popup):
     def __init__(self, db_name, **kwargs):
         super().__init__(**kwargs)
-        self.title = 'Команды лиги'
-        self.size_hint = (0.92, 0.92)
+        self.title = 'Таблица команд'
+        self.size_hint = (0.94, 0.94)
         self._db_name = db_name
+        self._region_filter = None   # None = all
+        self._sort_col = 'rating'    # 'rating' | 'budget' | 'cohesion'
         self._build()
 
     def _build(self):
         conn = sqlite3.connect(self._db_name)
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, name, logo, country, COALESCE(rating,0), "
-            "COALESCE(cohesion,0), COALESCE(tactic,'balanced') "
+            "SELECT id, name, logo, COALESCE(region,'?'), COALESCE(rating,0), "
+            "COALESCE(cohesion,0), COALESCE(tactic,'balanced'), COALESCE(budget,0), "
+            "COALESCE(fans,0) "
             "FROM teams ORDER BY COALESCE(rating,0) DESC"
         )
-        teams = cur.fetchall()
+        all_teams = cur.fetchall()
         cur.execute("SELECT name FROM teams WHERE player='yes'")
         pr = cur.fetchone()
         player_name = (pr[0] if pr else '').strip()
         conn.close()
 
+        # Apply region filter + sort
+        teams = all_teams
+        if self._region_filter:
+            teams = [t for t in teams if t[3] == self._region_filter]
+        if self._sort_col == 'budget':
+            teams = sorted(teams, key=lambda t: t[7], reverse=True)
+        elif self._sort_col == 'cohesion':
+            teams = sorted(teams, key=lambda t: t[5], reverse=True)
+        # else: already sorted by rating from DB
+
+        root = BoxLayout(orientation='vertical', spacing=4, padding=4)
+
+        # ── Filter / sort bar ────────────────────────────────────
+        filter_bar = BoxLayout(size_hint_y=None, height=36, spacing=4)
+
+        _REGIONS = [None, 'EEU', 'WEU', 'China', 'SEA', 'NA', 'SA']
+        _REG_LABELS = {None: 'Все', 'EEU': 'EEU', 'WEU': 'WEU',
+                       'China': 'CN', 'SEA': 'SEA', 'NA': 'NA', 'SA': 'SA'}
+        for reg in _REGIONS:
+            active = (reg == self._region_filter)
+            b = Button(
+                text=_REG_LABELS[reg],
+                background_color=(0.18, 0.50, 0.30, 1) if active else (0.22, 0.22, 0.32, 1),
+                background_normal='', font_size='12sp',
+            )
+            b.bind(on_press=lambda _, r=reg: self._set_region(r))
+            filter_bar.add_widget(b)
+
+        filter_bar.add_widget(Label(text='Сорт:', size_hint_x=None, width=50,
+                                    color=(0.6, 0.6, 0.6, 1), font_size='12sp'))
+        for col, label in [('rating', 'Рейтинг'), ('budget', 'Бюджет'), ('cohesion', 'Сыгр.')]:
+            active = (col == self._sort_col)
+            sb = Button(
+                text=label, size_hint_x=None, width=80,
+                background_color=(0.50, 0.30, 0.08, 1) if active else (0.22, 0.22, 0.32, 1),
+                background_normal='', font_size='12sp',
+            )
+            sb.bind(on_press=lambda _, c=col: self._set_sort(c))
+            filter_bar.add_widget(sb)
+
+        root.add_widget(filter_bar)
+
         grid = _auto_grid()
         grid.padding = (8, 4)
-        grid.spacing = 4
+        grid.spacing = 3
 
         _TACTIC_SHORT = {
             'balanced': 'Сб.', 'aggressive': 'Агр.',
@@ -290,87 +335,71 @@ class LeaguePopup(Popup):
 
         # Column header
         hdr = _BgBox(bg=_BG_HEAD, orientation='horizontal',
-                     size_hint_y=None, height=32, padding=(8, 0))
-        for txt, sw in [('', 0.06), ('Команда', 0.34), ('Страна', 0.14),
-                        ('Рейтинг', 0.13), ('Сыгр.', 0.10), ('Тактика', 0.10), ('', 0.13)]:
+                     size_hint_y=None, height=28, padding=(8, 0))
+        for txt, sw in [('#', 0.05), ('Команда', 0.28), ('Регион', 0.09),
+                        ('Рейтинг', 0.11), ('Бюджет', 0.12), ('Сыгр.', 0.08),
+                        ('Фанаты', 0.10), ('', 0.17)]:
             lbl = Label(text=f'[b]{txt}[/b]', markup=True, size_hint_x=sw,
-                        color=_ACCENT, halign='center', valign='middle', font_size='13sp')
+                        color=_ACCENT, halign='center', valign='middle', font_size='12sp')
             lbl.bind(size=lbl.setter('text_size'))
             hdr.add_widget(lbl)
         grid.add_widget(hdr)
 
-        for rank, (tid, name, logo, country, rating, cohesion, tactic) in enumerate(teams):
+        for rank, (tid, name, logo, region, rating, cohesion, tactic, budget, fans) in enumerate(teams):
             name = name.strip()
             is_p = name == player_name
-            # Color tiers: 1st gold, 2nd silver, 3rd bronze, top-8 light blue, player green
-            if rank == 0:
-                bg, color = (0.22, 0.18, 0.04, 1), _GOLD
-            elif rank == 1:
-                bg, color = (0.16, 0.16, 0.16, 1), _SILVER
-            elif rank == 2:
-                bg, color = (0.18, 0.10, 0.04, 1), _BRONZE
-            elif rank < 8:
-                bg, color = (0.10, 0.14, 0.22, 1), (0.75, 0.85, 1.00, 1)
-            elif is_p:
-                bg, color = (0.05, 0.20, 0.08, 1), _PLAYER
-            else:
-                bg, color = (_BG_MED if rank % 2 == 0 else _BG_DARK), _WHITE
-
-            if is_p and rank >= 8:
-                bg, color = (0.05, 0.20, 0.08, 1), _PLAYER
+            if rank == 0:    bg, color = (0.22, 0.18, 0.04, 1), _GOLD
+            elif rank == 1:  bg, color = (0.16, 0.16, 0.16, 1), _SILVER
+            elif rank == 2:  bg, color = (0.18, 0.10, 0.04, 1), _BRONZE
+            elif rank < 8:   bg, color = (0.10, 0.14, 0.22, 1), (0.75, 0.85, 1.00, 1)
+            else:            bg, color = (_BG_MED if rank % 2 == 0 else _BG_DARK), _WHITE
+            if is_p:         bg, color = (0.05, 0.20, 0.08, 1), _PLAYER
 
             row = _BgBox(bg=bg, orientation='horizontal',
-                         size_hint_y=None, height=52, padding=(6, 4), spacing=6)
+                         size_hint_y=None, height=42, padding=(6, 2), spacing=4)
 
-            # Rank number
             rank_lbl = Label(
-                text=f'[b]{rank+1}[/b]', markup=True, size_hint_x=0.06,
-                color=color, halign='center', valign='middle', font_size='14sp',
+                text=f'[b]{rank+1}[/b]', markup=True, size_hint_x=0.05,
+                color=color, halign='center', valign='middle', font_size='13sp',
             )
             rank_lbl.bind(size=rank_lbl.setter('text_size'))
             row.add_widget(rank_lbl)
 
-            # Logo
-            logo_w = _logo(logo, size=38) if logo else Label(
-                text='', size_hint=(None, None), size=(38, 38))
-            logo_w.size_hint_x = None
-            logo_w.width = 42
-
-            # Name
-            mark = '  [МОYA]' if is_p else ''
+            mark = '  [МОЯ]' if is_p else ''
             name_lbl = Label(
                 text=f'[b]{name}{mark}[/b]', markup=True,
-                size_hint_x=0.34, color=color, font_size='14sp',
+                size_hint_x=0.28, color=color, font_size='13sp',
                 halign='left', valign='middle',
             )
             name_lbl.bind(size=name_lbl.setter('text_size'))
             row.add_widget(name_lbl)
 
-            country_lbl = Label(
-                text=country or '—', size_hint_x=0.14,
-                color=_DIM, halign='center', valign='middle', font_size='13sp',
-            )
-            row.add_widget(country_lbl)
-
+            row.add_widget(Label(
+                text=region or '?', size_hint_x=0.09,
+                color=_DIM, halign='center', valign='middle', font_size='12sp',
+            ))
             rating_lbl = Label(
-                text=f'[b]{int(rating)}[/b] pts', markup=True, size_hint_x=0.13,
-                color=color, halign='center', valign='middle', font_size='14sp',
+                text=f'[b]{int(rating)}[/b]', markup=True, size_hint_x=0.11,
+                color=color, halign='center', valign='middle', font_size='13sp',
             )
             rating_lbl.bind(size=rating_lbl.setter('text_size'))
             row.add_widget(rating_lbl)
 
-            coh_c = (
-                (0.2, 0.95, 0.35, 1) if cohesion >= 75 else
-                (1.0, 0.85, 0.25, 1) if cohesion >= 40 else
-                (0.9, 0.3,  0.2,  1)
-            )
+            budget_str = f'${budget//1000}k' if budget < 1_000_000 else f'${budget/1_000_000:.1f}M'
+            bud_c = (0.3, 1.0, 0.4, 1) if budget > 500_000 else (1.0, 0.85, 0.25, 1) if budget > 100_000 else (1.0, 0.4, 0.3, 1)
             row.add_widget(Label(
-                text=str(cohesion), size_hint_x=0.10,
-                color=coh_c, halign='center', valign='middle', font_size='13sp',
+                text=budget_str, size_hint_x=0.12,
+                color=bud_c, halign='center', valign='middle', font_size='12sp',
             ))
+            coh_c = (0.2, 0.95, 0.35, 1) if cohesion >= 75 else (1.0, 0.85, 0.25, 1) if cohesion >= 40 else (0.9, 0.3, 0.2, 1)
             row.add_widget(Label(
-                text=_TACTIC_SHORT.get(tactic, tactic), size_hint_x=0.10,
-                color=_ACCENT, halign='center', valign='middle', font_size='13sp',
+                text=str(cohesion), size_hint_x=0.08,
+                color=coh_c, halign='center', valign='middle', font_size='12sp',
+            ))
+            fans_str = f'{fans//1000}k' if fans else '—'
+            row.add_widget(Label(
+                text=fans_str, size_hint_x=0.10,
+                color=(1.00, 0.55, 0.80, 1), halign='center', valign='middle', font_size='12sp',
             ))
 
             view_btn = Button(
@@ -387,15 +416,22 @@ class LeaguePopup(Popup):
         scroll.add_widget(grid)
 
         close_btn = Button(
-            text='Закрыть', size_hint_y=None, height=50,
+            text='Закрыть', size_hint_y=None, height=44,
             background_color=(0.65, 0.18, 0.18, 1), background_normal='',
         )
         close_btn.bind(on_press=self.dismiss)
 
-        layout = BoxLayout(orientation='vertical', spacing=4, padding=4)
-        layout.add_widget(scroll)
-        layout.add_widget(close_btn)
-        self.content = layout
+        root.add_widget(scroll)
+        root.add_widget(close_btn)
+        self.content = root
+
+    def _set_region(self, region):
+        self._region_filter = region
+        self._build()
+
+    def _set_sort(self, col):
+        self._sort_col = col
+        self._build()
 
     def _open_team(self, team_id):
         TeamViewerPopup(db_name=self._db_name, team_id=team_id).open()

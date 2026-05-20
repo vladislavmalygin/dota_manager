@@ -117,6 +117,18 @@ class SponsorsPopup(Popup):
         if signed:
             panel.add_widget(_lbl(f'  Подписан: {signed}', height=26, color=_DIM))
 
+        # ── Condition progress ──────────────────────────────────
+        try:
+            progress_txt, progress_clr = self._condition_progress(cond, signed)
+            if progress_txt:
+                panel.add_widget(_lbl(
+                    f'  Прогресс: {progress_txt}', height=26, color=progress_clr,
+                ))
+        except Exception:
+            pass
+        panel.size_hint_y = None
+        panel.height = 220
+
         drop_btn = Button(
             text='Отказаться от спонсора', size_hint_y=None, height=38,
             background_color=(0.7, 0.25, 0.15, 1), background_normal='',
@@ -157,6 +169,70 @@ class SponsorsPopup(Popup):
         row.add_widget(sign_btn)
 
         return row
+
+    def _condition_progress(self, cond, signed_date):
+        """Return (text, color) showing how close we are to meeting condition."""
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+        gd = c.execute("SELECT date FROM save WHERE id=1").fetchone()
+        year = int(gd[0][:4]) if gd else 2024
+        my_id = (c.execute("SELECT id FROM teams WHERE player='yes'").fetchone() or (None,))[0]
+
+        if cond == 'always':
+            conn.close()
+            return 'Без условий — бонус гарантирован', _GREEN
+
+        if cond in ('win_any', 'top8_any'):
+            target = 1 if cond == 'win_any' else 8
+            cond_text = 'победа' if cond == 'win_any' else 'топ-8'
+            # Check if already achieved this year
+            cols = 'place1' if cond == 'win_any' else ','.join(f'place{i}' for i in range(1, 9))
+            if cond == 'win_any':
+                done = c.execute(
+                    "SELECT COUNT(*) FROM tournaments WHERE place1=? "
+                    "AND strftime('%Y',start_date)=?", (my_id, str(year))
+                ).fetchone()[0]
+            else:
+                done = c.execute(
+                    "SELECT COUNT(*) FROM tournaments "
+                    f"WHERE ({' OR '.join(f'place{i}=?' for i in range(1,9))}) "
+                    "AND strftime('%Y',start_date)=?",
+                    [my_id]*8 + [str(year)]
+                ).fetchone()[0]
+            conn.close()
+            if done:
+                return f'Выполнено: {cond_text} достигнута!', _GREEN
+            else:
+                return f'Не выполнено — нужна {cond_text} в {year}', _RED
+
+        if cond in ('top4_ti', 'top8_ti'):
+            target = 4 if cond == 'top4_ti' else 8
+            # Check if TI this year happened
+            ti = c.execute(
+                "SELECT place1,place2,place3,place4,place5,place6,place7,place8,place9,place10,place11,place12 "
+                "FROM tournaments WHERE name LIKE '%The International%' "
+                "AND strftime('%Y',start_date)=? AND place1 IS NOT NULL",
+                (str(year),)
+            ).fetchone()
+            if ti:
+                my_place = next((i+1 for i, p in enumerate(ti) if p == my_id), 99)
+                if my_place <= target:
+                    return f'TI {year}: {my_place}-е место — выполнено!', _GREEN
+                else:
+                    return f'TI {year}: {my_place}-е место — провалено', _RED
+            else:
+                # TI not yet played — show current rating rank
+                rank_row = c.execute(
+                    "SELECT COUNT(*)+1 FROM teams WHERE COALESCE(rating,0) > "
+                    "(SELECT COALESCE(rating,0) FROM teams WHERE player='yes')"
+                ).fetchone()
+                rank = rank_row[0] if rank_row else '?'
+                conn.close()
+                clr = _GREEN if rank <= target else (_GOLD if rank <= target*2 else _RED)
+                return f'TI ещё впереди — текущий ранг #{rank} (нужен топ-{target})', clr
+
+        conn.close()
+        return '', _DIM
 
     def _sign(self, offer_id):
         conn = sqlite3.connect(self.db_name)

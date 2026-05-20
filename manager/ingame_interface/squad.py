@@ -403,7 +403,7 @@ class SquadPopup(Popup):
                     "soft_skills, wage, face, skill_cap, COALESCE(morale, 5), train_priority, "
                     "COALESCE(age, 22), injured_until, COALESCE(wants_to_leave, 0), "
                     "contract_end, COALESCE(form, 5), secondary_role, COALESCE(fatigue, 0), "
-                    "COALESCE(signature_heroes, '[]') "
+                    "COALESCE(signature_heroes, '[]'), COALESCE(retirement_age, 35) "
                     "FROM players WHERE id=?",
                     (int(sid),)
                 )
@@ -413,7 +413,7 @@ class SquadPopup(Popup):
                      micro, macro, soft, wage, face, skill_cap, morale,
                      priority, age, injured_until, wants_to_leave,
                      contract_end, form, secondary_role, fatigue,
-                     sig_heroes_json) = p
+                     sig_heroes_json, retirement_age) = p
                     micro = micro or 0; macro = macro or 0; soft = soft or 0
                     wage  = wage  or 0; skill_cap = skill_cap or 300
                     total_wage += wage
@@ -509,11 +509,22 @@ class SquadPopup(Popup):
                     elif is_leaving:
                         chips_row.add_widget(T.make_chip('УХОДИТ', T.WARNING))
                     elif is_injured:
+                        try:
+                            _inj_days = (_date.fromisoformat(injured_until) - game_today).days
+                            _inj_label = f'травма {_inj_days}д' if _inj_days > 0 else f'до {injured_until[5:]}'
+                        except Exception:
+                            _inj_label = f'до {injured_until[5:]}'
                         chips_row.add_widget(T.make_chip(
-                            f'до {injured_until[5:]}', (0.15, 0.40, 0.70, 1),
+                            _inj_label, (0.15, 0.40, 0.70, 1),
                             (0.60, 0.85, 1.00, 1)))
                     if cend_txt:
                         chips_row.add_widget(T.make_chip(cend_txt, T.BG_ROW_A, cend_color))
+                    # Retirement countdown
+                    years_to_ret = retirement_age - age
+                    if 0 < years_to_ret <= 2:
+                        ret_clr = (1.00, 0.35, 0.25, 1) if years_to_ret <= 1 else (1.00, 0.70, 0.20, 1)
+                        chips_row.add_widget(T.make_chip(
+                            f'пенсия {years_to_ret}л', (0.20, 0.10, 0.05, 1), ret_clr))
 
                     # Signature heroes row
                     import json as _json
@@ -686,6 +697,77 @@ class SquadPopup(Popup):
                     brow.add_widget(swap_btn)
                 grid.add_widget(brow)
 
+        # ── Players loaned IN from other teams ────────────────────────
+        try:
+            cur.execute("""
+                SELECT p.nickname, p.role, p.loan_until,
+                       t2.name as orig_team_name,
+                       COALESCE(p.micro_skills,0)+COALESCE(p.macro_skills,0)
+                FROM players p
+                JOIN teams t ON t.id=p.team_id
+                LEFT JOIN teams t2 ON t2.id=p.loan_fee  -- loan_fee stores original team as workaround
+                WHERE t.player='yes'
+                  AND p.loan_team_id IS NOT NULL
+                  AND p.loan_team_id = (SELECT id FROM teams WHERE player='yes')
+                LIMIT 5
+            """)
+            loans_in = cur.fetchall()
+            if not loans_in:
+                # Alternative: players on roster where loan_until is set (loaned in)
+                cur.execute("""
+                    SELECT p.nickname, p.role, p.loan_until,
+                           '?' as orig, COALESCE(p.micro_skills,0)+COALESCE(p.macro_skills,0)
+                    FROM players p
+                    JOIN teams t ON t.id=p.team_id
+                    WHERE t.player='yes' AND p.loan_until IS NOT NULL AND p.loan_team_id IS NULL
+                """)
+                loans_in = cur.fetchall()
+            if loans_in:
+                grid.add_widget(_lbl('  ВЗЯТЫ В АРЕНДУ', height=28, color=(0.80, 0.60, 1.00, 1), bold=True))
+                for l_nick, l_role, l_until, l_orig, l_sk in loans_in:
+                    try:
+                        l_days = (_date.fromisoformat(l_until) - game_today).days if l_until else 0
+                    except Exception:
+                        l_days = 0
+                    grid.add_widget(_lbl(
+                        f'  {l_nick}  ←  {l_orig or "другая команда"}  (осталось {l_days} дн.)',
+                        height=28, color=(0.75, 0.60, 1.00, 1),
+                    ))
+        except Exception:
+            pass
+
+        # ── Loaned-out players ─────────────────────────────────────
+        try:
+            cur.execute("""
+                SELECT p.nickname, p.role, p.loan_until,
+                       t.name, COALESCE(p.age,22),
+                       COALESCE(p.micro_skills,0)+COALESCE(p.macro_skills,0)
+                FROM players p
+                JOIN teams t ON t.id=p.loan_team_id
+                WHERE p.loan_team_id IS NOT NULL AND p.loan_team_id != 0
+                  AND p.id IN (
+                      SELECT id FROM players WHERE loan_team_id IS NOT NULL AND loan_team_id != 0
+                  )
+            """)
+            loans = cur.fetchall()
+            # filter: only players originally belonging to player team
+            cur.execute("SELECT id FROM teams WHERE player='yes'")
+            _ptid = cur.fetchone()
+            if loans and _ptid:
+                grid.add_widget(_lbl('  В АРЕНДЕ', height=28, color=(0.50, 0.75, 1.00, 1), bold=True))
+                for l_nick, l_role, l_until, l_team, l_age, l_sk in loans:
+                    try:
+                        l_days = (_date.fromisoformat(l_until) - game_today).days if l_until else 0
+                    except Exception:
+                        l_days = 0
+                    loan_lbl = _lbl(
+                        f'  {l_nick}  →  {l_team}  (возврат через {l_days} дн.)',
+                        height=28, color=(0.60, 0.85, 1.00, 1),
+                    )
+                    grid.add_widget(loan_lbl)
+        except Exception:
+            pass
+
         grid.add_widget(_lbl(''))
         grid.add_widget(_lbl(
             f'  Итого зарплат: ${total_wage:,}/мес',
@@ -698,7 +780,17 @@ class SquadPopup(Popup):
             bond = pair_bond_description(self.db_name, team_id)
             chem_col = (0.3, 1.0, 0.4, 1) if chem >= 7 else ((1.0, 0.85, 0.2, 1) if chem >= 4 else (1.0, 0.4, 0.3, 1))
             chem_txt = f'  Химия команды: {chem:.1f}/10' + (f'  ·  {bond}' if bond else '')
-            grid.add_widget(_lbl(chem_txt, height=28, color=chem_col))
+            chem_row = BoxLayout(size_hint_y=None, height=32)
+            chem_row.add_widget(_lbl(chem_txt, height=32, color=chem_col))
+            chem_btn = Button(
+                text='Подробнее', size_hint=(None, 1), width=100,
+                background_color=(0.18, 0.30, 0.50, 1), background_normal='',
+                font_size='12sp',
+            )
+            chem_btn.bind(on_press=lambda _: ChemistryPopup(
+                db_name=self.db_name, team_id=team_id).open())
+            chem_row.add_widget(chem_btn)
+            grid.add_widget(chem_row)
         except Exception:
             pass
         grid.add_widget(_lbl(
@@ -1057,8 +1149,53 @@ class PlayerDetailPopup(Popup):
             'wildcard':    (1.00, 0.55, 0.20, 1),
         }
         left.add_widget(_kv('Роль', role_txt))
-        if sec_role:
-            left.add_widget(_kv('Доп. роль', sec_txt, T.TEXT_DIM))
+        # Secondary role editor
+        sec_header = BoxLayout(size_hint_y=None, height=26)
+        sec_key = Label(text='Доп. роль', color=T.TEXT_LABEL, font_size='12sp',
+                        size_hint_x=0.45, halign='left', valign='middle')
+        sec_key.bind(size=sec_key.setter('text_size'))
+        sec_header.add_widget(sec_key)
+        sec_val = Label(
+            text=ROLE_LABELS.get(sec_role, '—') if sec_role else '—',
+            color=T.TEXT_DIM, font_size='12sp',
+            size_hint_x=0.55, halign='right', valign='middle',
+        )
+        sec_val.bind(size=sec_val.setter('text_size'))
+        sec_header.add_widget(sec_val)
+        left.add_widget(sec_header)
+
+        _SEC_ROLES = ['carry', 'mid', 'offlane', 'partial_support', 'full_support', None]
+        _SEC_SHORT  = {
+            'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Off',
+            'partial_support': 'Sup4', 'full_support': 'Sup5', None: '—',
+        }
+        sec_row = BoxLayout(size_hint_y=None, height=28, spacing=2)
+        for sr in _SEC_ROLES:
+            if sr == role:
+                continue  # skip primary role
+            is_cur = (sr == sec_role) or (sr is None and not sec_role)
+            sb = Button(
+                text=_SEC_SHORT[sr],
+                size_hint_y=None, height=26,
+                background_color=(0.10, 0.50, 0.25, 1) if is_cur else (0.22, 0.22, 0.32, 1),
+                background_normal='', font_size='11sp',
+            )
+            def _set_sec(_, _sr=sr):
+                c2 = sqlite3.connect(db_name)
+                if _sr is None:
+                    c2.execute("UPDATE players SET secondary_role=NULL, secondary_comp=5 WHERE id=?", (pid,))
+                else:
+                    c2.execute("UPDATE players SET secondary_role=? WHERE id=?", (_sr, pid))
+                c2.commit(); c2.close()
+                self.dismiss()
+                PlayerDetailPopup(
+                    db_name=db_name, player_id=pid, nick=nick,
+                    on_priority_changed=on_priority_changed,
+                ).open()
+            sb.bind(on_press=_set_sec)
+            sec_row.add_widget(sb)
+        left.add_widget(sec_row)
+
         left.add_widget(_kv('Психотип',
                             _PSYCHO_LABEL.get(psychotype, psychotype or '—'),
                             _PSYCHO_COLOR.get(psychotype, T.TEXT_MAIN)))
@@ -1237,6 +1374,47 @@ class PlayerDetailPopup(Popup):
         ))
         btn_row.add_widget(hist_btn)
 
+        # Compare with another squad player
+        cmp_btn = Button(
+            text='Сравнить',
+            background_color=(0.28, 0.18, 0.48, 1), background_normal='',
+            font_size='13sp',
+        )
+        def _pick_compare(_):
+            conn2 = sqlite3.connect(db_name)
+            slots = conn2.execute(
+                "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE player='yes'"
+            ).fetchone() or ()
+            others = [int(s) for s in slots if s and int(s) != pid]
+            conn2.close()
+            if not others:
+                return
+            # Show mini picker
+            from kivy.uix.popup import Popup as _Pop
+            pp = _Pop(title='Выбрать для сравнения', size_hint=(0.4, 0.5))
+            from kivy.uix.gridlayout import GridLayout as _GL
+            gl = _GL(cols=1, size_hint_y=None, spacing=3)
+            gl.bind(minimum_height=gl.setter('height'))
+            conn3 = sqlite3.connect(db_name)
+            for oid in others:
+                orow = conn3.execute("SELECT nickname FROM players WHERE id=?", (oid,)).fetchone()
+                oname = orow[0] if orow else str(oid)
+                b = Button(text=oname, size_hint_y=None, height=44,
+                           background_color=(0.20, 0.30, 0.50, 1), background_normal='')
+                def _cmp(_, _oid=oid):
+                    pp.dismiss()
+                    PlayerComparePopup(db_name=db_name, pid1=pid, pid2=_oid).open()
+                b.bind(on_press=_cmp)
+                gl.add_widget(b)
+            conn3.close()
+            from kivy.uix.scrollview import ScrollView as _SV
+            sv = _SV()
+            sv.add_widget(gl)
+            pp.content = sv
+            pp.open()
+        cmp_btn.bind(on_press=_pick_compare)
+        btn_row.add_widget(cmp_btn)
+
         close_btn = Button(
             text='Закрыть',
             background_color=T.BTN_DANGER, background_normal='',
@@ -1249,5 +1427,233 @@ class PlayerDetailPopup(Popup):
         self.content = root
 
 
+class ChemistryPopup(Popup):
+    """Detailed chemistry breakdown for the team."""
+
+    def __init__(self, db_name, team_id, **kw):
+        super().__init__(**kw)
+        self.title = 'Химия команды'
+        self.size_hint = (0.62, 0.78)
+        self._build(db_name, team_id)
+
+    def _build(self, db_name, team_id):
+        from logic.chemistry import chemistry_score, chemistry_mult
+        from logic.ai import _region
+
+        conn = sqlite3.connect(db_name)
+        c = conn.cursor()
+        row = c.execute(
+            "SELECT carry,mid,offlane,partial_support,full_support,"
+            "COALESCE(tactic,'balanced') FROM teams WHERE id=?", (team_id,)
+        ).fetchone()
+        players = []
+        if row:
+            for pid in row[:5]:
+                if pid:
+                    p = c.execute(
+                        "SELECT nickname, country, COALESCE(time_in_team,0), "
+                        "COALESCE(morale,5), COALESCE(psychotype,'team_player'), "
+                        "COALESCE(micro_skills,0), COALESCE(macro_skills,0), COALESCE(soft_skills,0) "
+                        "FROM players WHERE id=?", (pid,)
+                    ).fetchone()
+                    if p:
+                        players.append(p)
+        tactic = row[5] if row else 'balanced'
+        conn.close()
+
+        score = chemistry_score(db_name, team_id)
+        mult  = chemistry_mult(score)
+        score_clr = (0.3, 1.0, 0.4, 1) if score >= 7 else ((1.0, 0.85, 0.2, 1) if score >= 4 else (1.0, 0.4, 0.3, 1))
+
+        _BG2 = (0.07, 0.09, 0.13, 1)
+        _BG_MED = (0.12, 0.15, 0.20, 1)
+        _ACC = (0.35, 0.85, 1.00, 1)
+        _W = (0.92, 0.92, 0.92, 1)
+        _D = (0.55, 0.55, 0.55, 1)
+
+        def _lbl2(text, color=_W, height=28, bold=False):
+            t = f'[b]{text}[/b]' if bold else text
+            l = Label(text=t, markup=True, color=color, size_hint_y=None,
+                      height=height, halign='left', valign='middle', font_size='12sp')
+            l.bind(size=l.setter('text_size'))
+            return l
+
+        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+
+        root.add_widget(_lbl2(
+            f'Химия: {score:.1f}/10  →  ×{mult:.3f} к навыкам',
+            color=score_clr, height=38, bold=True,
+        ))
+
+        sv = ScrollView(size_hint=(1, 1))
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=4)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        # Psychotype breakdown
+        _PSYCHO_RU = {
+            'leader': 'Лидер 👑', 'solo_carry': 'Соло-керри ⚡',
+            'team_player': 'Командный 🤝', 'wildcard': 'Wildcard 🎲',
+        }
+        psychos = [p[4] for p in players]
+        leaders = psychos.count('leader')
+        tp = psychos.count('team_player')
+
+        gl.add_widget(_lbl2('ПСИХОТИПЫ', _ACC, 26, True))
+        for p in players:
+            gl.add_widget(_lbl2(f'  {p[0]}: {_PSYCHO_RU.get(p[4], p[4])}', _W, 24))
+        if leaders >= 2:
+            gl.add_widget(_lbl2('  ⚠ 2+ лидера — конфликт: −1.5 химии', (1.0, 0.4, 0.3, 1), 24))
+        elif leaders == 1:
+            gl.add_widget(_lbl2('  Один лидер: +0.3 химии', (0.3, 1.0, 0.4, 1), 24))
+        if tp >= 3:
+            gl.add_widget(_lbl2('  3+ командных игрока: +0.5 химии', (0.3, 1.0, 0.4, 1), 24))
+
+        # Regional cohesion
+        from collections import Counter
+        regions = [_region(p[1] or '') for p in players]
+        dom_count = Counter(regions).most_common(1)[0][1] if regions else 0
+        gl.add_widget(_lbl2('РЕГИОНЫ', _ACC, 26, True))
+        for p in players:
+            _p_country = p[1] or '?'
+            gl.add_widget(_lbl2(f'  {p[0]}: {_region(_p_country)} ({_p_country})', _D, 22))
+        reg_bonus = 1.5 if dom_count >= 4 else (0.8 if dom_count >= 3 else 0)
+        if reg_bonus:
+            gl.add_widget(_lbl2(f'  {dom_count} игрока из одного региона: +{reg_bonus} химии', (0.3, 1.0, 0.4, 1), 24))
+
+        # Time together
+        avg_time = sum(p[2] for p in players) / max(1, len(players))
+        gl.add_widget(_lbl2('СЫГРАННОСТЬ', _ACC, 26, True))
+        for p in players:
+            gl.add_widget(_lbl2(f'  {p[0]}: {p[2]} сезонов в команде', _W, 22))
+        time_bonus = 1.0 if avg_time >= 3 else (0.5 if avg_time >= 1 else 0)
+        if time_bonus:
+            gl.add_widget(_lbl2(f'  Средний стаж {avg_time:.1f} сез.: +{time_bonus} химии', (0.3, 1.0, 0.4, 1), 24))
+
+        # Tactic fit
+        gl.add_widget(_lbl2('ТАКТИКА', _ACC, 26, True))
+        _TACTIC_RU = {'aggressive': 'Агрессивная (Micro)', 'farming': 'Фарм (Macro)', 'teamplay': 'Командная (Soft)', 'balanced': 'Сбалансированная'}
+        gl.add_widget(_lbl2(f'  Текущая: {_TACTIC_RU.get(tactic, tactic)}', _W, 24))
+
+        # Suggestions
+        gl.add_widget(_lbl2('КАК УЛУЧШИТЬ', _ACC, 26, True))
+        tips = []
+        if leaders >= 2:
+            tips.append('Продайте одного лидера — два альфа конфликтуют')
+        if dom_count < 3:
+            tips.append('Попробуйте игроков из одного региона')
+        if avg_time < 1:
+            tips.append('Держите состав стабильным — нужно время для сыгранности')
+        if not tips:
+            tips.append('Химия хорошая — продолжайте в том же духе')
+        for tip in tips:
+            gl.add_widget(_lbl2(f'  • {tip}', (1.0, 0.85, 0.40, 1), 24))
+
+        sv.add_widget(gl)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+
 def show_squad_popup(db_name):
     SquadPopup(db_name=db_name).open()
+
+
+class PlayerComparePopup(Popup):
+    """Side-by-side skill comparison of two players."""
+
+    def __init__(self, db_name, pid1, pid2, **kw):
+        super().__init__(**kw)
+        self.title = 'Сравнение игроков'
+        self.size_hint = (0.80, 0.70)
+        self._build(db_name, pid1, pid2)
+
+    def _build(self, db_name, pid1, pid2):
+        conn = sqlite3.connect(db_name)
+        c = conn.cursor()
+
+        def _fetch(pid):
+            return c.execute(
+                "SELECT nickname, role, micro_skills, macro_skills, soft_skills, "
+                "COALESCE(morale,5), COALESCE(fatigue,0), COALESCE(age,22), wage "
+                "FROM players WHERE id=?", (pid,)
+            ).fetchone()
+
+        p1 = _fetch(pid1)
+        p2 = _fetch(pid2)
+        conn.close()
+
+        if not p1 or not p2:
+            self.content = Label(text='Игрок не найден')
+            return
+
+        _BG   = (0.08, 0.10, 0.14, 1)
+        _ACC  = (0.35, 0.85, 1.00, 1)
+        _DIM  = (0.55, 0.55, 0.55, 1)
+        _WIN  = (0.25, 0.90, 0.42, 1)
+        _WHT  = (0.92, 0.92, 0.92, 1)
+
+        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+
+        # Headers
+        hdr = BoxLayout(size_hint_y=None, height=40)
+        for p in [p1, p2]:
+            lbl = Label(text=f'[b]{p[0]}[/b]', markup=True,
+                        color=_ACC, halign='center', valign='middle')
+            lbl.bind(size=lbl.setter('text_size'))
+            hdr.add_widget(lbl)
+        root.add_widget(hdr)
+
+        STATS = [
+            ('Micro',      2),
+            ('Macro',      3),
+            ('Soft',       4),
+            ('Мораль',     5),
+            ('Усталость',  6),
+            ('Возраст',    7),
+            ('Зарплата',   8),
+        ]
+
+        grid = GridLayout(cols=3, size_hint_y=None, spacing=4, padding=4)
+        grid.bind(minimum_height=grid.setter('height'))
+
+        for label, idx in STATS:
+            v1 = p1[idx] or 0
+            v2 = p2[idx] or 0
+
+            def _val_lbl(val, better, label=label):
+                clr = _WIN if better else _DIM
+                if label == 'Зарплата':
+                    txt = f'${val:,}'
+                else:
+                    txt = str(val)
+                l = Label(text=f'[b]{txt}[/b]', markup=True,
+                          color=clr, size_hint_y=None, height=32,
+                          halign='center', valign='middle')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            # For fatigue and wage: lower is better
+            lower_better = label in ('Усталость', 'Зарплата', 'Возраст')
+            p1_better = (v1 < v2) if lower_better else (v1 > v2)
+
+            grid.add_widget(_val_lbl(v1, p1_better, label))
+            mid_lbl = Label(text=label, color=_WHT,
+                            size_hint_y=None, height=32,
+                            halign='center', valign='middle', font_size='12sp')
+            mid_lbl.bind(size=mid_lbl.setter('text_size'))
+            grid.add_widget(mid_lbl)
+            grid.add_widget(_val_lbl(v2, not p1_better, label))
+
+        sv = ScrollView(size_hint=(1, 1))
+        sv.add_widget(grid)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root

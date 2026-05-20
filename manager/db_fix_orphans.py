@@ -31,6 +31,16 @@ def fix(db_name):
             list(valid_pids),
         )
 
+    # 3b. Fix mismatched team_id: player is in a slot but has wrong team_id
+    for col in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+        c.execute(f"""
+            UPDATE players SET team_id = (SELECT id FROM teams WHERE {col} = players.id)
+            WHERE id IN (
+                SELECT {col} FROM teams WHERE {col} IS NOT NULL
+            )
+            AND team_id != (SELECT id FROM teams WHERE {col} = players.id)
+        """)
+
     # 4. Fix duplicate nicknames: keep lower id, clear higher id's team slot
     c.execute("""
         SELECT MIN(id), MAX(id), nickname FROM players

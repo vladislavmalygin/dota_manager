@@ -187,6 +187,42 @@ def generate_monthly_news(db_name):
         except Exception:
             pass
 
+    # Transfer rumors about player team's players (40% chance, 50% fake)
+    if random.random() < 0.40:
+        my_team_row = c.execute(
+            "SELECT id, carry, mid, offlane, partial_support, full_support FROM teams WHERE player='yes'"
+        ).fetchone() if False else None  # placeholder
     conn.close()
+
+    conn2 = sqlite3.connect(db_name)
+    c2 = conn2.cursor()
+    pt = c2.execute("SELECT id, carry, mid, offlane, partial_support, full_support FROM teams WHERE player='yes'").fetchone()
+    if pt and random.random() < 0.40:
+        player_ids = [p for p in pt[1:] if p]
+        if player_ids:
+            pid = random.choice(player_ids)
+            prow = c2.execute("SELECT nickname, micro_skills, macro_skills FROM players WHERE id=?", (pid,)).fetchone()
+            if prow:
+                pnick, pmi, pma = prow
+                avg = ((pmi or 0) + (pma or 0)) // 2
+                if avg >= 60:
+                    teams = c2.execute("SELECT name FROM teams WHERE player!='yes' ORDER BY RANDOM() LIMIT 1").fetchone()
+                    if teams:
+                        interested_team = teams[0]
+                        is_fake = random.random() < 0.50
+                        if is_fake:
+                            templates = [
+                                f'Слух: {interested_team} якобы интересуется {pnick}. Источник ненадёжный.',
+                                f'Инсайдеры сообщают: {interested_team} следит за {pnick}. Пока не подтверждено.',
+                                f'Слух: переговоры между {interested_team} и агентом {pnick}? Клуб отрицает.',
+                            ]
+                        else:
+                            templates = [
+                                f'СЛУХ (достоверный): {interested_team} готовит предложение по {pnick}.',
+                                f'Источник: {interested_team} всерьёз рассматривает {pnick} для усиления.',
+                            ]
+                        news.append(random.choice(templates))
+    conn2.close()
+
     random.shuffle(news)
     return news[:5]

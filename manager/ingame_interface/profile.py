@@ -136,6 +136,32 @@ class ProfilePopup(Popup):
         goals_done  = (c.execute("SELECT COUNT(*) FROM season_goals WHERE completed=1").fetchone() or (0,))[0]
         goals_total = (c.execute("SELECT COUNT(*) FROM season_goals").fetchone() or (0,))[0]
 
+        # ── rival & H2H ──────────────────────────────────────
+        rival_data = None
+        h2h_records = []
+        if my_tid:
+            rv = c.execute(
+                "SELECT rival_team_id, COALESCE(rival_wins,0), COALESCE(rival_losses,0) "
+                "FROM teams WHERE player='yes'"
+            ).fetchone()
+            rival_tid, rival_wins, rival_losses = (rv or (None, 0, 0))
+            if rival_tid:
+                rv_name = (c.execute("SELECT name FROM teams WHERE id=?", (rival_tid,)).fetchone() or ('?',))[0]
+                rival_data = (rv_name, rival_wins, rival_losses)
+
+            h2h_rows = c.execute("""
+                SELECT t.name, h.wins, h.losses
+                FROM h2h_records h JOIN teams t ON t.id=h.opponent_team_id
+                WHERE (h.wins+h.losses) > 0
+                ORDER BY (h.wins+h.losses) DESC LIMIT 8
+            """).fetchall()
+            h2h_records = [(n, w, l) for n, w, l in h2h_rows]
+
+        # All AI team names for rival picker
+        all_team_names = c.execute(
+            "SELECT id, name FROM teams WHERE player!='yes' ORDER BY COALESCE(rating,0) DESC"
+        ).fetchall()
+
         conn.close()
 
         # ── UI ───────────────────────────────────────────────
@@ -203,6 +229,32 @@ class ProfilePopup(Popup):
             color_r=_GREEN if goals_done > 0 else _DIM,
         ))
 
+        # ── Trophy room ───────────────────────────────────────────
+        golds   = [(n, d) for n, d, p, _ in t_history if p == 1]
+        silvers = [(n, d) for n, d, p, _ in t_history if p == 2]
+        bronzes = [(n, d) for n, d, p, _ in t_history if p == 3]
+        if golds or silvers or bronzes:
+            grid.add_widget(_hdr('КУБКИ И ТРОФЕИ'))
+            trophy_row = BoxLayout(size_hint_y=None, height=52, spacing=6, padding=(8, 4))
+            for trophy_list, symbol, color in [
+                (golds,   '🏆', _GOLD),
+                (silvers, '🥈', _SILVER),
+                (bronzes, '🥉', _BRONZE),
+            ]:
+                if trophy_list:
+                    lbl = Label(
+                        text=f'{symbol}×{len(trophy_list)}',
+                        color=color, font_size='22sp',
+                        size_hint=(None, 1), width=70,
+                        halign='center', valign='middle',
+                    )
+                    trophy_row.add_widget(lbl)
+            grid.add_widget(trophy_row)
+            if golds:
+                for tname, tdate in golds[:3]:
+                    grid.add_widget(_row(f'🏆 {tname[:30]}', tdate[:7] if tdate else '—',
+                                         color_r=_GOLD))
+
         # Recent tournament results
         if t_history:
             grid.add_widget(_hdr('ПОСЛЕДНИЕ ТУРНИРЫ'))
@@ -216,6 +268,60 @@ class ProfilePopup(Popup):
                     f'{tdate[:7]}{prize_str}',
                     color_r=pc,
                 ))
+
+        # ── Rival section ─────────────────────────────────────
+        grid.add_widget(_hdr('ГЛАВНЫЙ СОПЕРНИК'))
+        if rival_data:
+            rv_name, rv_w, rv_l = rival_data
+            rv_clr = _GREEN if rv_w >= rv_l else (_RED if rv_l > rv_w else _WHITE)
+            grid.add_widget(_row('Соперник', rv_name, color_r=_GOLD))
+            grid.add_widget(_row('Счёт', f'W {rv_w}  —  L {rv_l}', color_r=rv_clr))
+        else:
+            grid.add_widget(_lbl('  Соперник не выбран. Нажмите кнопку ниже.',
+                                 color=_DIM, height=28))
+
+        # Rival picker button
+        pick_box = BoxLayout(size_hint_y=None, height=40)
+        pick_btn = Button(
+            text='Выбрать/сменить соперника',
+            background_color=(0.18, 0.38, 0.60, 1), background_normal='',
+            font_size='13sp',
+        )
+
+        def _pick_rival(_):
+            from kivy.uix.popup import Popup
+            from kivy.uix.scrollview import ScrollView
+            p = Popup(title='Выбрать соперника', size_hint=(0.55, 0.75))
+            sv2 = ScrollView()
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=2)
+            gl.bind(minimum_height=gl.setter('height'))
+            for tid, tname in all_team_names:
+                b = Button(
+                    text=tname.strip(), size_hint_y=None, height=40,
+                    background_color=(0.20, 0.28, 0.40, 1), background_normal='',
+                )
+                def _set(_, _tid=tid):
+                    con2 = sqlite3.connect(db_name)
+                    con2.execute("UPDATE teams SET rival_team_id=? WHERE player='yes'", (_tid,))
+                    con2.commit(); con2.close()
+                    p.dismiss()
+                    self._build(db_name)
+                b.bind(on_press=_set)
+                gl.add_widget(b)
+            sv2.add_widget(gl)
+            p.content = sv2
+            p.open()
+
+        pick_btn.bind(on_press=_pick_rival)
+        pick_box.add_widget(pick_btn)
+        grid.add_widget(pick_box)
+
+        # ── H2H records ───────────────────────────────────────
+        if h2h_records:
+            grid.add_widget(_hdr('СТАТИСТИКА H2H'))
+            for opp_name, w, l in h2h_records:
+                clr = _GREEN if w > l else (_RED if l > w else _WHITE)
+                grid.add_widget(_row(opp_name.strip()[:28], f'{w}W — {l}L', color_r=clr))
 
         sv.add_widget(grid)
         root.add_widget(sv)

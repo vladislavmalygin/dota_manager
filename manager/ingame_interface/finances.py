@@ -119,10 +119,23 @@ class FinancesPopup(Popup):
         )
         past = c.fetchall()
 
-        c.execute("SELECT id, COALESCE(rating,0) FROM teams WHERE player='yes'")
+        c.execute(
+            "SELECT id, COALESCE(rating,0), COALESCE(fans,0), "
+            "COALESCE(loan_monthly,0), COALESCE(investor_cut_pct,0), "
+            "COALESCE(investor_end_date,''), COALESCE(org_reputation,20) "
+            "FROM teams WHERE player='yes'"
+        )
         my_team_id_row = c.fetchone()
-        my_team_id = my_team_id_row[0] if my_team_id_row else None
+        my_team_id    = my_team_id_row[0] if my_team_id_row else None
         team_rating   = my_team_id_row[1] if my_team_id_row else 0
+        fans          = my_team_id_row[2] if my_team_id_row else 0
+        loan_monthly  = my_team_id_row[3] if my_team_id_row else 0
+        inv_cut_pct   = my_team_id_row[4] if my_team_id_row else 0
+        inv_end       = my_team_id_row[5] if my_team_id_row else ''
+        org_rep       = my_team_id_row[6] if my_team_id_row else 20
+
+        gd_row = c.execute("SELECT date FROM save WHERE id=1").fetchone()
+        game_date_str = gd_row[0] if gd_row else '2024-01-01'
 
         rep_row = c.execute(
             "SELECT COALESCE(reputation,0) FROM characters LIMIT 1"
@@ -150,30 +163,44 @@ class FinancesPopup(Popup):
         ))
         grid.add_widget(budget_box)
 
-        # Monthly balance & runway  (matches _pay_streaming_income formula)
+        # Monthly balance & runway
         sponsor_income = sponsor[1] if sponsor else 0
-        streaming = max(2_000, round(int(team_rating * 120 + reputation * 200) / 500) * 500)
+        fans_income = (fans // 10_000) * 1_000
+        streaming = max(1_000, int(team_rating * 50 + org_rep * 180 + fans_income))
+        streaming = round(streaming / 500) * 500
+
+        # Investor cut on streaming
+        inv_cut = 0
+        if inv_cut_pct > 0 and inv_end and inv_end >= game_date_str:
+            inv_cut = int(team_rating * 120 * inv_cut_pct / 100)
+
         monthly_income = sponsor_income + streaming
-        balance = monthly_income - total_wage
+        total_out = total_wage + loan_monthly + inv_cut
+        balance = monthly_income - total_out
         bal_color = _GREEN if balance >= 0 else _RED
 
+        grid.add_widget(_hdr('ДОХОДЫ', color=_GREEN))
         grid.add_widget(_row(
-            f'Стриминг/мерч  (рейтинг {int(team_rating)}, репутация {reputation})',
+            f'Стриминг/мерч  (рейт. {int(team_rating)}, реп. {org_rep}, фанаты {fans:,})',
             f'+${streaming:,}/мес', color_r=_GREEN,
         ))
+        if fans_income:
+            grid.add_widget(_row(f'  в т.ч. мерч фанатов ({fans//1000}k)', f'+${fans_income:,}/мес', color_r=_GREEN))
         if sponsor_income:
             grid.add_widget(_row('Спонсор', f'+${sponsor_income:,}/мес', color_r=_GREEN))
+        grid.add_widget(_row('Итого доход/мес', f'+${monthly_income:,}/мес', color_r=_GREEN))
+
+        grid.add_widget(_hdr('РАСХОДЫ', color=_RED))
+        grid.add_widget(_row('Зарплаты', f'-${total_wage:,}/мес', color_r=_RED))
+        if loan_monthly:
+            grid.add_widget(_row('Погашение кредита', f'-${loan_monthly:,}/мес', color_r=_RED))
+        if inv_cut:
+            grid.add_widget(_row(f'Инвестор ({inv_cut_pct}%)', f'-${inv_cut:,}/мес', color_r=_RED))
+        grid.add_widget(_row('Итого расходы/мес', f'-${total_out:,}/мес', color_r=_RED))
+
         grid.add_widget(_row(
-            'Итого доход/мес',
-            f'+${monthly_income:,}/мес', color_r=_GREEN,
-        ))
-        grid.add_widget(_row(
-            'Ежемесячные зарплаты',
-            f'-${total_wage:,}/мес', color_r=_RED,
-        ))
-        grid.add_widget(_row(
-            'Баланс',
-            f'{"+" if balance >= 0 else ""}{balance:,} $/мес',
+            'Чистый баланс/мес',
+            f'{"+" if balance >= 0 else ""}{balance:,} $',
             bg=(0.08, 0.18, 0.10, 1) if balance >= 0 else (0.20, 0.08, 0.08, 1),
             color_r=bal_color,
         ))
@@ -182,16 +209,17 @@ class FinancesPopup(Popup):
             months_left = budget // abs(balance)
             runway_color = _GREEN if months_left > 6 else (_GOLD if months_left > 3 else _RED)
             grid.add_widget(_row(
-                '[!] Бюджет иссякнет через',
+                '⚠ Бюджет иссякнет через',
                 f'~{months_left} мес.',
                 bg=(0.20, 0.12, 0.05, 1), color_r=runway_color,
             ))
         elif balance >= 0:
-            grid.add_widget(_row(
-                'Прогноз бюджета (+6 мес.)',
-                f'${budget + balance*6:,}',
-                color_r=_GREEN,
-            ))
+            proj_3  = budget + balance * 3
+            proj_6  = budget + balance * 6
+            proj_12 = budget + balance * 12
+            grid.add_widget(_row('Прогноз +3 мес.', f'${proj_3:,}', color_r=_GREEN))
+            grid.add_widget(_row('Прогноз +6 мес.', f'${proj_6:,}', color_r=_GREEN))
+            grid.add_widget(_row('Прогноз +12 мес.', f'${proj_12:,}', color_r=_GOLD))
 
         # Wages
         grid.add_widget(_hdr('ЗАРПЛАТЫ', color=_ACCENT))

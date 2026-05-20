@@ -61,6 +61,11 @@ def _lbl(text, height=32, color=_WHITE, bold=False, halign='left', font_size='13
     return lbl
 
 
+def _hex(rgba):
+    r, g, b = int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255)
+    return f'{r:02x}{g:02x}{b:02x}'
+
+
 def _add_message(db_name, text, author='Система'):
     conn = sqlite3.connect(db_name)
     conn.execute(
@@ -948,6 +953,46 @@ class MatchLogPopup(Popup):
 
         root = BoxLayout(orientation='vertical', spacing=6, padding=10)
 
+        # ── Win probability estimate ──────────────────────────────
+        try:
+            from logic.dota.match_data import get_match_data
+            _skills = get_match_data(self._team1, self._team2, self._pre_match_db)
+            if _skills:
+                def _total(sk, tkey):
+                    return sum(
+                        sk[tkey].get(r, {}).get(k, 1)
+                        for r in sk[tkey]
+                        for k in ('micro_skills', 'macro_skills')
+                    )
+                s1 = _total(_skills, 'team1')
+                s2 = _total(_skills, 'team2')
+                win_pct = int(100 * s1 / max(1, s1 + s2))
+                lose_pct = 100 - win_pct
+                is_player_t1 = (self._pre_match_team == self._team1)
+                my_pct  = win_pct  if is_player_t1 else lose_pct
+                opp_pct = lose_pct if is_player_t1 else win_pct
+                if my_pct >= 60:
+                    pred_clr = (0.25, 0.90, 0.40, 1)
+                elif my_pct >= 45:
+                    pred_clr = (1.00, 0.85, 0.20, 1)
+                else:
+                    pred_clr = (1.00, 0.35, 0.25, 1)
+                pred_box = _BgBox(bg=(0.08, 0.14, 0.20, 1),
+                                  size_hint_y=None, height=36, padding=(10, 4))
+                pred_lbl = Label(
+                    text=f'Прогноз: [b][color=#{int(pred_clr[0]*255):02x}'
+                         f'{int(pred_clr[1]*255):02x}{int(pred_clr[2]*255):02x}]'
+                         f'{self._pre_match_team} {my_pct}%[/color][/b]'
+                         f'  vs  {opp_pct}%',
+                    markup=True, color=(0.85, 0.85, 0.85, 1),
+                    halign='center', valign='middle', font_size='13sp',
+                )
+                pred_lbl.bind(size=pred_lbl.setter('text_size'))
+                pred_box.add_widget(pred_lbl)
+                root.add_widget(pred_box)
+        except Exception:
+            pass
+
         # header
         hdr = _BgBox(bg=_BG_PANEL, orientation='horizontal',
                      size_hint_y=None, height=50, padding=(8, 4))
@@ -1722,6 +1767,28 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     instr_lbl.bind(size=instr_lbl.setter('text_size'))
     right.add_widget(instr_lbl)
 
+    # Counter-pick hint label
+    counter_lbl = Label(
+        text='', markup=True, color=(0.85, 0.55, 1.00, 1),
+        size_hint_y=None, height=22, font_size='11sp',
+        halign='center', valign='middle',
+    )
+    counter_lbl.bind(size=counter_lbl.setter('text_size'))
+    right.add_widget(counter_lbl)
+
+    def _update_counter_hints():
+        try:
+            from logic.heroes import get_counters
+            ai_pick_names = [h[0] for h in draft['ai_picks'][-2:]]  # last 2 AI picks
+            hints = []
+            for hname in ai_pick_names:
+                counters = get_counters(hname)
+                if counters:
+                    hints.append(f'{hname} ← контрят: {", ".join(counters[:2])}')
+            counter_lbl.text = '  |  '.join(hints) if hints else ''
+        except Exception:
+            pass
+
     # ── Role filter ───────────────────────────────────────────────────────────
     filter_state = {'role': None}
     filter_row   = BoxLayout(size_hint_y=None, height=32, spacing=3)
@@ -1866,6 +1933,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
         draft['step'] += 1
         _rebuild_hero_grid()
+        _update_counter_hints()
         _advance()
 
     def _on_hero_click(role, hero):
@@ -2107,11 +2175,38 @@ class TournamentPopup(Popup):
     def _build_ui(self, name):
         root = BoxLayout(orientation='vertical', spacing=4, padding=4)
 
-        hdr = _BgBox(bg=_BG_PANEL, size_hint_y=None, height=42)
+        # Generate and show mini-objective
+        _obj_text = ''
+        try:
+            from logic.objectives import generate_objective, get_active_objective, ensure_table
+            ensure_table(self.db_name)
+            tourn_id_row = sqlite3.connect(self.db_name).execute(
+                "SELECT id FROM tournaments WHERE name=? LIMIT 1", (name,)
+            ).fetchone()
+            if tourn_id_row and self._player_teams:
+                _tid = tourn_id_row[0]
+                obj = generate_objective(self.db_name, _tid) or get_active_objective(self.db_name, _tid)
+                if obj:
+                    _obj_text = (f'Цель: {obj["description"]}  →  '
+                                 f'+${obj["reward_budget"]:,} +{obj["reward_rep"]}реп')
+        except Exception:
+            pass
+
+        hdr_h = 64 if _obj_text else 42
+        hdr = _BgBox(bg=_BG_PANEL, size_hint_y=None, height=hdr_h,
+                     orientation='vertical')
         hl  = Label(text=f'[b]{name}[/b]', markup=True, color=_ACCENT,
-                    halign='center', valign='middle', font_size='15sp')
+                    halign='center', valign='middle', font_size='15sp',
+                    size_hint_y=None, height=42)
         hl.bind(size=hl.setter('text_size'))
         hdr.add_widget(hl)
+        if _obj_text:
+            obj_lbl = Label(text=_obj_text, markup=True,
+                            color=(1.00, 0.85, 0.25, 1),
+                            halign='center', valign='middle', font_size='11sp',
+                            size_hint_y=None, height=22)
+            obj_lbl.bind(size=obj_lbl.setter('text_size'))
+            hdr.add_widget(obj_lbl)
         root.add_widget(hdr)
 
         body = BoxLayout(orientation='horizontal', size_hint=(1, 1), spacing=6)
@@ -2171,16 +2266,58 @@ class TournamentPopup(Popup):
                 self._group_total[stage_key]  = len(self._bracket_rounds.get(stage_key, []))
                 groups_row.add_widget(gtw)
 
+            # Group strength analysis for player's group
+            _analysis_widgets = []
+            try:
+                for gi, group in enumerate(_groups):
+                    if not any(t.strip() in pt for t in group):
+                        continue
+                    # Player is in this group
+                    opps = [(t.strip(), _ratings_map.get(t.strip(), 0))
+                            for t in group if t.strip() not in pt]
+                    opps.sort(key=lambda x: x[1], reverse=True)
+                    if opps:
+                        avg_opp = sum(r for _, r in opps) / len(opps)
+                        my_rating = _ratings_map.get(next(iter(pt), ''), 0)
+                        if avg_opp > my_rating * 1.2:
+                            diff_txt, diff_clr = 'Сложная группа', _RED
+                        elif avg_opp > my_rating * 0.9:
+                            diff_txt, diff_clr = 'Средняя группа', _YELLOW
+                        else:
+                            diff_txt, diff_clr = 'Лёгкая группа', _GREEN
+                        an_box = BoxLayout(orientation='vertical', size_hint_y=None,
+                                          padding=(4, 2), spacing=2)
+                        an_box.bind(minimum_height=an_box.setter('height'))
+                        an_lbl = self._fl(
+                            f'Анализ группы {gi+1}: {diff_txt}  (ваш рейтинг {my_rating})',
+                            color=diff_clr, fs='11sp', bold=True)
+                        an_lbl.size_hint_y = None; an_lbl.height = 22
+                        an_box.add_widget(an_lbl)
+                        for oname, ort in opps:
+                            strength = 'сильный' if ort > my_rating * 1.15 else \
+                                       ('равный' if ort > my_rating * 0.85 else 'слабее')
+                            clr = _RED if strength == 'сильный' else \
+                                  (_YELLOW if strength == 'равный' else _GREEN)
+                            row_lbl = self._fl(
+                                f'  {oname[:18]:20}  рейт.{ort}  [{strength}]',
+                                color=clr, fs='10sp')
+                            row_lbl.size_hint_y = None; row_lbl.height = 20
+                            an_box.add_widget(row_lbl)
+                        _analysis_widgets.append(an_box)
+            except Exception:
+                pass
+
             # If no qualifiers, show groups immediately; else defer
             has_qualifiers = bool(self._qualifier_ev or self._qualifier_header)
             if has_qualifiers:
-                self._pending_groups = [
-                    _section_title('ГРУППОВОЙ ЭТАП', color=_ACCENT),
-                    groups_row,
-                ]
+                deferred = [_section_title('ГРУППОВОЙ ЭТАП', color=_ACCENT), groups_row]
+                deferred.extend(_analysis_widgets)
+                self._pending_groups = deferred
             else:
                 grid.add_widget(_section_title('ГРУППОВОЙ ЭТАП', color=_ACCENT))
                 grid.add_widget(groups_row)
+                for w in _analysis_widgets:
+                    grid.add_widget(w)
 
         sv.add_widget(grid)
         return sv
@@ -2301,6 +2438,19 @@ class TournamentPopup(Popup):
             self._persist_minor_results(self._minor_result_ev)
         if self._close_btn:
             self._close_btn.disabled = False
+        # Press conference if player participated
+        try:
+            if self._player_teams and self._tournament_ev:
+                placements = self._tournament_ev.get('placements', {})
+                my_place = next(
+                    (p for t, p in placements.items() if t.strip() in self._player_teams), None
+                )
+                if my_place:
+                    Clock.schedule_once(
+                        lambda dt: _open_press_conference(self.db_name, my_place), 0.8
+                    )
+        except Exception:
+            pass
 
     # ── feed widget helpers ───────────────────────────────────
 
@@ -2392,6 +2542,7 @@ class TournamentPopup(Popup):
                 if actual_winner != pre_winner:
                     self._apply_result_swap(self._seq_idx + 1, t1, t2)
                 self._feed_add_result(ev)
+                self._add_match_analytics(ev, my_team)
                 self._seq_idx += 1
                 self._scroll_feed()
                 Clock.schedule_once(self._next_step, 0.5)
@@ -2429,6 +2580,69 @@ class TournamentPopup(Popup):
         card.add_widget(btn_row)
         self._feed_grid.add_widget(card)
         self._scroll_feed()
+
+    def _add_match_analytics(self, ev, my_team):
+        """Show XP/fatigue/MVP analytics card after a player match."""
+        try:
+            s1 = ev.get('score_t1', 0) or 0
+            s2 = ev.get('score_t2', 0) or 0
+            games = s1 + s2
+            if games < 1:
+                return
+            won = (ev.get('winner', '') == my_team)
+
+            # XP estimate: 0.5 * games (simplified — actual depends on comp+LR)
+            xp_est = round(games * 0.5, 1)
+            fatigue_gain = games * 2
+
+            mvp = None
+            try:
+                import sqlite3 as _sq
+                conn = _sq.connect(self.db_name)
+                row = conn.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support "
+                    "FROM teams WHERE name=?", (my_team,)
+                ).fetchone()
+                conn.close()
+                if row:
+                    # pick highest-skill player as "MVP"
+                    skills = []
+                    conn2 = _sq.connect(self.db_name)
+                    for pid in row:
+                        if pid:
+                            p = conn2.execute(
+                                "SELECT nickname,micro_skills+macro_skills FROM players WHERE id=?",
+                                (pid,)
+                            ).fetchone()
+                            if p:
+                                skills.append(p)
+                    conn2.close()
+                    if skills:
+                        mvp = max(skills, key=lambda x: x[1])[0]
+            except Exception:
+                pass
+
+            result_clr = _GREEN if won else _RED
+            result_txt = 'Победа' if won else 'Поражение'
+            lines = [
+                f'[b][color=#{_hex(result_clr)}]{result_txt}[/color][/b]  '
+                f'·  {games} игр(ы)  ·  +{xp_est} XP  ·  усталость +{fatigue_gain}',
+            ]
+            if mvp:
+                lines.append(f'  MVP матча: [b]{mvp}[/b]')
+
+            card = _BgBox(bg=(0.06, 0.14, 0.10, 1), orientation='vertical',
+                          size_hint_y=None, padding=(8, 4), spacing=2)
+            card.height = 22 * len(lines) + 8
+            for line in lines:
+                lbl = Label(text=line, markup=True, color=(0.75, 0.95, 0.75, 1),
+                            size_hint_y=None, height=22,
+                            halign='left', valign='middle', font_size='11sp')
+                lbl.bind(size=lbl.setter('text_size'))
+                card.add_widget(lbl)
+            self._feed_grid.add_widget(card)
+        except Exception:
+            pass
 
     def _scroll_feed(self):
         if self._feed_sv:
@@ -3059,3 +3273,79 @@ def _persist_minor_results_standalone(db_name, event):
     _obj.db_name = db_name
     _obj._player_matches = []
     _obj._persist_minor_results(event)
+
+
+def _open_press_conference(db_name, place):
+    """Post-tournament press conference popup with choice of answers."""
+    import random as _rnd
+    from kivy.uix.popup import Popup as _Pop
+    from kivy.uix.boxlayout import BoxLayout as _BL
+    from kivy.uix.label import Label as _Lbl
+    from kivy.uix.button import Button as _Btn
+    import sqlite3 as _sq
+
+    _QUESTIONS = [
+        "Журналист: «Как вы оцениваете выступление команды?»",
+        "Журналист: «Что скажете болельщикам после этого результата?»",
+        "Журналист: «Какие выводы сделала команда из этого турнира?»",
+        "Журналист: «Конкуренты считают ваш результат случайностью — ваш ответ?»",
+    ]
+    question = _rnd.choice(_QUESTIONS)
+    place_txt = f'{place}-е место' if place > 1 else 'ПОБЕДА!'
+
+    p = _Pop(title='Пресс-конференция', size_hint=(0.58, 0.52))
+    root = _BL(orientation='vertical', padding=12, spacing=8)
+
+    q_lbl = _Lbl(
+        text=f'[b]{place_txt}[/b]\n\n{question}',
+        markup=True, color=(0.90, 0.90, 0.90, 1),
+        halign='center', valign='middle', font_size='13sp',
+    )
+    q_lbl.bind(size=q_lbl.setter('text_size'))
+    root.add_widget(q_lbl)
+
+    # Choices: (label, morale_delta, rep_delta, msg)
+    choices = [
+        ('Агрессивно: «Мы ещё покажем всем!»',
+         2, -1, 'Агрессивный ответ завёл команду: +2 мораль. Репутация −1 (скандал в прессе).'),
+        ('Нейтрально: «Работаем, результат придёт»',
+         0,  0, 'Взвешенный ответ — ни плюсов, ни минусов.'),
+        ('Дипломатично: «Соперники были сильны, мы учтём уроки»',
+         0,  2, 'Профессиональный ответ: репутация +2.'),
+    ]
+
+    for label, mdelta, rdelta, effect_msg in choices:
+        btn = _Btn(
+            text=label, size_hint_y=None, height=46,
+            background_color=(0.18, 0.35, 0.55, 1), background_normal='',
+            font_size='13sp',
+        )
+        def _pick(_, m=mdelta, r=rdelta, msg=effect_msg):
+            try:
+                conn = _sq.connect(db_name)
+                if m != 0:
+                    conn.execute("""
+                        UPDATE players SET morale=MAX(1,MIN(10,COALESCE(morale,5)+?))
+                        WHERE id IN (SELECT carry FROM teams WHERE player='yes'
+                            UNION SELECT mid FROM teams WHERE player='yes'
+                            UNION SELECT offlane FROM teams WHERE player='yes'
+                            UNION SELECT partial_support FROM teams WHERE player='yes'
+                            UNION SELECT full_support FROM teams WHERE player='yes')
+                    """, (m,))
+                if r != 0:
+                    conn.execute(
+                        "UPDATE characters SET reputation=MAX(0,COALESCE(reputation,0)+?)", (r,)
+                    )
+                conn.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
+                    (f'Пресс-конференция: {msg}', 'СМИ'),
+                )
+                conn.commit(); conn.close()
+            except Exception:
+                pass
+            p.dismiss()
+        btn.bind(on_press=_pick)
+        root.add_widget(btn)
+
+    p.content = root
+    p.open()

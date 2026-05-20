@@ -124,6 +124,13 @@ class NegotiationPopup(Popup):
         low_wage  = max(1000, int(demanded * 0.80))
         high_wage = int(demanded * 1.15)
 
+        # Agent fee for star players (avg >= 75): 15% of first-year wages
+        agent_fee = 0
+        agent_pct = 0
+        if avg >= 75:
+            agent_pct = 15 if avg >= 90 else 10
+            agent_fee = round(demanded * 12 * agent_pct / 100 / 5000) * 5000
+
         # acceptance chance: morale + reputation + rating bonus
         rep_bonus    = min(20, reputation // 5)
         rating_bonus = int(rating_factor * 30)   # better team → +up to 6% chance
@@ -170,6 +177,10 @@ class NegotiationPopup(Popup):
             root.add_widget(_lbl(hint, hint_c, halign='center'))
         root.add_widget(_lbl(f'Запрошенная зарплата:  ${demanded:,}/мес',
                              _YELLOW, bold=True, halign='center'))
+        if agent_fee:
+            root.add_widget(_lbl(
+                f'Агент игрока требует единовременно: ${agent_fee:,}  ({agent_pct}% от года)',
+                (1.00, 0.55, 0.20, 1), halign='center'))
 
         # ── offer buttons ─────────────────────────────────────────
         offers = BoxLayout(orientation='vertical', spacing=6, size_hint_y=None, height=150)
@@ -332,6 +343,21 @@ class NegotiationPopup(Popup):
         gd_row = cur.execute("SELECT date FROM save WHERE id=1").fetchone()
         gd_str = gd_row[0] if gd_row else '2024'
 
+        # Deduct agent fee for star players (reduced by negotiator skill)
+        if sk_sum // 2 >= 75:
+            _agent_pct = 15 if sk_sum // 2 >= 90 else 10
+            try:
+                from logic.manager_skills import get_skill_level
+                neg_lvl = get_skill_level(self.db_name, 'negotiator')
+                _agent_pct = max(0, _agent_pct - neg_lvl * 5)
+            except Exception:
+                pass
+            _agent_fee = round(wage * 12 * _agent_pct / 100 / 5000) * 5000
+            if _agent_fee > 0:
+                conn.execute(
+                    "UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?",
+                    (_agent_fee, team_id),
+                )
         conn.execute(
             "INSERT INTO messages (text, date, author) VALUES (?,date('now'),?)",
             (f'Подписан {nick} на {self._years} г., ${wage:,}/мес.', 'Трансфер'),
@@ -528,6 +554,214 @@ class TransferPopup(Popup):
         conn.close()
         self._rebuild()
 
+    def _open_loan_out(self, pid, col, role, nick, wage):
+        """Popup to pick AI team and duration for outgoing loan."""
+        conn = sqlite3.connect(self.db_name)
+        gd = conn.execute("SELECT date FROM save WHERE id=1").fetchone()
+        game_date_str = gd[0] if gd else str(date.today())
+        # Find AI teams with empty slot for this role
+        avail = conn.execute(
+            f"SELECT id, name, COALESCE(budget,0) FROM teams "
+            f"WHERE player!='yes' AND {col} IS NULL "
+            f"ORDER BY COALESCE(rating,0) DESC LIMIT 20"
+        ).fetchall()
+        conn.close()
+
+        p = Popup(title=f'Аренда: {nick}', size_hint=(0.55, 0.75))
+        sv = ScrollView()
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=4, padding=6)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        if not avail:
+            gl.add_widget(Label(text='Нет команд с пустым слотом для этой роли.',
+                                size_hint_y=None, height=40))
+        else:
+            gl.add_widget(Label(
+                text=f'Выберите команду и срок аренды. Доход: {int(wage*1.5):,}₽ за 3 мес.',
+                size_hint_y=None, height=40,
+                color=(0.75, 0.75, 1.0, 1), markup=True,
+            ))
+            for ai_tid, ai_name, ai_budget in avail:
+                row = BoxLayout(size_hint_y=None, height=40, spacing=4)
+                row.add_widget(Label(text=ai_name.strip(), size_hint_x=0.5,
+                                     color=(0.9, 0.9, 0.9, 1), font_size='13sp'))
+                for months, label in [(3, '3 мес'), (6, '6 мес')]:
+                    fee = int(wage * months * 1.5)
+                    b = Button(
+                        text=f'{label} (+${fee//1000}k)',
+                        size_hint_x=None, width=120, height=36,
+                        background_color=(0.15, 0.45, 0.25, 1), background_normal='',
+                        font_size='12sp',
+                    )
+                    def _do_loan(_, _tid=ai_tid, _tname=ai_name, _months=months, _fee=fee):
+                        self._exec_loan_out(pid, col, _tid, _tname, _months, _fee,
+                                            game_date_str)
+                        p.dismiss()
+                    b.bind(on_press=_do_loan)
+                    row.add_widget(b)
+                gl.add_widget(row)
+
+        cancel = Button(text='Отмена', size_hint_y=None, height=44,
+                        background_color=(0.5, 0.15, 0.15, 1), background_normal='')
+        cancel.bind(on_press=p.dismiss)
+        gl.add_widget(cancel)
+        sv.add_widget(gl)
+        p.content = sv
+        p.open()
+
+    def _open_trade(self, pid, col, role, nick, micro, macro):
+        """Popup to pick AI player of same role to trade."""
+        conn = sqlite3.connect(self.db_name)
+        gd = conn.execute("SELECT date FROM save WHERE id=1").fetchone()
+        game_date_str = gd[0] if gd else str(date.today())
+        my_avg = (micro + macro) // 2
+        # Diplomat skill: widens acceptable skill gap for trades
+        _dip_bonus = 0
+        try:
+            from logic.manager_skills import get_skill_level
+            _dip_bonus = get_skill_level(self.db_name, 'diplomat') * 10
+        except Exception:
+            pass
+
+        # Find AI players of same role with skill < player's (AI accepts upgrade)
+        candidates = conn.execute(f"""
+            SELECT p.id, p.nickname, p.micro_skills, p.macro_skills, t.id, t.name
+            FROM players p JOIN teams t ON t.id=p.team_id
+            WHERE p.role=? AND t.player!='yes'
+              AND (p.micro_skills+p.macro_skills) < ?
+            ORDER BY (p.micro_skills+p.macro_skills) DESC LIMIT 20
+        """, (role, micro + macro + _dip_bonus)).fetchall()
+        conn.close()
+
+        p = Popup(title=f'Обмен: {nick} → ?', size_hint=(0.60, 0.75))
+        sv = ScrollView()
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=4, padding=6)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        if not candidates:
+            gl.add_widget(Label(text='Нет AI игроков той же роли со скиллом ниже.',
+                                size_hint_y=None, height=40))
+        else:
+            gl.add_widget(Label(
+                text=f'Ваш игрок: {nick} (скилл {my_avg}). Выберите, кого получить:',
+                size_hint_y=None, height=36, color=(0.8, 0.8, 1.0, 1),
+            ))
+            for ai_pid, ai_nick, ai_mi, ai_ma, ai_tid, ai_tname in candidates:
+                ai_avg = (ai_mi + ai_ma) // 2
+                row = BoxLayout(size_hint_y=None, height=40, spacing=4)
+                row.add_widget(Label(
+                    text=f'{ai_nick} ({ai_tname.strip()})  скилл {ai_avg}',
+                    size_hint_x=0.65, color=(0.85, 0.85, 0.85, 1), font_size='13sp',
+                ))
+                b = Button(
+                    text='Обменять', size_hint_x=None, width=100, height=36,
+                    background_color=(0.20, 0.45, 0.18, 1), background_normal='',
+                    font_size='13sp',
+                )
+                def _do_trade(_, _apid=ai_pid, _atid=ai_tid, _aname=ai_tname,
+                              _anick=ai_nick):
+                    self._exec_trade(pid, col, _apid, _atid, _aname.strip(),
+                                     _anick, game_date_str)
+                    p.dismiss()
+                b.bind(on_press=_do_trade)
+                row.add_widget(b)
+                gl.add_widget(row)
+
+        cancel = Button(text='Отмена', size_hint_y=None, height=44,
+                        background_color=(0.5, 0.15, 0.15, 1), background_normal='')
+        cancel.bind(on_press=p.dismiss)
+        gl.add_widget(cancel)
+        sv.add_widget(gl)
+        p.content = sv
+        p.open()
+
+    def _exec_trade(self, my_pid, my_col, ai_pid, ai_tid, ai_tname, ai_nick,
+                    game_date_str):
+        """Swap my player for AI player. AI gets upgrade, we get their slot."""
+        conn = sqlite3.connect(self.db_name)
+        # Find which slot ai_pid occupies
+        ai_col = None
+        for col in ('carry', 'mid', 'offlane', 'partial_support', 'full_support'):
+            row = conn.execute(f"SELECT {col} FROM teams WHERE id=?", (ai_tid,)).fetchone()
+            if row and str(row[0]) == str(ai_pid):
+                ai_col = col
+                break
+        if not ai_col:
+            conn.close()
+            return
+
+        my_tid = conn.execute("SELECT id FROM teams WHERE player='yes'").fetchone()
+        if not my_tid:
+            conn.close()
+            return
+        my_tid = my_tid[0]
+
+        # Swap slots
+        conn.execute(f"UPDATE teams SET {my_col}=? WHERE player='yes'", (ai_pid,))
+        conn.execute(f"UPDATE teams SET {ai_col}=? WHERE id=?", (my_pid, ai_tid))
+        # Update team_id
+        conn.execute("UPDATE players SET team_id=? WHERE id=?", (my_tid, ai_pid))
+        conn.execute("UPDATE players SET team_id=? WHERE id=?", (ai_tid, my_pid))
+        # Cohesion penalty for both teams
+        conn.execute(
+            "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-10) WHERE player='yes'"
+        )
+        conn.execute(
+            "UPDATE teams SET cohesion=MAX(0,COALESCE(cohesion,0)-10) WHERE id=?", (ai_tid,)
+        )
+        conn.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+            (f'Обмен: ваш игрок → {ai_tname}, получен {ai_nick}.',
+             game_date_str, 'Трансфер'),
+        )
+        conn.commit()
+        conn.close()
+        self._rebuild()
+
+    def _exec_loan_out(self, pid, col, ai_tid, ai_name, months, fee,
+                       game_date_str):
+        """Send player on loan to AI team."""
+        from datetime import timedelta
+        conn = sqlite3.connect(self.db_name)
+        try:
+            gd = date.fromisoformat(game_date_str)
+        except Exception:
+            gd = date.today()
+        loan_until = str(gd + timedelta(days=months * 30))
+
+        # Clear player's slot on player team
+        conn.execute(f"UPDATE teams SET {col}=NULL WHERE player='yes'")
+        # Assign player to AI team's slot
+        conn.execute(f"UPDATE teams SET {col}=? WHERE id=?", (pid, ai_tid))
+        # Update player record
+        conn.execute(
+            "UPDATE players SET team_id=?, loan_team_id=?, loan_until=?, loan_fee=? WHERE id=?",
+            (ai_tid, ai_tid, loan_until, fee // months, pid)
+        )
+        # Pay loan fee upfront
+        conn.execute("UPDATE teams SET budget=budget+? WHERE player='yes'", (fee,))
+        conn.execute(
+            "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+            (f'Игрок отдан в аренду в {ai_name} до {loan_until}. Доход: +${fee:,}.',
+             game_date_str, 'Трансфер'),
+        )
+        conn.commit()
+        conn.close()
+        self._rebuild()
+
+    def _toggle_watchlist(self, pid):
+        conn = sqlite3.connect(self.db_name)
+        existing = conn.execute(
+            "SELECT id FROM watchlist WHERE player_id=?", (pid,)
+        ).fetchone()
+        if existing:
+            conn.execute("DELETE FROM watchlist WHERE player_id=?", (pid,))
+        else:
+            conn.execute("INSERT OR IGNORE INTO watchlist (player_id) VALUES (?)", (pid,))
+        conn.commit()
+        conn.close()
+        self._rebuild()
+
     def _scout_player(self, pid, cost):
         conn = sqlite3.connect(self.db_name)
         budget = conn.execute(
@@ -686,9 +920,37 @@ class TransferPopup(Popup):
                                       self._sell_player(pid, col, f))
                     else:
                         sell_btn.bind(on_press=lambda _: _show_window_popup())
+                    loan_btn = Button(
+                        text='Аренда→', size_hint=(None, None),
+                        width=76, height=38,
+                        background_color=(0.18, 0.35, 0.60, 1) if in_window else (0.3, 0.3, 0.3, 1),
+                        background_normal='', font_size='12sp',
+                    )
+                    if in_window:
+                        loan_btn.bind(on_press=lambda _, pid=pid, col=col,
+                                      r=role, nick=nick, w=wage:
+                                      self._open_loan_out(pid, col, r, nick, w))
+                    else:
+                        loan_btn.bind(on_press=lambda _: _show_window_popup())
+
+                    trade_btn = Button(
+                        text='Обмен', size_hint=(None, None),
+                        width=66, height=38,
+                        background_color=(0.30, 0.18, 0.50, 1) if in_window else (0.3, 0.3, 0.3, 1),
+                        background_normal='', font_size='12sp',
+                    )
+                    if in_window:
+                        trade_btn.bind(on_press=lambda _, pid=pid, col=col,
+                                       r=role, nick=nick, mi=micro, ma=macro:
+                                       self._open_trade(pid, col, r, nick, mi, ma))
+                    else:
+                        trade_btn.bind(on_press=lambda _: _show_window_popup())
+
                     row.add_widget(info)
                     row.add_widget(rel_btn)
                     row.add_widget(sell_btn)
+                    row.add_widget(loan_btn)
+                    row.add_widget(trade_btn)
 
                     if expiring:
                         demanded = max(int(wage * 1.20), exp_wage)
@@ -836,7 +1098,8 @@ class TransferPopup(Popup):
         wage_cond  = f"AND COALESCE(expected_wage,0) <= {max_wage}" if max_wage < 99999 else ''
         cur.execute(f"""
             SELECT id, name, surname, nickname, role, micro_skills, macro_skills,
-                   expected_wage, COALESCE(age, 22), COALESCE(scouted, 0)
+                   expected_wage, COALESCE(age, 22), COALESCE(scouted, 0),
+                   COALESCE(psychotype,'team_player')
             FROM players
             WHERE team_id=0 AND role IS NOT NULL AND nickname != ''
               {role_cond_p} {skill_cond} {wage_cond}
@@ -917,10 +1180,16 @@ class TransferPopup(Popup):
         lbl_role = ROLE_LABELS.get(rf, rf) if rf != 'все' else 'все роли'
         grid.add_widget(_header(f"  Свободные агенты  [{lbl_role}]"))
 
+        _PSYCHO_CHIP = {
+            'leader':      ('[👑]', (1.00, 0.85, 0.20, 1)),
+            'solo_carry':  ('[⚡]', (0.40, 0.80, 1.00, 1)),
+            'team_player': ('[🤝]', (0.30, 0.95, 0.45, 1)),
+            'wildcard':    ('[🎲]', (1.00, 0.55, 0.20, 1)),
+        }
         if not free_agents:
             grid.add_widget(_lbl("  Нет свободных игроков.", color=(0.7, 0.7, 0.7, 1)))
         else:
-            for pid, fname, lname, nick, role, micro, macro, exp_wage, age, scouted in free_agents:
+            for pid, fname, lname, nick, role, micro, macro, exp_wage, age, scouted, psychotype in free_agents:
                 exp_wage = exp_wage or 0
                 avg = (micro + macro) // 2
                 scout_cost = max(3000, min(25000, avg * 200))
@@ -932,17 +1201,43 @@ class TransferPopup(Popup):
                 )
                 color = (1, 1, 1, 1) if can_sign else (0.55, 0.55, 0.55, 1)
 
+                # Scout skill: free reveal
+                _scout_reveal = False
+                try:
+                    from logic.manager_skills import has_skill
+                    if not scouted and has_skill(self.db_name, 'scout'):
+                        _scout_reveal = True
+                except Exception:
+                    pass
+
                 row = BoxLayout(size_hint_y=None, height=46, spacing=3)
-                if scouted:
-                    skill_txt = f"скилл {avg}"
+                if scouted or _scout_reveal:
+                    skill_txt = f"скилл {avg}" + (' 🔍' if _scout_reveal else '')
+                    pchip, pclr = _PSYCHO_CHIP.get(psychotype, ('', None))
                 else:
                     skill_txt = "скилл ??"
+                    pchip, pclr = '', None
                 info = _lbl(
                     f"  {nick} ({fname} {lname.strip()})  "
-                    f"{skill_txt}  возр. {age}  от ${exp_wage:,}/мес",
+                    f"{skill_txt}  возр. {age}  от ${exp_wage:,}/мес"
+                    + (f'  {pchip}' if pchip else ''),
                     height=46, color=color,
                 )
                 row.add_widget(info)
+
+                # Watchlist toggle button (always visible)
+                _wl_ids = {r[0] for r in cur.execute(
+                    "SELECT player_id FROM watchlist"
+                ).fetchall()} if True else set()
+                in_wl = pid in _wl_ids
+                wl_btn = Button(
+                    text='👁✓' if in_wl else '👁',
+                    size_hint=(None, None), width=40, height=40,
+                    background_color=(0.10, 0.35, 0.55, 1) if in_wl else (0.22, 0.22, 0.30, 1),
+                    background_normal='', font_size='14sp',
+                )
+                wl_btn.bind(on_press=lambda _, _pid=pid: self._toggle_watchlist(_pid))
+                row.add_widget(wl_btn)
 
                 if not scouted:
                     can_scout = budget >= scout_cost
@@ -979,6 +1274,39 @@ class TransferPopup(Popup):
                         row.add_widget(btn)
 
                 grid.add_widget(row)
+
+        # ── watchlist section ─────────────────────────────────
+        wl_rows = cur.execute("""
+            SELECT w.player_id, p.nickname, p.role,
+                   COALESCE(p.micro_skills,0), COALESCE(p.macro_skills,0),
+                   COALESCE(p.expected_wage,0), p.team_id,
+                   COALESCE(t.name, 'Свободный агент')
+            FROM watchlist w
+            JOIN players p ON p.id = w.player_id
+            LEFT JOIN teams t ON t.id = p.team_id AND p.team_id != 0
+            ORDER BY (p.micro_skills+p.macro_skills) DESC
+        """).fetchall()
+        if wl_rows:
+            grid.add_widget(_header('  Список наблюдения'))
+            for wpid, wnick, wrole, wmi, wma, wwage, wtid, wteam in wl_rows:
+                wavg = (wmi + wma) // 2
+                status = 'FA' if not wtid else wteam
+                wrow = BoxLayout(size_hint_y=None, height=36, spacing=3)
+                winfo = _lbl(
+                    f'  {wnick}  ({ROLE_LABELS.get(wrole,wrole)})  '
+                    f'скилл {wavg}  ${wwage:,}/мес  [{status}]',
+                    height=36,
+                    color=(0.75, 0.90, 1.00, 1) if not wtid else (0.70, 0.70, 0.70, 1),
+                )
+                wrow.add_widget(winfo)
+                rm_btn = Button(
+                    text='✕', size_hint=(None, None), width=32, height=32,
+                    background_color=(0.50, 0.15, 0.15, 1), background_normal='',
+                    font_size='14sp',
+                )
+                rm_btn.bind(on_press=lambda _, _pid=wpid: self._toggle_watchlist(_pid))
+                wrow.add_widget(rm_btn)
+                grid.add_widget(wrow)
 
         # ── window banner ──────────────────────────────────────
         next_window = 'Август' if game_d.month < 8 else 'Январь'

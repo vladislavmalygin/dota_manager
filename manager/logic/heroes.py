@@ -123,6 +123,33 @@ ROLE_ORDER = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
 # All hero names for quick lookup
 ALL_HERO_NAMES = {h[0] for heroes in HEROES.values() for h in heroes}
 
+# Simple counter relationships: hero → [heroes that counter it]
+COUNTERS = {
+    'Anti-Mage':        ['Lina', 'Storm Spirit', 'Silencer'],
+    'Phantom Assassin': ['Zeus', 'Slardar', 'Bloodseeker'],
+    'Terrorblade':      ['Legion Commander', 'Chaos Knight', 'Axe'],
+    'Medusa':           ['Axe', 'Legion Commander', 'Magnus'],
+    'Faceless Void':    ['Bane', 'Doom', 'Axe'],
+    'Lina':             ['Anti-Mage', 'Puck', 'Storm Spirit'],
+    'Invoker':          ['Silencer', 'Anti-Mage', 'Templar Assassin'],
+    'Storm Spirit':     ['Silencer', 'Lion', 'Bloodseeker'],
+    'Tinker':           ['Anti-Mage', 'Nyx Assassin', 'Lifestealer'],
+    'Shadow Fiend':     ['Nyx Assassin', 'Batrider', 'Doom'],
+    'Axe':              ['Phantom Assassin', 'Slardar', 'Silencer'],
+    'Enigma':           ['Faceless Void', 'Bane', 'Doom'],
+    'Earthshaker':      ['Zeus', 'Lina', 'Anti-Mage'],
+    'Magnus':           ['Silencer', 'Doom', 'Nyx Assassin'],
+    'Naga Siren':       ['Silencer', 'Doom', 'Anti-Mage'],
+    'Broodmother':      ['Dragon Knight', 'Batrider', 'Doom'],
+    'Pudge':            ['Anti-Mage', 'Ursa', 'Slark'],
+    'Bane':             ['Silencer', 'Anti-Mage', 'Lifestealer'],
+}
+
+
+def get_counters(hero_name):
+    """Return list of hero names that counter the given hero."""
+    return COUNTERS.get(hero_name, [])
+
 
 def random_picks(exclude=None):
     """Pick one random hero per role, optionally excluding already-taken names."""
