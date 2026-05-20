@@ -159,17 +159,26 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
                         micro = max(1, int(micro * _mod))
                         macro = max(1, int(macro * _mod))
                         soft  = max(1, int(soft  * _mod))
+            # Carry style_tag from hero_picks for item event generation
+            _style_tag = ''
+            if hero_picks:
+                _rs = role.replace(f'{team_key}_', '')
+                _ph = (hero_picks.get(team_key) or {}).get(_rs)
+                if _ph and isinstance(_ph, tuple) and len(_ph) >= 5:
+                    _style_tag = _ph[4]
             skills[team_key][role] = {
                 'micro_skills': micro,
                 'macro_skills': macro,
                 'soft_skills':  soft,
                 'nickname':     nick or role,
+                'style_tag':    _style_tag,
             }
         else:
             skills[team_key][role] = {
                 'micro_skills': 1,
                 'macro_skills': 1,
                 'soft_skills':  1,
+                'style_tag':    '',
             }
 
     skills['strat_t1'] = {

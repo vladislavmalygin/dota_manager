@@ -614,12 +614,13 @@ class MainWindow(BoxLayout):
                 ('Инвитэйшнл',       self.on_organize_invitational),
             ]),
             ('ИСТОРИЯ', [
-                ('История',     self.on_history),
-                ('Трансф. лог', self.on_transfer_history),
-                ('Статистика',  self.on_stats),
-                ('Герои патча', self.on_hero_stats),
-                ('Зал славы',   self.on_hall_of_fame),
-                ('Календарь',   self.on_season_calendar),
+                ('История',      self.on_history),
+                ('Трансф. лог',  self.on_transfer_history),
+                ('Статистика',   self.on_stats),
+                ('Герои патча',  self.on_hero_stats),
+                ('Лидерборд',    self.on_global_stats),
+                ('Зал славы',    self.on_hall_of_fame),
+                ('Календарь',    self.on_season_calendar),
             ]),
             ('ПРОЧЕЕ', [
                 ('Входящие',    self.on_incoming),
@@ -695,7 +696,7 @@ class MainWindow(BoxLayout):
         self._ticker_offset = [0.0]
         self._ticker_items  = []
         Clock.schedule_once(lambda dt: self._load_ticker(), 1.0)
-        Clock.schedule_interval(self._tick_news, 0.05)
+        Clock.schedule_interval(self._tick_news, 0.25)
 
         # ── Keyboard shortcuts ────────────────────────────────────────────────
         from kivy.core.window import Window as _Win
@@ -1531,6 +1532,8 @@ class MainWindow(BoxLayout):
             "ALTER TABLE meta_patches ADD COLUMN mechanic_effect TEXT DEFAULT ''",
             # Feature 6: Investor condition
             "ALTER TABLE teams ADD COLUMN investor_condition TEXT DEFAULT ''",
+            # Win streak tracking
+            "ALTER TABLE teams ADD COLUMN win_streak INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(ddl2)
@@ -1835,10 +1838,15 @@ class MainWindow(BoxLayout):
             self._ticker_full = ''
 
     def _tick_news(self, dt):
+        # Reload ticker content every ~60s
+        self._ticker_reload_acc = getattr(self, '_ticker_reload_acc', 0) + dt
+        if self._ticker_reload_acc >= 60.0:
+            self._ticker_reload_acc = 0.0
+            self._load_ticker()
         text = getattr(self, '_ticker_full', '')
         if not text:
             return
-        spd = 60   # pixels per second
+        spd = 30   # pixels per second (reduced from 60)
         self._ticker_offset[0] = (self._ticker_offset[0] + spd * dt) % max(1, len(text) * 8)
         char_off = int(self._ticker_offset[0] / 8)
         rotated = text[char_off:] + text[:char_off]
@@ -2887,12 +2895,8 @@ class MainWindow(BoxLayout):
 
         sv.add_widget(gl)
         root.add_widget(sv)
-        close = Button(text='Закрыть', size_hint_y=None, height=44,
-                       background_color=(0.60, 0.18, 0.18, 1), background_normal='')
-        close.bind(on_press=pop.dismiss)
-        root.add_widget(close)
         pop.content = root
-        pop.open()
+        self._show_inline(pop, f'Сетка: {at["name"]}')
 
     # ── Feature 8: Season calendar ────────────────────────────────────────────
 
@@ -3027,12 +3031,8 @@ class MainWindow(BoxLayout):
 
             sv.add_widget(gl)
             root.add_widget(sv)
-            close = Button(text='Закрыть', size_hint_y=None, height=44,
-                           background_color=(0.60, 0.18, 0.18, 1), background_normal='')
-            close.bind(on_press=pop.dismiss)
-            root.add_widget(close)
             pop.content = root
-            pop.open()
+            self._show_inline(pop, f'Календарь сезона {cur_year}')
         except Exception as _e:
             T.log_err('on_season_calendar', _e)
 
@@ -3166,12 +3166,8 @@ class MainWindow(BoxLayout):
 
             sv.add_widget(gl)
             root.add_widget(sv)
-            close = Button(text='Закрыть', size_hint_y=None, height=44,
-                           background_color=(0.50, 0.15, 0.15, 1), background_normal='')
-            close.bind(on_press=p.dismiss)
-            root.add_widget(close)
             p.content = root
-            p.open()
+            self._show_inline(p, 'Зал Славы')
         except Exception as _e:
             T.log_err('_show_hall_of_fame', _e)
 
@@ -3220,12 +3216,8 @@ class MainWindow(BoxLayout):
 
             sv.add_widget(gl)
             root.add_widget(sv)
-            close = Button(text='Закрыть', size_hint_y=None, height=44,
-                           background_color=(0.30, 0.30, 0.30, 1), background_normal='')
-            close.bind(on_press=p.dismiss)
-            root.add_widget(close)
             p.content = root
-            p.open()
+            self._show_inline(p, 'DPC Standings')
         except Exception as _e:
             T.log_err('on_dpc_standings', _e)
 
@@ -3238,7 +3230,7 @@ class MainWindow(BoxLayout):
                 db_name=self.db_name,
                 on_launch=self._run_invitational,
             )
-            popup.open()
+            self._show_inline(popup, 'Организовать инвитэйшнл')
         except Exception as _e:
             T.log_err('on_organize_invitational', _e)
 
@@ -3310,33 +3302,36 @@ class MainWindow(BoxLayout):
             )
             conn2.commit(); conn2.close()
 
-            # Show results
+            # Show results inline
             from kivy.uix.popup import Popup
             from kivy.uix.boxlayout import BoxLayout
             from kivy.uix.label import Label
-            from kivy.uix.button import Button
+            from kivy.uix.gridlayout import GridLayout
+            from kivy.uix.scrollview import ScrollView
             root = BoxLayout(orientation='vertical', padding=10, spacing=8)
-            root.add_widget(Label(
-                text=f'[b]Invitational завершён![/b]',
+            hdr = Label(
+                text=f'[b]Инвитэйшнл завершён![/b]',
                 markup=True, color=(1, 0.85, 0.2, 1),
-                size_hint_y=None, height=40, halign='center', valign='middle',
-            ))
-            top3 = sorted(placements.items(), key=lambda x: x[1])[:3]
-            for team, place in top3:
+                size_hint_y=None, height=44, halign='center', valign='middle',
+            )
+            hdr.bind(size=hdr.setter('text_size'))
+            root.add_widget(hdr)
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=4)
+            gl.bind(minimum_height=gl.setter('height'))
+            for team, place in sorted(placements.items(), key=lambda x: x[1]):
                 lbl = Label(
                     text=f'  #{place}  {team}',
-                    color=(1, 1, 1, 1),
-                    size_hint_y=None, height=30, halign='left', valign='middle',
+                    color=(1.0, 0.85, 0.25, 1) if place == 1 else (0.90, 0.90, 0.90, 1),
+                    markup=True, size_hint_y=None, height=28,
+                    halign='left', valign='middle',
                 )
                 lbl.bind(size=lbl.setter('text_size'))
-                root.add_widget(lbl)
-            p = Popup(title='', content=root, size_hint=(0.55, 0.45))
-            close = Button(text='Закрыть', size_hint_y=None, height=44,
-                           background_normal='', background_color=(0.3, 0.3, 0.3, 1))
-            close.bind(on_press=p.dismiss)
-            root.add_widget(close)
-            p.content = root
-            p.open()
+                gl.add_widget(lbl)
+            sv = ScrollView(size_hint=(1, 1))
+            sv.add_widget(gl)
+            root.add_widget(sv)
+            p = Popup(title='', content=root, size_hint=(0.80, 0.88))
+            self._show_inline(p, 'Результаты инвитэйшнл')
         except Exception as _e:
             T.log_err('_run_invitational', _e)
 
@@ -3452,6 +3447,91 @@ class MainWindow(BoxLayout):
         except Exception as _e:
             T.log_err('_make_big_patch_popup', _e)
             return None
+
+    def _update_win_streak(self, player_team_name, won):
+        """Update win streak, apply morale/form bonus or penalty at threshold."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            row = conn.execute(
+                "SELECT id, COALESCE(win_streak,0) FROM teams WHERE player='yes'"
+            ).fetchone()
+            if not row:
+                conn.close()
+                return
+            tid, streak = row
+            new_streak = (streak + 1) if won else (streak - 1)
+            # Cap streak
+            new_streak = max(-10, min(10, new_streak))
+            conn.execute("UPDATE teams SET win_streak=? WHERE id=?", (new_streak, tid))
+
+            msg = None
+            if new_streak == 3:
+                # 3 win streak: +1 morale all
+                slots = conn.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+                    (tid,)
+                ).fetchone() or ()
+                for pid in slots:
+                    if pid:
+                        conn.execute(
+                            "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?",
+                            (pid,)
+                        )
+                msg = (f'Серия побед!',
+                       f'{player_team_name} выиграли 3 матча подряд! +1 мораль всем игрокам.')
+            elif new_streak == -3:
+                # 3 loss streak: -1 form all
+                slots = conn.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+                    (tid,)
+                ).fetchone() or ()
+                for pid in slots:
+                    if pid:
+                        conn.execute(
+                            "UPDATE players SET form=MAX(1,COALESCE(form,5)-1) WHERE id=?",
+                            (pid,)
+                        )
+                msg = ('Кризис формы',
+                       f'{player_team_name} проиграли 3 матча подряд. −1 форма всем игрокам.')
+            elif new_streak == 5:
+                # 5 win streak: +2 morale + rep bonus
+                conn.execute(
+                    "UPDATE teams SET org_reputation=MIN(100,COALESCE(org_reputation,20)+5) WHERE id=?",
+                    (tid,)
+                )
+                msg = ('Доминирование!',
+                       f'5 побед подряд! +5 репутация организации. Болельщики в восторге.')
+            elif new_streak == -5:
+                # 5 loss streak: -2 morale + mgr rep drop
+                slots = conn.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+                    (tid,)
+                ).fetchone() or ()
+                for pid in slots:
+                    if pid:
+                        conn.execute(
+                            "UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id=?",
+                            (pid,)
+                        )
+                conn.execute(
+                    "UPDATE teams SET mgr_reputation=MAX(0,COALESCE(mgr_reputation,20)-5) WHERE id=?",
+                    (tid,)
+                )
+                msg = ('Затяжной кризис',
+                       '5 поражений подряд. −1 мораль всем, −5 репутации менеджера.')
+
+            conn.commit()
+            conn.close()
+
+            if msg:
+                conn2 = sqlite3.connect(self.db_name)
+                conn2.execute(
+                    "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                    (f'{msg[0]}: {msg[1]}', str(self.date_object), 'Новости')
+                )
+                conn2.commit(); conn2.close()
+        except Exception as _e:
+            T.log_err('_update_win_streak', _e)
 
     def _build_leadership_clash_popup(self, clash_data):
         """Build and return (without opening) a leadership clash popup."""
@@ -4049,8 +4129,107 @@ class MainWindow(BoxLayout):
         show_leaderboard_popup(self.db_name)
 
     def on_hero_stats(self, instance):
-        from ingame_interface.stats import show_hero_stats_popup
-        show_hero_stats_popup(self.db_name)
+        from ingame_interface.stats import HeroStatsPopup
+        self._show_inline(HeroStatsPopup(db_name=self.db_name), 'Статистика героев')
+
+    def on_global_stats(self, instance):
+        """Global leaderboard: team winrates + top players by career earnings."""
+        from kivy.uix.popup import Popup
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.gridlayout import GridLayout
+        from kivy.uix.label import Label
+        from kivy.uix.scrollview import ScrollView
+        try:
+            conn = sqlite3.connect(self.db_name)
+            my_team = (conn.execute(
+                "SELECT name FROM teams WHERE player='yes'"
+            ).fetchone() or (None,))[0]
+
+            # Team standings by rating
+            teams = conn.execute(
+                "SELECT name, COALESCE(rating,0), COALESCE(fans,0), "
+                "COALESCE(win_streak,0), player "
+                "FROM teams ORDER BY COALESCE(rating,0) DESC LIMIT 20"
+            ).fetchall()
+
+            # Top players by career earnings
+            top_players = conn.execute(
+                """SELECT p.nickname, p.team_id, t.name as tname,
+                   COALESCE(SUM(cs.earnings),0) as total_earn,
+                   COALESCE(SUM(cs.games),0) as games,
+                   COALESCE(p.micro_skills,0)+COALESCE(p.macro_skills,0) as skill
+                   FROM players p
+                   LEFT JOIN player_career_stats cs ON cs.player_id=p.id
+                   LEFT JOIN teams t ON t.id=p.team_id
+                   WHERE p.nickname != ''
+                   GROUP BY p.id
+                   ORDER BY total_earn DESC LIMIT 15"""
+            ).fetchall()
+
+            # Match history summary
+            total_matches = (conn.execute(
+                "SELECT COUNT(*) FROM match_history"
+            ).fetchone() or (0,))[0]
+            conn.close()
+
+            pop = Popup(title='', size_hint=(0.88, 0.92))
+            root = BoxLayout(orientation='vertical', padding=6, spacing=4)
+            sv = ScrollView(size_hint=(1,1))
+            gl = GridLayout(cols=1, size_hint_y=None, spacing=3, padding=(8,4))
+            gl.bind(minimum_height=gl.setter('height'))
+
+            _ACC  = (0.35, 0.85, 1.00, 1)
+            _GOLD = (1.00, 0.85, 0.25, 1)
+            _MY   = (0.30, 1.00, 0.55, 1)
+            _DIM  = (0.50, 0.50, 0.55, 1)
+
+            def _hdr(txt, color=_ACC):
+                l = Label(text=f'[b]{txt}[/b]', markup=True, color=color,
+                          size_hint_y=None, height=28, halign='left', valign='middle',
+                          font_size='13sp')
+                l.bind(size=l.setter('text_size'))
+                return l
+
+            def _row(left, right, lc=_DIM, rc=(0.90,0.90,0.90,1)):
+                r = BoxLayout(size_hint_y=None, height=24)
+                ll = Label(text=left, markup=True, color=lc, font_size='11sp',
+                           halign='left', valign='middle', size_hint_x=0.65)
+                ll.bind(size=ll.setter('text_size'))
+                rl = Label(text=right, markup=True, color=rc, font_size='11sp',
+                           halign='right', valign='middle', size_hint_x=0.35)
+                rl.bind(size=rl.setter('text_size'))
+                r.add_widget(ll); r.add_widget(rl)
+                return r
+
+            gl.add_widget(_hdr(f'РЕЙТИНГ КОМАНД  (всего матчей сыграно: {total_matches})', _ACC))
+            for rank, (tname, rating, fans, streak, is_player) in enumerate(teams, 1):
+                is_my = is_player == 'yes'
+                clr = _MY if is_my else (_GOLD if rank <= 3 else _DIM)
+                streak_txt = (f'↑{streak}' if streak > 0 else (f'↓{abs(streak)}' if streak < 0 else '—'))
+                streak_clr = '44dd66' if streak > 0 else ('dd4444' if streak < 0 else '888888')
+                fans_k = f'{fans//1000}k' if fans >= 1000 else str(fans)
+                gl.add_widget(_row(
+                    f'  [b]#{rank}[/b]  {tname[:22]}',
+                    f'{int(rating)} pts  [{fans_k}] [color={streak_clr}]{streak_txt}[/color]',
+                    lc=clr, rc=clr,
+                ))
+
+            gl.add_widget(Label(size_hint_y=None, height=8))
+            gl.add_widget(_hdr('ТОП ИГРОКОВ ПО КАРЬЕРНЫМ ПРИЗОВЫМ', _GOLD))
+            for i, (nick, tid, tname, earn, games, skill) in enumerate(top_players, 1):
+                tc = _MY if (tname and my_team and tname.strip() == my_team.strip()) else _DIM
+                gl.add_widget(_row(
+                    f'  {i}. {nick[:18]}  [{(tname or "FA")[:14]}]',
+                    f'${earn:,}  ({games} матчей)  скилл {skill}',
+                    lc=tc, rc=tc,
+                ))
+
+            sv.add_widget(gl)
+            root.add_widget(sv)
+            pop.content = root
+            self._show_inline(pop, 'Лидерборд')
+        except Exception as _e:
+            T.log_err('on_global_stats', _e)
 
     def on_goals(self, instance):
         from ingame_interface.goals import GoalsPopup
@@ -4589,6 +4768,18 @@ class MainWindow(BoxLayout):
 
         old_p1, old_p2 = _pts(pre_s1, pre_s2)
         new_p1, new_p2 = _pts(s1, s2)
+
+        # Track win streak for player team
+        try:
+            _pt = sqlite3.connect(self.db_name).execute(
+                "SELECT name FROM teams WHERE player='yes'"
+            ).fetchone()
+            if _pt:
+                _my = _pt[0].strip()
+                _won = (actual_winner.strip() == _my)
+                self._update_win_streak(_my, _won)
+        except Exception:
+            pass
 
         if (old_p1, old_p2) == (new_p1, new_p2):
             return  # same outcome, no update needed

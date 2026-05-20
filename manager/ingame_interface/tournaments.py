@@ -1149,15 +1149,10 @@ class MatchLogPopup(Popup):
                     background_normal='', font_size='11sp',
                 )
                 _desc = s.get('description', s.get('desc', ''))
-                btn.bind(on_press=lambda _, p=phase, k=key: self._pre_select(p, k))
-                btn.bind(on_press=lambda _, _d=_desc, _lbl=strat_desc_lbl:
-                         setattr(_lbl, 'text', _d))
-                # Show description on hover
-                from kivy.core.window import Window as _Win2
-                def _on_mouse(win, pos, _btn=btn, _d=_desc, _lbl=strat_desc_lbl):
-                    if _btn.get_root_window() and _btn.collide_point(*_btn.to_widget(*pos)):
-                        _lbl.text = _d
-                _Win2.bind(mouse_pos=_on_mouse)
+                def _on_strat_press(_, p=phase, k=key, d=_desc, lbl=strat_desc_lbl):
+                    self._pre_select(p, k)
+                    lbl.text = d
+                btn.bind(on_press=_on_strat_press)
                 self._pre_strat_btns[(phase, key)] = btn
                 btn_row.add_widget(btn)
             ph_box.add_widget(btn_row)
@@ -1246,7 +1241,8 @@ class MatchLogPopup(Popup):
                 self._team1, self._team2, self._pre_match_team,
                 self._best_of,
                 on_confirm=self._on_draft_confirmed,
-            )
+            ),
+            on_skip=lambda: self._on_draft_confirmed(None, False),
         )
 
     def _show_match_content(self):
@@ -1553,9 +1549,8 @@ class MatchLogPopup(Popup):
                 self._hero_picks     = {}
                 self._hero_btns      = {}
                 self._pre_strat_btns = {}
-                # Auto-skip mode: trigger map 2 draft normally (player chooses to skip or not)
+                # Auto-skip mode: bypass all remaining drafts, simulate silently
                 if getattr(self, '_auto_skip', False):
-                    self._auto_skip = False  # reset — map 2 draft opens normally
                     Clock.schedule_once(lambda dt: self._next_map_draft(), 0.3)
                     return
                 self._skip_btn.text             = f'Карта {map_num}: Драфт  →'
@@ -1690,7 +1685,21 @@ class MatchLogPopup(Popup):
         except Exception:
             return ''
 
+    def _cleanup(self):
+        """Cancel all running clocks to prevent leaks."""
+        if self._interval:
+            self._interval.cancel()
+            self._interval = None
+        if hasattr(self, '_map') and getattr(self._map, '_anim_clock', None):
+            self._map._anim_clock.cancel()
+            self._map._anim_clock = None
+        try:
+            self._scroll.unbind(scroll_y=self._on_log_scroll)
+        except Exception:
+            pass
+
     def _done(self, _):
+        self._cleanup()
         self.dismiss()
         if self._on_close:
             self._on_close()
@@ -2156,6 +2165,17 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     hero_sv   = ScrollView(size_hint=(1, 1))
     hero_grid = GridLayout(cols=6, size_hint_y=None, spacing=3, padding=(2, 2))
     hero_grid.bind(minimum_height=hero_grid.setter('height'))
+
+    # Single touch_move handler on hero_sv for tooltip — no per-card Window.bind
+    def _grid_touch_move(instance, touch):
+        for child in hero_grid.children:
+            hname = getattr(child, '_hero_name', None)
+            if hname and child.collide_point(*touch.pos):
+                _set_hero_tooltip(hname)
+                return
+        hero_tooltip_lbl.text = ''
+    hero_sv.bind(on_touch_move=_grid_touch_move)
+
     hero_sv.add_widget(hero_grid)
     right.add_widget(hero_sv)
 
@@ -2225,6 +2245,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         card._name_lbl    = name_lbl
         card._hero        = hero
         card._role        = role
+        card._hero_name   = hname   # for single-handler tooltip lookup
 
         # Click handler (disabled when picked/banned)
         def _touch(instance, touch):
@@ -2234,13 +2255,6 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                 _on_hero_click(role, hero)
                 return True
         card.bind(on_touch_down=_touch)
-
-        # Hover tooltip
-        from kivy.core.window import Window as _W3
-        def _on_card_mouse(win, pos, _c=card, _h=hname):
-            if _c.get_root_window() and _c.collide_point(*_c.to_widget(*pos)):
-                _set_hero_tooltip(_h)
-        _W3.bind(mouse_pos=_on_card_mouse)
 
         return card
 
@@ -3894,7 +3908,7 @@ def _open_press_conference(db_name, place):
 
 # ── Feature 8: Pre-draft scout report ────────────────────────────────────────
 
-def _show_scout_report(db_name, team1, team2, my_team, on_ready):
+def _show_scout_report(db_name, team1, team2, my_team, on_ready, on_skip=None):
     """Show enemy pick tendencies before the draft, then call on_ready()."""
     import sqlite3 as _sq
     import json as _json
@@ -4009,6 +4023,13 @@ def _show_scout_report(db_name, team1, team2, my_team, on_ready):
         p.dismiss()
         on_ready()
 
+    def _do_skip(_inst):
+        p.dismiss()
+        if on_skip:
+            on_skip()
+        else:
+            on_ready()
+
     draft_btn = Button(
         text='Начать драфт', size_hint_x=0.6,
         background_color=(0.18, 0.55, 0.22, 1), background_normal='',
@@ -4016,10 +4037,10 @@ def _show_scout_report(db_name, team1, team2, my_team, on_ready):
     draft_btn.bind(on_press=_go)
 
     skip_btn = Button(
-        text='Пропустить', size_hint_x=0.4,
-        background_color=(0.35, 0.35, 0.35, 1), background_normal='',
+        text='Пропустить матч', size_hint_x=0.4,
+        background_color=(0.45, 0.18, 0.18, 1), background_normal='',
     )
-    skip_btn.bind(on_press=_go)
+    skip_btn.bind(on_press=_do_skip)
 
     btn_row.add_widget(draft_btn)
     btn_row.add_widget(skip_btn)

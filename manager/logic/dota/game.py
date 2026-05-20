@@ -505,6 +505,35 @@ def dota_simulation_logged(team1, team2, skills):
     minute = 12
     _add(f'  Итог лайна:  {team1} {tokens[team1]}  —  {tokens[team2]} {team2}', 'laning')
 
+    # ── Item timing: laning → midgame transition ──────────────────────────────
+    _ITEM_LANING = {
+        'fast farm':     ('{nick} завершил Battlefury', 3),
+        'gank assassin': ('{nick} купил Shadow Blade', 2),
+        'pick-off':      ('{nick} оформил Diffusal Blade', 2),
+        'initiation':    ('{nick} активирует Blink Dagger', 2),
+        'roam':          ('{nick} купил Urn of Shadows', 1),
+        'snowball':      ('{nick} взял Drum of Endurance', 1),
+        'burst nuke':    ('{nick} собрал Eul\'s Scepter', 2),
+        'lane dom':      ('{nick} завершил Desolator', 2),
+        'lane bully':    ('{nick} купил Orchid Malevolence', 2),
+    }
+    for team_key, team_skills, team_obj, t_dict in [
+        ('team1', skills.get('team1', {}), team1, t1),
+        ('team2', skills.get('team2', {}), team2, t2),
+    ]:
+        if random.random() < 0.55:
+            for role_key in [f'{team_key}_carry', f'{team_key}_mid', f'{team_key}_offlane']:
+                rdata = team_skills.get(role_key, {})
+                tag   = rdata.get('style_tag', '')
+                nick  = rdata.get('nickname', team_obj)
+                if tag in _ITEM_LANING and nick:
+                    tmpl, tok_bonus = _ITEM_LANING[tag]
+                    msg = tmpl.format(nick=nick)
+                    tokens[team_obj] += tok_bonus
+                    _add(f'  {_R}{minute} мин: {msg}  [{tokens[team1]}:{tokens[team2]}]{_X}',
+                         'laning', 'item')
+                    break
+
     # ── MIDGAME ───────────────────────────────────────────────────────────────
     _sep('midgame')
     mid_key_t1 = strat_t1.get('mid', 'map_control')
@@ -597,6 +626,42 @@ def dota_simulation_logged(team1, team2, skills):
     _add(f'  Стратегия {team1}: [b]{late_strat_name_t1}[/b]  |  '
          f'{team2}: [b]{late_strat_name_t2}[/b]', 'lategame')
     _sep('lategame')
+
+    # ── Item timing: midgame → lategame ──────────────────────────────────────
+    _ITEM_LATE = {
+        'ultra late':    ('{nick} завершил Eye of Skadi', 4),
+        'hyper-carry':   ('{nick} активирует Divine Rapier!', 5),
+        'tank brawl':    ('{nick} несёт Heart of Tarrasque', 3),
+        'illusions':     ('{nick} собрал Manta Style', 3),
+        'global':        ('{nick} купил Boots of Travel', 2),
+        'rat':           ('{nick} достраивает Necronomicon', 3),
+        'teamfight ult': ('{nick} активирует Aghanim\'s Scepter', 3),
+        'aura push':     ('{nick} несёт Assault Cuirass', 3),
+        'chrono':        ('{nick} собрал Black King Bar', 3),
+        'bkb teamfight': ('{nick} активирует BKB — готов к бою!', 3),
+        'arsenal':       ('{nick} завершил Octarine Core', 3),
+        'save heal':     ('{nick} взял Glimmer Cape', 2),
+        'repel save':    ('{nick} собрал Guardian Greaves', 2),
+    }
+    for team_key, team_skills, team_obj in [
+        ('team1', skills.get('team1', {}), team1),
+        ('team2', skills.get('team2', {}), team2),
+    ]:
+        if random.random() < 0.65:
+            roles = [f'{team_key}_carry', f'{team_key}_mid', f'{team_key}_offlane',
+                     f'{team_key}_full_support']
+            random.shuffle(roles)
+            for role_key in roles:
+                rdata = team_skills.get(role_key, {})
+                tag   = rdata.get('style_tag', '')
+                nick  = rdata.get('nickname', team_obj)
+                if tag in _ITEM_LATE and nick:
+                    tmpl, tok_bonus = _ITEM_LATE[tag]
+                    msg = tmpl.format(nick=nick)
+                    tokens[team_obj] += tok_bonus
+                    _add(f'  {_R}30 мин: {msg}  [{tokens[team1]}:{tokens[team2]}]{_X}',
+                         'lategame', 'item')
+                    break
 
     def _ls1(role, key): return ls1.get(role, {}).get(key, 1)
     def _ls2(role, key): return ls2.get(role, {}).get(key, 1)

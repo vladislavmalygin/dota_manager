@@ -136,7 +136,8 @@ def _play_bo2_logged(t1, t2, db_name):
             all_snaps.append(blank.copy())
         try:
             from logic.dota.draft import get_ai_draft
-            _hp = get_ai_draft(db_name, t1, t2)
+            _draft = get_ai_draft(db_name, t1, t2)
+            _hp = {'team1': _draft['team1'], 'team2': _draft['team2']}
         except Exception:
             _hp = None
         gw, lines, snaps, _stats = _play_one_logged(t1, t2, db_name, hero_picks=_hp)
@@ -170,7 +171,8 @@ def _play_bo_logged(t1, t2, db_name, n):
 
         try:
             from logic.dota.draft import get_ai_draft
-            _hp = get_ai_draft(db_name, t1, t2)
+            _draft = get_ai_draft(db_name, t1, t2)
+            _hp = {'team1': _draft['team1'], 'team2': _draft['team2']}
         except Exception:
             _hp = None
         winner_game, lines, snaps, last_stats = _play_one_logged(t1, t2, db_name, hero_picks=_hp)

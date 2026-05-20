@@ -40,6 +40,22 @@ _EVENTS = [
     ('leader_demands',       4),
     ('wildcard_incident',    3),
     ('solo_carry_demands',   3),
+    # New narrative events
+    ('tryout_request',       4),
+    ('roster_leak',          3),
+    ('fan_protest',          3),
+    ('player_anniversary',   4),
+    ('gaming_house_issue',   3),
+    ('ex_player_trash_talk', 3),
+    ('charity_event',        3),
+    ('player_award',         4),
+    ('strategy_discovery',   4),
+    ('sponsor_visit',        3),
+    ('lan_event_buzz',       3),
+    ('player_stream_revenue',4),
+    ('rival_loss_bonus',     3),
+    ('contract_extension_mood', 3),
+    ('analyst_report',       4),
 ]
 _EVENT_NAMES, _EVENT_WEIGHTS = zip(*_EVENTS)
 
@@ -611,6 +627,223 @@ def _apply(cur, event, team_id, player_ids, today=None):
             cur.execute("UPDATE players SET morale=MAX(1,COALESCE(morale,5)-2) WHERE id=?", (pid,))
             return ('Конфликт с керри',
                     f'{nick} требовал приоритет фарма — отказ. Мораль −2.', 'popup')
+
+    if event == 'tryout_request':
+        cur.execute(
+            "SELECT id, nickname, COALESCE(micro_skills,40)+COALESCE(macro_skills,40) as sk "
+            "FROM players WHERE team_id=0 AND COALESCE(age,22) BETWEEN 16 AND 21 "
+            "ORDER BY sk DESC LIMIT 5"
+        )
+        candidates = cur.fetchall()
+        if not candidates:
+            return None
+        pid, nick, sk = random.choice(candidates)
+        cur.execute(
+            "UPDATE players SET scouted=1 WHERE id=?", (pid,)
+        )
+        return ('Запрос на просмотр',
+                f'Молодой игрок {nick} (скилл {sk//2}) просит взять его на просмотр. '
+                f'Теперь доступен на трансферном рынке.')
+
+    if event == 'roster_leak':
+        cur.execute("SELECT nickname FROM players WHERE id IN ({}) ORDER BY RANDOM() LIMIT 1".format(
+            ','.join('?' * len(player_ids))), list(player_ids))
+        row = cur.fetchone()
+        if not row:
+            return None
+        nick = row[0]
+        cur.execute(
+            "SELECT name FROM teams WHERE player!='yes' ORDER BY rating DESC LIMIT 10"
+        )
+        teams = [r[0] for r in cur.fetchall()]
+        team = random.choice(teams) if teams else 'конкурент'
+        return ('Утечка в прессу',
+                f'СМИ сообщают о переговорах {nick} с {team}. '
+                f'Продлите контракт до окончания слухов.')
+
+    if event == 'fan_protest':
+        cur.execute("SELECT COALESCE(win_streak,0) FROM teams WHERE id=?", (team_id,))
+        row = cur.fetchone()
+        streak = row[0] if row else 0
+        if streak > -2:
+            return None  # only trigger during slump
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET morale=MAX(1,COALESCE(morale,5)-1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        return ('Протест болельщиков',
+                'Фаны недовольны серией поражений — устроили акцию у офиса. '
+                '−1 мораль всем.', 'popup')
+
+    if event == 'player_anniversary':
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname, COALESCE(time_in_team,0) FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row or row[1] < 1:
+            return None
+        nick, years = row
+        bonus = random.choice([5_000, 8_000, 10_000])
+        cur.execute("UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?", (pid,))
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        return ('Юбилей в команде',
+                f'{nick} — {years} {"год" if years==1 else "лет"} в команде! '
+                f'Бонус от спонсора: +${bonus:,}, +1 мораль.')
+
+    if event == 'gaming_house_issue':
+        fine = random.choice([5_000, 8_000, 12_000])
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET soft_skills=MAX(1,COALESCE(soft_skills,50)-1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        cur.execute("UPDATE teams SET budget=MAX(0,budget-?) WHERE id=?", (fine, team_id))
+        issues = ['сломался кондиционер', 'отключили интернет на 3 дня',
+                  'затопило серверную', 'сгорел блок питания у 3 ПК']
+        return ('Проблемы с базой',
+                f'В игровом доме {random.choice(issues)} — ремонт: −${fine:,}, −1 Soft.')
+
+    if event == 'ex_player_trash_talk':
+        cur.execute(
+            "SELECT name FROM teams WHERE player!='yes' ORDER BY RANDOM() LIMIT 1"
+        )
+        row = cur.fetchone()
+        rival = row[0] if row else 'бывшая команда'
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        return ('Мотивация от критики',
+                f'Бывший игрок из {rival} раскритиковал команду публично. '
+                f'Команда разозлилась — +1 мораль от злости!')
+
+    if event == 'charity_event':
+        bonus = random.choice([10_000, 15_000, 20_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        try:
+            cur.execute(
+                "UPDATE teams SET org_reputation=MIN(100,org_reputation+6) WHERE id=?",
+                (team_id,)
+            )
+        except Exception:
+            pass
+        return ('Благотворительный турнир',
+                f'Команда приняла участие в charity-мероприятии. '
+                f'+6 репутации, +${bonus:,} призовых.')
+
+    if event == 'player_award':
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        nick = row[0]
+        cur.execute("UPDATE players SET morale=MIN(10,COALESCE(morale,5)+2) WHERE id=?", (pid,))
+        bonus = random.choice([8_000, 12_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        awards = ['MVP недели по версии сайта', 'лучший поддержка месяца',
+                  'Most Improved Player региона', 'Highlight of the Month']
+        return ('Награда игрока',
+                f'{nick} получил звание «{random.choice(awards)}»! '
+                f'+2 мораль, бонус от спонсора +${bonus:,}.')
+
+    if event == 'strategy_discovery':
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET macro_skills=MIN(100,COALESCE(macro_skills,50)+2) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        ideas = ['новая ротация на 3-й минуте', 'эффективный смок-ганг на 8-й',
+                 'агрессивный дрэфт с 3 кором', 'контр-пуш через лес']
+        return ('Тактическая находка',
+                f'Команда отработала {random.choice(ideas)} на скримме. +2 Macro всем!')
+
+    if event == 'sponsor_visit':
+        bonus = random.choice([5_000, 10_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        return ('Визит спонсора',
+                f'Представители партнёра посетили тренировку — довольны результатами. '
+                f'+${bonus:,} бонус.')
+
+    if event == 'lan_event_buzz':
+        try:
+            cur.execute(
+                "UPDATE teams SET org_reputation=MIN(100,org_reputation+4) WHERE id=?",
+                (team_id,)
+            )
+        except Exception:
+            pass
+        bonus = random.choice([6_000, 8_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        events_list = ['показала крутую игру на LAN шоу-матче', 'стала звездой медиа-дня',
+                       'выиграла интерактивный конкурс с аудиторией']
+        return ('LAN-хайп',
+                f'Команда {random.choice(events_list)}! +4 репутации, +${bonus:,}.')
+
+    if event == 'player_stream_revenue':
+        pid = random.choice(player_ids)
+        cur.execute("SELECT nickname FROM players WHERE id=?", (pid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        nick = row[0]
+        bonus = random.choice([4_000, 6_000, 8_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        return ('Доход со стримов',
+                f'{nick} набрал популярность на Twitch — реклама принесла +${bonus:,} в бюджет.')
+
+    if event == 'rival_loss_bonus':
+        cur.execute(
+            "SELECT name FROM teams WHERE player!='yes' ORDER BY rating DESC LIMIT 5"
+        )
+        top = [r[0] for r in cur.fetchall()]
+        if not top:
+            return None
+        rival = random.choice(top)
+        bonus = random.choice([5_000, 10_000])
+        cur.execute("UPDATE teams SET budget=budget+? WHERE id=?", (bonus, team_id))
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        return ('Конкурент оступился',
+                f'{rival} потерпел сенсационное поражение! Бонус от букмекеров: '
+                f'+${bonus:,}, +1 мораль от радости.')
+
+    if event == 'contract_extension_mood':
+        pid = random.choice(player_ids)
+        cur.execute(
+            "SELECT nickname, contract_end FROM players WHERE id=?", (pid,)
+        )
+        row = cur.fetchone()
+        if not row or not row[1]:
+            return None
+        nick, cend = row
+        cur.execute(
+            "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?", (pid,)
+        )
+        return ('Игрок доволен контрактом',
+                f'{nick} публично заявил о лояльности команде. +1 мораль.')
+
+    if event == 'analyst_report':
+        opp_info = []
+        cur.execute(
+            "SELECT name FROM teams WHERE player!='yes' ORDER BY rating DESC LIMIT 10"
+        )
+        for (tname,) in cur.fetchall()[:3]:
+            opp_info.append(tname[:16])
+        if not opp_info:
+            return None
+        phs = ','.join('?' * len(player_ids))
+        cur.execute(
+            f"UPDATE players SET macro_skills=MIN(100,COALESCE(macro_skills,50)+1) WHERE id IN ({phs})",
+            list(player_ids)
+        )
+        return ('Аналитический разбор',
+                f'Аналитик разобрал последние матчи {", ".join(opp_info)} — '
+                f'команда знает слабые места соперников. +1 Macro всем.')
 
     if event == 'equipment_theft':
         loss = random.choice([15_000, 20_000, 25_000])
