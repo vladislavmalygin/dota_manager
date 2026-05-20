@@ -123,6 +123,134 @@ ROLE_ORDER = ['carry', 'mid', 'offlane', 'partial_support', 'full_support']
 # All hero names for quick lookup
 ALL_HERO_NAMES = {h[0] for heroes in HEROES.values() for h in heroes}
 
+# Dota 2 CDN slug mapping: hero display name → internal slug
+# URL: https://cdn.cloudflare.steamstatic.com/apps/dota2/images/heroes/{slug}_full.png
+HERO_SLUG_MAP = {
+    # Carry
+    'Anti-Mage':        'antimage',
+    'Phantom Assassin': 'phantom_assassin',
+    'Juggernaut':       'juggernaut',
+    'Terrorblade':      'terrorblade',
+    'Medusa':           'medusa',
+    'Slark':            'slark',
+    'Gyrocopter':       'gyrocopter',
+    'Faceless Void':    'faceless_void',
+    'Naga Siren':       'naga_siren',
+    'Lifestealer':      'life_stealer',
+    'Morphling':        'morphling',
+    'Drow Ranger':      'drow_ranger',
+    'Lone Druid':       'lone_druid',
+    'Alchemist':        'alchemist',
+    'Spectre':          'spectre',
+    'Luna':             'luna',
+    'Chaos Knight':     'chaos_knight',
+    'Ursa':             'ursa',
+    'Troll Warlord':    'troll_warlord',
+    'Bloodseeker':      'bloodseeker',
+    # Mid
+    'Lina':             'lina',
+    'Invoker':          'invoker',
+    'Storm Spirit':     'storm_spirit',
+    'Queen of Pain':    'queenofpain',
+    'Templar Assassin': 'templar_assassin',
+    'Puck':             'puck',
+    'Dragon Knight':    'dragon_knight',
+    'Tinker':           'tinker',
+    'Ember Spirit':     'ember_spirit',
+    'Shadow Fiend':     'nevermore',
+    'Viper':            'viper',
+    'Death Prophet':    'death_prophet',
+    'Batrider':         'batrider',
+    'Huskar':           'huskar',
+    'Void Spirit':      'void_spirit',
+    'Kunkka':           'kunkka',
+    'Arc Warden':       'arc_warden',
+    'Broodmother':      'broodmother',
+    'Zeus':             'zuus',
+    'Silencer':         'silencer',
+    # Offlane
+    'Tidehunter':           'tidehunter',
+    'Mars':                 'mars',
+    'Centaur Warrunner':    'centaur',
+    'Bristleback':          'bristleback',
+    'Underlord':            'abyssal_underlord',
+    'Pangolier':            'pangolier',
+    'Monkey King':          'monkey_king',
+    'Dark Seer':            'dark_seer',
+    'Axe':                  'axe',
+    'Sand King':            'sand_king',
+    'Brewmaster':           'brewmaster',
+    'Beastmaster':          'beastmaster',
+    'Timbersaw':            'shredder',
+    'Slardar':              'slardar',
+    'Doom':                 'doom_bringer',
+    'Legion Commander':     'legion_commander',
+    'Magnus':               'magnataur',
+    'Wraith King':          'skeleton_king',
+    'Night Stalker':        'night_stalker',
+    'Elder Titan':          'elder_titan',
+    # Partial support
+    'Earth Spirit':     'earth_spirit',
+    'Rubick':           'rubick',
+    'Earthshaker':      'earthshaker',
+    'Nyx Assassin':     'nyx_assassin',
+    'Clockwerk':        'rattletrap',
+    'Tusk':             'tusk',
+    'Grimstroke':       'grimstroke',
+    'Bounty Hunter':    'bounty_hunter',
+    'Shadow Demon':     'shadow_demon',
+    'Disruptor':        'disruptor',
+    'Bane':             'bane',
+    'Mirana':           'mirana',
+    'Undying':          'undying',
+    'Spirit Breaker':   'spirit_breaker',
+    'Jakiro':           'jakiro',
+    'IO':               'wisp',
+    'Keeper of Light':  'keeper_of_the_light',
+    'Winter Wyvern':    'winter_wyvern',
+    'Skywrath Mage':    'skywrath_mage',
+    'Pudge':            'pudge',
+    # Full support
+    'Crystal Maiden':   'crystal_maiden',
+    'Dazzle':           'dazzle',
+    'Oracle':           'oracle',
+    'Ancient Apparition':'ancient_apparition',
+    'Witch Doctor':     'witch_doctor',
+    'Lion':             'lion',
+    'Warlock':          'warlock',
+    'Vengeful Spirit':  'vengefulspirit',
+    'Chen':             'chen',
+    'Shadow Shaman':    'shadow_shaman',
+    'Treant Protector': 'treant',
+    'Ogre Magi':        'ogre_magi',
+    'Lich':             'lich',
+    'Abaddon':          'abaddon',
+    'Omniknight':       'omniknight',
+    'Leshrac':          'leshrac',
+    'Pugna':            'pugna',
+    'Enchantress':      'enchantress',
+    'Snapfire':         'snapfire',
+    'Hoodwink':         'hoodwink',
+}
+
+_HERO_IMAGE_DIR = None
+
+
+def get_hero_image_path(hero_name):
+    """Return local path to hero portrait image, or None if not downloaded."""
+    import os
+    global _HERO_IMAGE_DIR
+    if _HERO_IMAGE_DIR is None:
+        _HERO_IMAGE_DIR = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'hero_images'
+        )
+    slug = HERO_SLUG_MAP.get(hero_name)
+    if not slug:
+        return None
+    path = os.path.join(_HERO_IMAGE_DIR, f'{slug}_full.png')
+    return path if os.path.exists(path) else None
+
 # Simple counter relationships: hero → [heroes that counter it]
 COUNTERS = {
     'Anti-Mage':        ['Lina', 'Storm Spirit', 'Silencer'],

@@ -1762,66 +1762,119 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     body.add_widget(left)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # RIGHT: CM draft
+    # RIGHT: CM draft — visual with hero portraits
     # ══════════════════════════════════════════════════════════════════════════
+    from logic.heroes import get_hero_image_path, HERO_SLUG_MAP
+    from logic.meta import get_patch_hero_lists
+    from kivy.uix.image import Image as _Img
+    from kivy.graphics import Color as _GC, Rectangle as _GR, Line as _GL
+
+    try:
+        _buffed_heroes, _nerfed_heroes, _patch_nm = get_patch_hero_lists(db_name)
+        _buffed_set = set(_buffed_heroes)
+        _nerfed_set = set(_nerfed_heroes)
+    except Exception:
+        _buffed_set = _nerfed_set = set()
+        _patch_nm = '?'
+
     right = BoxLayout(orientation='vertical', size_hint_x=0.72, spacing=3)
 
-    # ── Draft board: bans row + picks row ─────────────────────────────────────
-    board = BoxLayout(orientation='vertical', size_hint_y=None, height=96, spacing=2)
+    # ── Slot helpers ─────────────────────────────────────────────────────────
+    _SLOT_W = 80
+    _SLOT_H = 58
 
-    def _slot_lbl(text='—', color=_AVAIL, w=68):
-        b = Button(text=text, font_size='9sp', background_normal='',
-                   background_color=color, size_hint_x=None, width=w, disabled=True)
-        return b
+    def _make_image_slot(label_text, bg_color, w=_SLOT_W, h=_SLOT_H):
+        """Slot that can later show a hero portrait."""
+        box = BoxLayout(orientation='vertical', size_hint_x=None, width=w,
+                        size_hint_y=None, height=h, spacing=0)
+        with box.canvas.before:
+            _GC(*bg_color)
+            _bg_rect = _GR()
+        box.bind(pos=lambda w2, _: setattr(_bg_rect, 'pos', w2.pos),
+                 size=lambda w2, _: setattr(_bg_rect, 'size', w2.size))
 
-    # bans row
-    bans_row = BoxLayout(size_hint_y=None, height=44, spacing=3)
-    bans_row.add_widget(_lbl(f'[b]{my_team[:12]}[/b]', color=(0.30, 1.00, 0.50, 1),
-                             fs='11sp', height=44, bold=False))
-    p_ban_slots = [_slot_lbl('БАН') for _ in range(5)]
+        img = _Img(source='', allow_stretch=True, keep_ratio=False,
+                   size_hint_y=None, height=h - 16)
+        name_lbl = Label(text=label_text, font_size='8sp', color=(0.85, 0.85, 0.85, 1),
+                         size_hint_y=None, height=16,
+                         halign='center', valign='middle')
+        name_lbl.bind(size=name_lbl.setter('text_size'))
+        box.add_widget(img)
+        box.add_widget(name_lbl)
+        box._img_widget = img
+        box._lbl_widget = name_lbl
+        box._bg_instr   = _bg_rect
+        return box
+
+    def _fill_slot(slot, hname, tint):
+        """Update slot to show hero portrait with given tint."""
+        img_path = get_hero_image_path(hname)
+        if img_path:
+            slot._img_widget.source = img_path
+        else:
+            slot._img_widget.source = ''
+        slot._lbl_widget.text = hname[:12]
+        slot._bg_instr.rgba = tint
+
+    # ── Draft board ──────────────────────────────────────────────────────────
+    board = BoxLayout(orientation='vertical', size_hint_y=None,
+                      height=_SLOT_H * 2 + 30, spacing=2, padding=(0, 2))
+
+    # Team name labels row
+    team_hdr = BoxLayout(size_hint_y=None, height=24)
+    _t_my  = Label(text=f'[b]{my_team}[/b]', markup=True,
+                   color=(0.30, 1.00, 0.50, 1), font_size='12sp',
+                   halign='left', valign='middle')
+    _t_my.bind(size=_t_my.setter('text_size'))
+    _t_vs  = Label(text='BANS / PICKS', color=(0.55, 0.55, 0.55, 1),
+                   font_size='10sp', halign='center', valign='middle')
+    _t_opp = Label(text=f'[b]{enemy_team}[/b]', markup=True,
+                   color=(1.00, 0.45, 0.45, 1), font_size='12sp',
+                   halign='right', valign='middle')
+    _t_opp.bind(size=_t_opp.setter('text_size'))
+    team_hdr.add_widget(_t_my)
+    team_hdr.add_widget(_t_vs)
+    team_hdr.add_widget(_t_opp)
+    board.add_widget(team_hdr)
+
+    # Bans row
+    bans_row = BoxLayout(size_hint_y=None, height=_SLOT_H, spacing=3)
+    p_ban_slots = [_make_image_slot('БАН', _PBANN) for _ in range(5)]
     for s in p_ban_slots:
         bans_row.add_widget(s)
-    bans_row.add_widget(_lbl('  БН  ', color=(0.55, 0.55, 0.55, 1), height=44,
-                             halign='center', fs='10sp'))
-    ai_ban_slots = [_slot_lbl('БАН') for _ in range(5)]
+    bans_row.add_widget(Label(text='vs', color=(0.40, 0.40, 0.40, 1),
+                              size_hint_x=None, width=28, halign='center'))
+    ai_ban_slots = [_make_image_slot('БАН', _AIBANN) for _ in range(5)]
     for s in ai_ban_slots:
         bans_row.add_widget(s)
-    bans_row.add_widget(_lbl(f'[b]{enemy_team[:12]}[/b]', color=(1.00, 0.45, 0.45, 1),
-                             fs='11sp', height=44, halign='right', bold=False))
     board.add_widget(bans_row)
 
-    # picks row
-    picks_row = BoxLayout(size_hint_y=None, height=44, spacing=3)
-    picks_row.add_widget(_lbl('ПИКИ', color=(0.30, 1.00, 0.50, 1),
-                              fs='11sp', height=44, bold=True))
-    p_pick_slots = {role: _slot_lbl(_ROLE_RU[role], color=(0.15, 0.28, 0.18, 1))
+    # Picks row
+    picks_row = BoxLayout(size_hint_y=None, height=_SLOT_H, spacing=3)
+    p_pick_slots = {role: _make_image_slot(_ROLE_RU[role], _PPICK)
                     for role in ROLE_ORDER}
     for role in ROLE_ORDER:
         picks_row.add_widget(p_pick_slots[role])
-    picks_row.add_widget(_lbl('  ПК  ', color=(0.55, 0.55, 0.55, 1), height=44,
-                              halign='center', fs='10sp'))
-    ai_pick_slots = [_slot_lbl(_ROLE_RU[ROLE_ORDER[i]], color=(0.25, 0.10, 0.30, 1))
+    picks_row.add_widget(Label(text='', size_hint_x=None, width=28))
+    ai_pick_slots = [_make_image_slot(_ROLE_RU[ROLE_ORDER[i]], _AIPICK)
                      for i in range(5)]
     for s in ai_pick_slots:
         picks_row.add_widget(s)
-    picks_row.add_widget(_lbl('ПИКИ', color=(1.00, 0.45, 0.45, 1),
-                              fs='11sp', height=44, halign='right', bold=True))
     board.add_widget(picks_row)
     right.add_widget(board)
 
-    # ── Instruction ───────────────────────────────────────────────────────────
+    # ── Instruction + counter hints ───────────────────────────────────────────
     instr_lbl = Label(
         text='', markup=True, color=(1.00, 0.90, 0.30, 1),
-        size_hint_y=None, height=28, font_size='13sp',
+        size_hint_y=None, height=26, font_size='13sp',
         halign='center', valign='middle',
     )
     instr_lbl.bind(size=instr_lbl.setter('text_size'))
     right.add_widget(instr_lbl)
 
-    # Counter-pick hint label
     counter_lbl = Label(
         text='', markup=True, color=(0.85, 0.55, 1.00, 1),
-        size_hint_y=None, height=22, font_size='11sp',
+        size_hint_y=None, height=20, font_size='11sp',
         halign='center', valign='middle',
     )
     counter_lbl.bind(size=counter_lbl.setter('text_size'))
@@ -1830,7 +1883,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     def _update_counter_hints():
         try:
             from logic.heroes import get_counters
-            ai_pick_names = [h[0] for h in draft['ai_picks'][-2:]]  # last 2 AI picks
+            ai_pick_names = [h[0] for h in draft['ai_picks'][-2:]]
             hints = []
             for hname in ai_pick_names:
                 counters = get_counters(hname)
@@ -1840,9 +1893,9 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         except Exception:
             pass
 
-    # ── Role filter ───────────────────────────────────────────────────────────
+    # ── Role filter + patch info ──────────────────────────────────────────────
     filter_state = {'role': None}
-    filter_row   = BoxLayout(size_hint_y=None, height=32, spacing=3)
+    filter_bar   = BoxLayout(size_hint_y=None, height=30, spacing=3)
     filter_btns  = {}
     _ROLE_CLR = (0.22, 0.50, 0.80, 1)
     _ROLE_SEL = (0.10, 0.70, 0.40, 1)
@@ -1863,25 +1916,106 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                     background_color=_ROLE_CLR)
         fb.bind(on_press=lambda _, r=role, b=fb: _set_filter(r, b))
         filter_btns[role] = fb
-        filter_row.add_widget(fb)
-    right.add_widget(filter_row)
+        filter_bar.add_widget(fb)
 
-    # ── Hero grid ─────────────────────────────────────────────────────────────
+    # Patch info chip
+    if _buffed_set or _nerfed_set:
+        patch_lbl = Label(
+            text=f'[color=3dfa72]BUFF[/color] / [color=fa4040]NERF[/color]  патч {_patch_nm}',
+            markup=True, color=(0.70, 0.70, 0.70, 1),
+            size_hint_x=None, width=160, font_size='10sp',
+            halign='center', valign='middle',
+        )
+        patch_lbl.bind(size=patch_lbl.setter('text_size'))
+        filter_bar.add_widget(patch_lbl)
+    right.add_widget(filter_bar)
+
+    # ── Hero grid with portraits ─────────────────────────────────────────────
+    _CARD_W = 88
+    _CARD_H = 62
+
     hero_sv   = ScrollView(size_hint=(1, 1))
-    hero_grid = GridLayout(cols=8, size_hint_y=None, spacing=2, padding=(2, 2))
+    hero_grid = GridLayout(cols=7, size_hint_y=None, spacing=3, padding=(2, 2))
     hero_grid.bind(minimum_height=hero_grid.setter('height'))
     hero_sv.add_widget(hero_grid)
     right.add_widget(hero_sv)
 
-    # All hero buttons keyed by name
-    all_hero_btns = {}  # hero_name → Button
+    all_hero_cards = {}   # hero_name → BoxLayout card
 
-    def _hero_color(hname):
+    def _hero_tint(hname):
+        """Background tint for hero card based on draft status."""
         if hname in draft['player_bans']:    return _PBANN
         if hname in draft['ai_bans']:        return _AIBANN
         if any(h[0] == hname for h in draft['player_picks'].values()):  return _PPICK
         if any(h[0] == hname for h in draft['ai_picks']):               return _AIPICK
         return _AVAIL
+
+    def _make_hero_card(hero, role):
+        """Visual hero card with portrait image + name + patch indicator."""
+        hname  = hero[0]
+        img_path = get_hero_image_path(hname) or ''
+
+        card = BoxLayout(
+            orientation='vertical', size_hint=(None, None),
+            width=_CARD_W, height=_CARD_H, spacing=0,
+        )
+        with card.canvas.before:
+            _GC(*_AVAIL)
+            _card_bg = _GR()
+        card.bind(pos=lambda w2, _: setattr(_card_bg, 'pos', w2.pos),
+                  size=lambda w2, _: setattr(_card_bg, 'size', w2.size))
+        card._bg_instr = _card_bg
+
+        # Hero portrait
+        portrait_h = _CARD_H - 16
+        if img_path:
+            portrait = _Img(source=img_path, allow_stretch=True, keep_ratio=False,
+                            size_hint=(1, None), height=portrait_h)
+        else:
+            portrait = Label(text='?', color=(0.60, 0.60, 0.60, 1),
+                             size_hint=(1, None), height=portrait_h,
+                             halign='center', valign='middle', font_size='20sp')
+
+        # Patch indicator border overlay (drawn on canvas.after)
+        if hname in _buffed_set:
+            border_clr = (0.15, 0.90, 0.30, 1)   # green = buff
+        elif hname in _nerfed_set:
+            border_clr = (0.90, 0.20, 0.15, 1)   # red = nerf
+        else:
+            border_clr = None
+
+        if border_clr:
+            with card.canvas.after:
+                _GC(*border_clr)
+                _GL(rectangle=(0, 0, _CARD_W, _CARD_H), width=2)
+
+        # Hero name
+        name_lbl = Label(
+            text=hname[:14], font_size='8sp',
+            color=(0.92, 0.92, 0.92, 1),
+            size_hint=(1, None), height=16,
+            halign='center', valign='middle',
+        )
+        name_lbl.bind(size=name_lbl.setter('text_size'))
+        name_lbl.bind(pos=lambda w2, _: setattr(_card_bg, 'pos', w2.parent.pos)
+                       if w2.parent else None)
+
+        card.add_widget(portrait)
+        card.add_widget(name_lbl)
+        card._portrait    = portrait
+        card._name_lbl    = name_lbl
+        card._hero        = hero
+        card._role        = role
+
+        # Click handler (disabled when picked/banned)
+        def _touch(instance, touch):
+            if getattr(instance, '_disabled', False):
+                return False
+            if instance.collide_point(*touch.pos):
+                _on_hero_click(role, hero)
+                return True
+        card.bind(on_touch_down=_touch)
+        return card
 
     def _rebuild_hero_grid():
         hero_grid.clear_widgets()
@@ -1893,17 +2027,20 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         for role in roles_to_show:
             for hero in HEROES[role]:
                 hname = hero[0]
-                if hname in all_hero_btns:
-                    # reuse existing button
-                    btn = all_hero_btns[hname]
+                if hname not in all_hero_cards:
+                    all_hero_cards[hname] = _make_hero_card(hero, role)
+                card = all_hero_cards[hname]
+                tint = _hero_tint(hname)
+                card._bg_instr.rgba = tint
+                # Dim when unavailable
+                if hname in banned_or_picked:
+                    card.opacity = 0.35
+                    # disable touch by overriding
+                    card._disabled = True
                 else:
-                    btn = Button(text=hname, font_size='9sp', background_normal='',
-                                 size_hint_y=None, height=30)
-                    btn.bind(on_press=lambda _, h=hero, r=role: _on_hero_click(r, h))
-                    all_hero_btns[hname] = btn
-                btn.background_color = _hero_color(hname)
-                btn.disabled = hname in banned_or_picked
-                hero_grid.add_widget(btn)
+                    card.opacity = 1.0
+                    card._disabled = False
+                hero_grid.add_widget(card)
 
     _rebuild_hero_grid()
 
@@ -1966,12 +2103,9 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                 draft['ai_bans'].append(hname)
                 idx = len(draft['ai_bans']) - 1
                 if idx < 5:
-                    ai_ban_slots[idx].text = hname[:10]
-                    ai_ban_slots[idx].background_color = _AIBANN
+                    _fill_slot(ai_ban_slots[idx], hname, _AIBANN)
         else:
             ai_roles_needed = ROLE_ORDER
-            already_ai = {h[0] for h in draft['ai_picks']}
-            # Pick for the next needed AI role
             ai_role_idx = _ai_pick_idx[0]
             if ai_role_idx < len(ai_roles_needed):
                 needed_role = ai_roles_needed[ai_role_idx]
@@ -1982,8 +2116,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
                     _ai_pick_idx[0] += 1
                     idx = len(draft['ai_picks']) - 1
                     if idx < 5:
-                        ai_pick_slots[idx].text = h[0][:10]
-                        ai_pick_slots[idx].background_color = _AIPICK
+                        _fill_slot(ai_pick_slots[idx], h[0], _AIPICK)
 
         draft['step'] += 1
         _rebuild_hero_grid()
@@ -2011,8 +2144,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
             draft['player_bans'].append(hname)
             idx = len(draft['player_bans']) - 1
             if idx < 5:
-                p_ban_slots[idx].text = hname[:10]
-                p_ban_slots[idx].background_color = _PBANN
+                _fill_slot(p_ban_slots[idx], hname, _PBANN)
             draft['step'] += 1
             _rebuild_hero_grid()
             _advance()
@@ -2031,8 +2163,7 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
 
     def _assign_player_pick(hero, chosen_role):
         draft['player_picks'][chosen_role] = hero
-        p_pick_slots[chosen_role].text = hero[0][:8]
-        p_pick_slots[chosen_role].background_color = _PPICK
+        _fill_slot(p_pick_slots[chosen_role], hero[0], _PPICK)
         draft['step'] += 1
         _rebuild_hero_grid()
         _advance()
