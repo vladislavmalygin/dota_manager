@@ -6,10 +6,12 @@ from datetime import date
 def get_match_data(team1, team2, db_name, hero_picks=None):
     """hero_picks = {'team1': {role_key: (name,mi_m,ma_m,so_m,tag)}, 'team2': {...}}"""
     try:
-        from logic.meta import get_active_patch
-        _meta_patch = get_active_patch(db_name)
+        from logic.meta import get_active_patch, get_active_hero_mods
+        _meta_patch  = get_active_patch(db_name)
+        _hero_mods   = get_active_hero_mods(db_name)  # {hero_name: multiplier}
     except Exception:
         _meta_patch = None
+        _hero_mods  = {}
 
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
@@ -146,15 +148,17 @@ def get_match_data(team1, team2, db_name, hero_picks=None):
                     micro = max(1, int(micro * mi_m))
                     macro = max(1, int(macro * ma_m))
                     soft  = max(1, int(soft  * so_m))
-            # Meta patch bonus: favored role gets +bonus_pct% to all skills
-            if _meta_patch:
-                _patch_name, _fav_role, _bonus_pct = _meta_patch
+            # Meta patch hero mods: specific heroes buffed/nerfed this patch
+            if _hero_mods and hero_picks:
                 role_short = role.replace(f'{team_key}_', '')
-                if role_short == _fav_role:
-                    mult = 1.0 + _bonus_pct / 100.0
-                    micro = max(1, int(micro * mult))
-                    macro = max(1, int(macro * mult))
-                    soft  = max(1, int(soft  * mult))
+                _picked_hero = (hero_picks.get(team_key) or {}).get(role_short)
+                if _picked_hero:
+                    _hero_name = _picked_hero[0] if isinstance(_picked_hero, tuple) else _picked_hero
+                    _mod = _hero_mods.get(_hero_name, 1.0)
+                    if _mod != 1.0:
+                        micro = max(1, int(micro * _mod))
+                        macro = max(1, int(macro * _mod))
+                        soft  = max(1, int(soft  * _mod))
             skills[team_key][role] = {
                 'micro_skills': micro,
                 'macro_skills': macro,

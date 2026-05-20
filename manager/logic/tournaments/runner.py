@@ -63,14 +63,24 @@ def get_lineup(team_name, db_name):
     return lineup
 
 
-def _play_one(t1, t2, db_name):
+def _play_one(t1, t2, db_name, tournament_name='', match_date=''):
     try:
-        from logic.dota.draft import get_ai_draft
+        from logic.dota.draft import get_ai_draft, record_draft
         hero_picks = get_ai_draft(db_name, t1, t2)
     except Exception:
         hero_picks = None
     skills = get_match_data(t1, t2, db_name, hero_picks=hero_picks)
-    return dota_simulation_for_bots(t1, t2, skills) if skills else random.choice([t1, t2])
+    winner = dota_simulation_for_bots(t1, t2, skills) if skills else random.choice([t1, t2])
+    # Record draft for AI vs AI matches
+    if hero_picks:
+        try:
+            record_draft(
+                db_name, match_date, tournament_name, t1, t2, winner,
+                hero_picks.get('team1', {}), hero_picks.get('team2', {}),
+            )
+        except Exception:
+            pass
+    return winner
 
 
 def _play_one_logged(t1, t2, db_name, hero_picks=None):
@@ -854,7 +864,38 @@ def save_tournament_results(tournament_id, placements, group_eliminated, db_name
         prize      = prizes[i]  if prizes  and i < len(prizes)   else 0
         rating_pts = ratings[i] if ratings and i < len(ratings)   else 0
         if prize:
-            cur.execute("UPDATE teams SET budget = budget + ? WHERE id = ?", (prize, tid))
+            # 50% stays in budget, 50% goes to players as bonuses
+            team_share   = prize // 2
+            player_share = prize - team_share
+            cur.execute("UPDATE teams SET budget = budget + ? WHERE id = ?", (team_share, tid))
+            # Distribute player share equally among active roster
+            try:
+                slots = cur.execute(
+                    "SELECT carry,mid,offlane,partial_support,full_support FROM teams WHERE id=?",
+                    (tid,)
+                ).fetchone()
+                active_pids = [p for p in (slots or []) if p]
+                if active_pids and player_share > 0:
+                    per_player = player_share // len(active_pids)
+                    from datetime import date as _d
+                    try:
+                        yr = int(cur.execute("SELECT date FROM save WHERE id=1").fetchone()[0][:4])
+                    except Exception:
+                        yr = 2024
+                    for ppid in active_pids:
+                        cur.execute("""
+                            INSERT INTO player_career_stats (player_id, season, games, wins, mvp_count, earnings)
+                            VALUES (?, ?, 0, 0, 0, ?)
+                            ON CONFLICT(player_id, season) DO UPDATE SET
+                                earnings = earnings + excluded.earnings
+                        """, (ppid, yr, per_player))
+                        # +1 morale for prize bonus
+                        cur.execute(
+                            "UPDATE players SET morale=MIN(10,COALESCE(morale,5)+1) WHERE id=?",
+                            (ppid,)
+                        )
+            except Exception:
+                pass
         if rating_pts:
             cur.execute(
                 "UPDATE teams SET rating = COALESCE(rating, 0) + ? WHERE id = ?",

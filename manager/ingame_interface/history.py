@@ -86,7 +86,7 @@ class MatchReplayPopup(Popup):
         meta_lbl = Label(
             text=f'{tournament}  ·  {stage}  ·  BO{best_of}',
             size_hint_y=None, height=22,
-            color=_DIM, halign='center', valign='middle', font_size='11sp',
+            color=_DIM, halign='center', valign='middle', font_size='12sp',
         )
         meta_lbl.bind(size=meta_lbl.setter('text_size'))
         root.add_widget(meta_lbl)
@@ -226,7 +226,7 @@ class HistoryPopup(Popup):
                     bkt_btn = Button(
                         text='Сетка', size_hint_x=None, width=55, height=30,
                         background_color=(0.18, 0.30, 0.55, 1), background_normal='',
-                        font_size='11sp',
+                        font_size='12sp',
                     )
                     bkt_btn.bind(on_press=lambda _, _tid=t_id_for_bracket:
                                  show_bracket_popup(db_name, _tid))
@@ -429,7 +429,7 @@ class BracketPopup(Popup):
             box = BoxLayout(size_hint=(None, None), width=width, height=34,
                             padding=(4, 0))
             lbl = Label(text=f'{place}. {team[:16]}', color=color,
-                        halign='left', valign='middle', font_size='11sp')
+                        halign='left', valign='middle', font_size='12sp')
             lbl.bind(size=lbl.setter('text_size'))
             box.add_widget(lbl)
             return box
@@ -466,7 +466,7 @@ class BracketPopup(Popup):
 
             hdr_lbl = Label(
                 text=stage_name, color=_ACCENT,
-                size_hint_y=None, height=32, font_size='11sp',
+                size_hint_y=None, height=32, font_size='12sp',
                 halign='center', valign='middle',
             )
             hdr_lbl.bind(size=hdr_lbl.setter('text_size'))

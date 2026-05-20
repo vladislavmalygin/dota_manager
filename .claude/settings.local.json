@@ -57,7 +57,11 @@
       "Bash(PYTHONUNBUFFERED=1 DISPLAY=:0 /home/vlad/Dev/dota_manager/.venv/bin/python3 -u /home/vlad/Dev/dota_manager/manager/dota_manager.py)",
       "Bash(sed -i \"/print\\(f'\\\\[M\\\\]/d\" /home/vlad/Dev/dota_manager/manager/ingame_interface/tournaments.py)",
       "Bash(sed -i \"/print\\(f'\\\\[C\\\\]/d\" /home/vlad/Dev/dota_manager/manager/core.py)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(grep -n \"ОТКРЫТО ТРАНСФЕРНОЕ\\\\|Трансферы $\\\\|💰\\\\|🏆\\\\|👑\\\\|🎲\\\\|⚡\\\\|🤝\\\\|👁\\\\|✕\\\\|🔍\" core.py ingame_interface/squad.py ingame_interface/transfers.py ingame_interface/finances.py)",
+      "Bash(sed -i 's/'\\\\''\\\\[👑\\\\]'\\\\''/'\\\\''\\\\[Лид\\\\]'\\\\''/g; s/'\\\\''\\\\[⚡\\\\]'\\\\''/'\\\\''\\\\[СК\\\\]'\\\\''/g; s/'\\\\''\\\\[🤝\\\\]'\\\\''/'\\\\''\\\\[Кмд\\\\]'\\\\''/g; s/'\\\\''\\\\[🎲\\\\]'\\\\''/'\\\\''\\\\[WC\\\\]'\\\\''/g; s/'\\\\''👁✓'\\\\''/'\\\\''Вотч+'\\\\''/g; s/'\\\\''👁'\\\\''/'\\\\''Вотч'\\\\''/g; s/text='\\\\''✕'\\\\''/text='\\\\''X'\\\\''/g' ingame_interface/transfers.py)",
+      "Bash(sed -i 's/'\\\\''Лидер 👑'\\\\''/'\\\\''Лидер [Лид]'\\\\''/g; s/'\\\\''Соло-керри ⚡'\\\\''/'\\\\''Соло-керри [СК]'\\\\''/g; s/'\\\\''Командный игрок 🤝'\\\\''/'\\\\''Командный [Кмд]'\\\\''/g; s/'\\\\''Wildcard 🎲'\\\\''/'\\\\''Wildcard [WC]'\\\\''/g; s/'\\\\''Лидер 👑'\\\\''/'\\\\''Лидер [Лид]'\\\\''/g; s/'\\\\''Командный 🤝'\\\\''/'\\\\''Командный [Кмд]'\\\\''/g; s/'\\\\''Wildcard 🎲'\\\\''/'\\\\''Wildcard [WC]'\\\\''/g; s/'\\\\''Соло-керри ⚡'\\\\''/'\\\\''СК [СК]'\\\\''/g' ingame_interface/squad.py)",
+      "Bash(sed -i \"s/ОТКРЫТО ТРАНСФЕРНОЕ ОКНО ОТКРЫТО/ТРАНСФЕРНОЕ ОКНО ОТКРЫТО/g\" core.py)"
     ]
   }
 }

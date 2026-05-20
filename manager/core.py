@@ -517,33 +517,36 @@ class MainWindow(BoxLayout):
             btn.bind(on_press=_press)
             return btn
 
-        # Groups
+        # Groups — reorganized for clarity
         _GROUPS = [
-            ('КОМАНДА', [
-                ('Состав',     self.on_roster),
-                ('Трансферы',  self.on_transfers),
-                ('Академия',   self.on_academy),
-                ('Кланвары',   self.on_scrimmage),
+            ('СОСТАВ', [
+                ('Состав',      self.on_roster),
+                ('Трансферы',   self.on_transfers),
+                ('Академия',    self.on_academy),
+                ('Кланвары',    self.on_scrimmage),
             ]),
-            ('МЕНЕДЖМЕНТ', [
-                ('Финансы',    self.on_finances),
-                ('Спонсоры',   self.on_sponsors),
-                ('Организация',self.on_organization),
-                ('Цели',       self.on_goals),
+            ('ОРГАНИЗАЦИЯ', [
+                ('Финансы',     self.on_finances),
+                ('Спонсоры',    self.on_sponsors),
+                ('Организация', self.on_organization),
+                ('Навыки',      self.on_manager_skills),
+                ('Цели',        self.on_goals),
             ]),
-            ('ТУРНИРЫ', [
-                ('Турниры',    self.on_tournaments),
-                ('Команды',    self.on_league),
-                ('История',       self.on_history),
-                ('Трансферы 📋', self.on_transfer_history),
-                ('Статистика', self.on_stats),
-                ('Лидерборд',  self.on_leaderboard),
+            ('ТУРНИРЫ / МИР', [
+                ('Турниры',     self.on_tournaments),
+                ('Команды',     self.on_league),
+                ('Лидерборд',   self.on_leaderboard),
+            ]),
+            ('ИСТОРИЯ', [
+                ('История',     self.on_history),
+                ('Трансф. лог', self.on_transfer_history),
+                ('Статистика',  self.on_stats),
+                ('Герои патча', self.on_hero_stats),
             ]),
             ('ПРОЧЕЕ', [
                 ('Входящие',    self.on_incoming),
                 ('Достижения',  self.on_achievements),
                 ('Мой профиль', self.on_profile),
-                ('Навыки',      self.on_manager_skills),
                 ('Настройки',   self.on_settings),
                 ('Сохранить',   self.on_manual_save),
                 ('Главное меню',self.on_main_menu),
@@ -838,6 +841,10 @@ class MainWindow(BoxLayout):
                 if bc_avail:
                     actions.append(('warn', f'Сыгранность низкая ({cohesion}/100) — доступен буткемп'))
 
+            # Salary cap warning
+            if total_wage > 200_000:
+                actions.append(('danger', f'Зарплаты ${total_wage:,}/мес превышают лимит $200k — налог $30k/мес'))
+
             # Rating / budget trend (last 6 monthly snapshots)
             rating_trend = None
             budget_trend = None
@@ -890,7 +897,7 @@ class MainWindow(BoxLayout):
         if _is_transfer_window(str(self.date_object)):
             tw = _card((0.08, 0.22, 0.10, 1))
             lbl_tw = Label(
-                text='[b]🔓 ТРАНСФЕРНОЕ ОКНО ОТКРЫТО[/b]  —  январь и август',
+                text='[b]ТРАНСФЕРНОЕ ОКНО ОТКРЫТО[/b]  —  январь и август',
                 markup=True, color=T.POSITIVE,
                 font_size=T.FS_BODY, size_hint_y=None, height=T.ROW_H,
                 halign='center', valign='middle',
@@ -935,9 +942,45 @@ class MainWindow(BoxLayout):
         c1.add_widget(_row('Место в рейтинге',
                            f'[b]#{my_rank}[/b]  ({int(rating)} pts)'
                            + _trend_suffix(rating_trend)))
+        def _bar_row(label, value, max_val, color):
+            """Row with inline mini progress bar."""
+            from kivy.uix.widget import Widget
+            from kivy.graphics import Color as _GC, Rectangle as _GR
+            r = BoxLayout(size_hint_y=None, height=T.ROW_H, spacing=4)
+            ll = Label(text=label, color=T.TEXT_LABEL, font_size=T.FS_BODY,
+                       halign='left', valign='middle', size_hint_x=0.38)
+            ll.bind(size=ll.setter('text_size'))
+            # Mini bar
+            bar_outer = BoxLayout(size_hint_x=0.40, size_hint_y=None,
+                                  height=10, padding=(0, 0))
+            pct = max(0.0, min(1.0, value / max_val))
+            fill = Widget(size_hint=(pct, 1))
+            with fill.canvas.before:
+                _GC(*color)
+                _rf = _GR()
+            fill.bind(pos=lambda w, _: setattr(_rf, 'pos', w.pos),
+                      size=lambda w, _: setattr(_rf, 'size', w.size))
+            empty = Widget(size_hint=(1 - pct, 1))
+            with empty.canvas.before:
+                _GC(0.20, 0.20, 0.24, 1)
+                _re = _GR()
+            empty.bind(pos=lambda w, _: setattr(_re, 'pos', w.pos),
+                       size=lambda w, _: setattr(_re, 'size', w.size))
+            bar_outer.add_widget(fill)
+            bar_outer.add_widget(empty)
+            rl = Label(
+                text=f'[color={_mc(color)}]{value}[/color]/{max_val}',
+                markup=True, color=T.TEXT_MAIN, font_size=T.FS_BODY,
+                halign='right', valign='middle', size_hint_x=0.22,
+            )
+            rl.bind(size=rl.setter('text_size'))
+            r.add_widget(ll)
+            r.add_widget(bar_outer)
+            r.add_widget(rl)
+            return r
+
         coh_c = T.cohesion_color(cohesion)
-        c1.add_widget(_row('Сыгранность',
-                           f'[color={_mc(coh_c)}]{cohesion}/100[/color]'))
+        c1.add_widget(_bar_row('Сыгранность', cohesion, 100, coh_c))
         try:
             from logic.chemistry import pair_bond_description
             _pb = pair_bond_description(self.db_name, my_id[0] if my_id else None)
@@ -946,11 +989,9 @@ class MainWindow(BoxLayout):
         except Exception:
             pass
         mor_c = T.morale_color(avg_morale)
-        c1.add_widget(_row('Мораль состава',
-                           f'[color={_mc(mor_c)}]{avg_morale}/10[/color]'))
+        c1.add_widget(_bar_row('Мораль состава', avg_morale, 10, mor_c))
         rep_c = T.cohesion_color(org_reputation)
-        c1.add_widget(_row('Репутация',
-                           f'[color={_mc(rep_c)}]{org_reputation}/100[/color]'))
+        c1.add_widget(_bar_row('Репутация орг.', org_reputation, 100, rep_c))
         fans_str = f'{fans:,}' if fans < 1_000_000 else f'{fans/1_000_000:.1f}M'
         c1.add_widget(_row('Фанаты', f'[color=ff88cc]{fans_str}[/color]'))
         try:
@@ -1226,6 +1267,7 @@ class MainWindow(BoxLayout):
             "ALTER TABLE teams ADD COLUMN planned_bootcamp_date TEXT",
             "ALTER TABLE teams ADD COLUMN planned_bootcamp_cost INTEGER DEFAULT 0",
             "ALTER TABLE players ADD COLUMN achievement_flags TEXT DEFAULT ''",
+            "ALTER TABLE player_career_stats ADD COLUMN earnings INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(ddl)
@@ -1365,7 +1407,8 @@ class MainWindow(BoxLayout):
         for pid, nick in expired:
             cur.execute(
                 "SELECT micro_skills, macro_skills, wage, role, "
-                "COALESCE(poaching_team_id,0), COALESCE(pre_contract_team_id,0) "
+                "COALESCE(poaching_team_id,0), COALESCE(pre_contract_team_id,0), "
+                "COALESCE(age,22), COALESCE(retirement_age,35), team_id "
                 "FROM players WHERE id=?",
                 (pid,),
             )
@@ -1374,8 +1417,35 @@ class MainWindow(BoxLayout):
                 avg = ((pr[0] or 10) + (pr[1] or 10)) // 2
                 expected = max(avg * 180, int((pr[2] or 0) * 0.85))
                 role = pr[3]
-                poaching_tid    = pr[4] or 0
+                poaching_tid     = pr[4] or 0
                 pre_contract_tid = pr[5] or 0
+                player_age       = pr[6]
+                retirement_age   = pr[7]
+                player_team_id   = pr[8]
+
+                # Retirement check: player on player's team hitting retirement age
+                if player_age >= retirement_age and player_team_id:
+                    try:
+                        pt_check = cur.execute(
+                            "SELECT player FROM teams WHERE id=?", (player_team_id,)
+                        ).fetchone()
+                        if pt_check and pt_check[0] == 'yes':
+                            # Get career stats for ceremony
+                            total_games = (cur.execute(
+                                "SELECT COALESCE(SUM(games),0) FROM player_career_stats WHERE player_id=?",
+                                (pid,)
+                            ).fetchone() or (0,))[0]
+                            total_earn = (cur.execute(
+                                "SELECT COALESCE(SUM(earnings),0) FROM player_career_stats WHERE player_id=?",
+                                (pid,)
+                            ).fetchone() or (0,))[0]
+                            from kivy.clock import Clock as _Clk
+                            _Clk.schedule_once(
+                                lambda dt, _n=nick, _a=player_age, _g=total_games, _e=total_earn:
+                                    self._show_retirement_ceremony(_n, _a, _g, _e), 0.5
+                            )
+                    except Exception:
+                        pass
             else:
                 expected = 0
                 role = None
@@ -1520,6 +1590,23 @@ class MainWindow(BoxLayout):
                         (total_wage, team_id),
                     )
 
+                # Soft salary cap: $200k/month. Excess → luxury tax $30k
+                _SALARY_CAP = 200_000
+                _LUXURY_TAX = 30_000
+                if total_wage > _SALARY_CAP:
+                    cursor.execute(
+                        "UPDATE teams SET budget=MAX(0, budget-?) WHERE id=?",
+                        (_LUXURY_TAX, team_id),
+                    )
+                    conn.execute(
+                        "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
+                        (
+                            f'Налог на роскошь: зарплатный фонд ${total_wage:,} превышает '
+                            f'лимит ${_SALARY_CAP:,}. Штраф −${_LUXURY_TAX:,}.',
+                            str(self.date_object), 'Финансы',
+                        ),
+                    )
+
         # AI team wage deductions
         cursor.execute(
             "SELECT t.id, SUM(COALESCE(p.wage, 0)) "
@@ -1535,17 +1622,33 @@ class MainWindow(BoxLayout):
                     (ai_wages, ai_tid),
                 )
 
-        # AI operational expenses: bootcamps, scouting, travel (~15-35k/month)
+        # AI operational expenses — scales with budget to prevent hoarding
         cursor.execute(
-            "SELECT id, COALESCE(rating,0) FROM teams WHERE player!='yes'"
+            "SELECT id, COALESCE(rating,0), COALESCE(budget,0) FROM teams WHERE player!='yes'"
         )
-        for ai_tid, ai_rating in cursor.fetchall():
-            base = 15_000 + int(ai_rating * 20)   # better teams spend more
+        for ai_tid, ai_rating, ai_budget in cursor.fetchall():
+            # Base: rating-driven routine costs
+            base = 15_000 + int(ai_rating * 20)
+            # Prestige spending: richer teams burn proportionally more
+            if ai_budget > 2_000_000:
+                base += int(ai_budget * 0.06)   # 6% of excess wealth/month
+            elif ai_budget > 1_000_000:
+                base += int(ai_budget * 0.04)
+            elif ai_budget > 500_000:
+                base += int(ai_budget * 0.02)
             expenses = _random.randint(base, base + 20_000)
+            # Hard floor 100k to keep AI from going broke
             cursor.execute(
-                "UPDATE teams SET budget=MAX(50_000, budget-?) WHERE id=?",
+                "UPDATE teams SET budget=MAX(100_000, budget-?) WHERE id=?",
                 (expenses, ai_tid),
             )
+            # Quarterly big expenditure (25% monthly chance = ~once per quarter)
+            if _random.random() < 0.25 and ai_budget > 600_000:
+                big_spend = _random.randint(80_000, min(300_000, int(ai_budget * 0.15)))
+                cursor.execute(
+                    "UPDATE teams SET budget=MAX(100_000, budget-?) WHERE id=?",
+                    (big_spend, ai_tid),
+                )
 
         # Monthly team snapshot for dashboard trend
         snap_row = cursor.execute(
@@ -1663,7 +1766,7 @@ class MainWindow(BoxLayout):
                 _mc = sqlite3.connect(self.db_name)
                 _mc.execute(
                     "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
-                    (f'🏆 Достижение: «{_aname}»! Бонус: {_abonus}',
+                    (f'[ТОП] Достижение: «{_aname}»! Бонус: {_abonus}',
                      str(self.date_object), 'Достижения')
                 )
                 _mc.commit(); _mc.close()
@@ -1781,6 +1884,46 @@ class MainWindow(BoxLayout):
         if dialogue:
             self._show_player_dialogue(dialogue)
 
+    def _show_retirement_ceremony(self, nick, age, total_games, total_earn):
+        try:
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            from kivy.uix.label import Label
+            from kivy.uix.button import Button
+
+            p = Popup(title='Прощание с игроком', size_hint=(0.55, 0.52))
+            root = BoxLayout(orientation='vertical', padding=12, spacing=8)
+
+            lines = [
+                f'[b][color=ffd700]{nick}[/color][/b] завершает карьеру.',
+                f'{age} лет  ·  {total_games} матчей в карьере',
+            ]
+            if total_earn:
+                lines.append(f'Призовые за карьеру: ${total_earn:,}')
+            lines.append('')
+            lines.append('Спасибо за всё, что ты сделал для команды. Удачи!')
+
+            for line in lines:
+                lbl = Label(
+                    text=line, markup=True,
+                    color=(0.92, 0.92, 0.92, 1) if not line.startswith('[b]') else (1, 1, 1, 1),
+                    size_hint_y=None, height=30,
+                    halign='center', valign='middle', font_size='13sp',
+                )
+                lbl.bind(size=lbl.setter('text_size'))
+                root.add_widget(lbl)
+
+            close = Button(
+                text='Проводить игрока', size_hint_y=None, height=46,
+                background_color=(0.18, 0.35, 0.60, 1), background_normal='',
+            )
+            close.bind(on_press=p.dismiss)
+            root.add_widget(close)
+            p.content = root
+            p.open()
+        except Exception:
+            pass
+
     def _check_player_milestones(self):
         """Generate inbox messages for player career milestones."""
         try:
@@ -1871,13 +2014,34 @@ class MainWindow(BoxLayout):
                     if p == tid:
                         results.append((tname_t, i)); break
 
-            # MVP (player with most career_stats games this season)
+            # MVP (player with most games this season)
             mvp = c.execute(f"""
-                SELECT p.nickname, SUM(cs.games) as g
+                SELECT p.nickname, SUM(cs.games) as g, COALESCE(SUM(cs.earnings),0)
                 FROM player_career_stats cs JOIN players p ON p.id=cs.player_id
                 WHERE cs.season={year} AND p.team_id={tid}
                 GROUP BY cs.player_id ORDER BY g DESC LIMIT 1
             """).fetchone()
+
+            # Best young player (age<=22, highest skill sum on team)
+            best_young = c.execute(f"""
+                SELECT p.nickname, p.micro_skills+p.macro_skills as sk, COALESCE(p.age,22)
+                FROM players p WHERE p.team_id={tid} AND COALESCE(p.age,22)<=22
+                ORDER BY sk DESC LIMIT 1
+            """).fetchone()
+
+            # Veteran (highest comp_exp on team)
+            veteran = c.execute(f"""
+                SELECT p.nickname, COALESCE(p.comp_exp,0), COALESCE(p.age,22)
+                FROM players p WHERE p.team_id={tid}
+                ORDER BY p.comp_exp DESC LIMIT 1
+            """).fetchone()
+
+            # Total team earnings this season
+            total_prizes = c.execute(f"""
+                SELECT COALESCE(SUM(cs.earnings),0) FROM player_career_stats cs
+                JOIN players p ON p.id=cs.player_id
+                WHERE cs.season={year} AND p.team_id={tid}
+            """).fetchone()[0]
 
             # Goals achieved
             goals_done = c.execute(
@@ -1915,16 +2079,33 @@ class MainWindow(BoxLayout):
 
             if results:
                 gl.add_widget(_lbl('Турниры:', _ACC, 28, True))
-                MEDALS = {1: '🏆 1-е', 2: '2-е', 3: '3-е', 4: '4-е'}
+                MEDALS = {1: '1-е', 2: '2-е', 3: '3-е', 4: '4-е'}
                 for tn, place in results:
                     pc = _GOLD if place == 1 else _WHITE
                     gl.add_widget(_lbl(f'{MEDALS.get(place, f"{place}-е")}  {tn[:30]}', pc, 26))
             else:
                 gl.add_widget(_lbl('Турниры: не участвовали', (0.5, 0.5, 0.5, 1), 26))
 
+            # Season awards section
+            gl.add_widget(_lbl('─── НАГРАДЫ СЕЗОНА ───', _GOLD, 26, True))
             if mvp:
-                gl.add_widget(_lbl(f'MVP сезона: {mvp[0]}  ({mvp[1]} матчей)', _GOLD, 28, True))
+                gl.add_widget(_lbl(
+                    f'MVP MVP сезона: {mvp[0]}  ({mvp[1]} матчей, призовые ${mvp[2]:,})',
+                    _GOLD, 28, True))
+            if best_young:
+                gl.add_widget(_lbl(
+                    f'[МОЛ] Молодой таланты: {best_young[0]}  ({best_young[2]} лет, скилл {best_young[1]})',
+                    (0.50, 0.90, 1.00, 1), 26))
+            if veteran:
+                gl.add_widget(_lbl(
+                    f'[ВЕТ] Ветеран года: {veteran[0]}  ({veteran[2]} лет, опыт {veteran[1]} матчей)',
+                    (0.80, 0.65, 1.00, 1), 26))
+            if total_prizes:
+                gl.add_widget(_lbl(
+                    f'$ Всего призовых игрокам: ${total_prizes:,}',
+                    (0.40, 0.90, 0.50, 1), 26))
 
+            gl.add_widget(_lbl('─────────────────────', (0.4, 0.4, 0.4, 1), 18))
             gl.add_widget(_lbl(f'Рейтинг: {int(rating)} pts', _WHITE, 26))
             gl.add_widget(_lbl(f'Фанаты: {fans:,}', (1.0, 0.55, 0.80, 1), 26))
             gl.add_widget(_lbl(f'Цели выполнены: {goals_done}/{goals_total}',
@@ -2110,6 +2291,17 @@ class MainWindow(BoxLayout):
         if self._auto_advance_event:
             self._stop_auto_advance()
 
+        # Show loading indicator on skip button
+        orig_text = self._skip_btn.text if hasattr(self, '_skip_btn') else ''
+        if hasattr(self, '_skip_btn'):
+            self._skip_btn.text = 'Симуляция...'
+            self._skip_btn.disabled = True
+
+        def _restore_btn():
+            if hasattr(self, '_skip_btn'):
+                self._skip_btn.text = orig_text or '>> Матч'
+                self._skip_btn.disabled = False
+
         at = self._get_active_tournament()
         if at:
             # Skip through non-player matches until player match or end
@@ -2129,6 +2321,7 @@ class MainWindow(BoxLayout):
                     break
                 # Non-player match: silent advance
                 self._advance_one_day(suppress_notifications=True)
+            _restore_btn()
             return
 
         # No active tournament: skip to next tournament start
@@ -2149,6 +2342,7 @@ class MainWindow(BoxLayout):
             if tourn_row:
                 self._init_tournament(tourn_row[0], tourn_row[1])
                 self._play_match_day(suppress_notifications=False)
+        _restore_btn()
 
     def _advance_one_day(self, suppress_notifications=False):
         """Advance date by 1 day. Returns True if a notification was triggered."""
@@ -2326,7 +2520,7 @@ class MainWindow(BoxLayout):
         except Exception:
             pass
         from ingame_interface.inbox import MessagePopup
-        self._show_inline(MessagePopup(messages), 'Входящие')
+        self._show_inline(MessagePopup(messages, db_name=self.db_name), 'Входящие')
         self._refresh_menu_badges()
 
     def _load_messages(self):
@@ -2370,6 +2564,10 @@ class MainWindow(BoxLayout):
     def on_leaderboard(self, instance):
         from ingame_interface.stats import show_leaderboard_popup
         show_leaderboard_popup(self.db_name)
+
+    def on_hero_stats(self, instance):
+        from ingame_interface.stats import show_hero_stats_popup
+        show_hero_stats_popup(self.db_name)
 
     def on_goals(self, instance):
         from ingame_interface.goals import GoalsPopup

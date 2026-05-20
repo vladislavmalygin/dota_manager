@@ -502,6 +502,26 @@ class TransferPopup(Popup):
     def _build(self):
         root = BoxLayout(orientation='vertical', spacing=4, padding=4)
 
+        # ── Global player search bar ─────────────────────────────
+        search_bar = BoxLayout(size_hint_y=None, height=36, spacing=6)
+        from kivy.uix.label import Label as _Lbl2
+        from kivy.uix.textinput import TextInput as _TI2
+        search_bar.add_widget(_Lbl2(
+            text='Поиск игрока:', size_hint_x=None, width=120,
+            color=(0.7, 0.7, 0.7, 1), font_size='13sp',
+            halign='right', valign='middle',
+        ))
+        self._search_inp = _TI2(
+            hint_text='никнейм...', multiline=False,
+            size_hint_x=0.30, font_size='14sp',
+        )
+        self._search_inp.bind(text=self._on_search)
+        search_bar.add_widget(self._search_inp)
+        self._search_results = BoxLayout(orientation='vertical',
+                                         size_hint_x=0.55, spacing=2)
+        search_bar.add_widget(self._search_results)
+        root.add_widget(search_bar)
+
         body = BoxLayout(orientation='horizontal', spacing=6)
         body.add_widget(self._make_squad_panel())
         body.add_widget(self._make_free_agents_panel())
@@ -749,6 +769,138 @@ class TransferPopup(Popup):
         conn.close()
         self._rebuild()
 
+    def _show_player_actions(self, pid, col, nick, fee, role, micro, macro, wage,
+                             in_window, game_date_str):
+        """Popup with all actions for a roster player — replaces row button clutter."""
+        p = Popup(title=f'Действия: {nick}', size_hint=(0.45, 0.55))
+        from kivy.uix.gridlayout import GridLayout as _GL
+        gl = _GL(cols=1, spacing=6, padding=10, size_hint_y=None)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        def _close_do(fn, *args):
+            p.dismiss()
+            fn(*args)
+
+        def _confirm_then(action_name, bg, fn, *args):
+            """Replace popup content with confirmation."""
+            from kivy.uix.boxlayout import BoxLayout as _BL
+            confirm = _BL(orientation='vertical', padding=8, spacing=6)
+            lbl = Label(
+                text=f'[b]Подтвердить:[/b] {action_name}?',
+                markup=True, color=(0.95, 0.95, 0.95, 1),
+                size_hint_y=None, height=50,
+                halign='center', valign='middle',
+            )
+            lbl.bind(size=lbl.setter('text_size'))
+            confirm.add_widget(lbl)
+            btn_row = BoxLayout(size_hint_y=None, height=48, spacing=6)
+            yes = Button(text='Да, подтвердить', background_color=bg, background_normal='')
+            no  = Button(text='Отмена', background_color=(0.35, 0.35, 0.35, 1), background_normal='')
+            yes.bind(on_press=lambda _: (p.dismiss(), fn(*args)))
+            no.bind(on_press=lambda _: p.dismiss())
+            btn_row.add_widget(yes)
+            btn_row.add_widget(no)
+            confirm.add_widget(btn_row)
+            p.content = confirm
+
+        # Release
+        rel = Button(
+            text=f'Отпустить {nick} (бесплатно)',
+            size_hint_y=None, height=48,
+            background_color=(0.75, 0.20, 0.10, 1), background_normal='',
+        )
+        rel.bind(on_press=lambda _: _confirm_then(
+            f'Отпустить {nick}', (0.75, 0.20, 0.10, 1),
+            self._release, pid, col
+        ))
+        gl.add_widget(rel)
+
+        # Sell (transfer window only)
+        sell_clr = (0.55, 0.38, 0.05, 1) if in_window else (0.30, 0.30, 0.30, 1)
+        sell = Button(
+            text=f'Продать за ${fee:,}' + ('' if in_window else '  [окно закрыто]'),
+            size_hint_y=None, height=48,
+            background_color=sell_clr, background_normal='',
+            disabled=not in_window,
+        )
+        sell.bind(on_press=lambda _: _confirm_then(
+            f'Продать {nick} за ${fee:,}', (0.55, 0.38, 0.05, 1),
+            self._sell_player, pid, col, fee
+        ))
+        gl.add_widget(sell)
+
+        # Loan out
+        loan_clr = (0.18, 0.38, 0.62, 1) if in_window else (0.30, 0.30, 0.30, 1)
+        loan = Button(
+            text='Отдать в аренду' + ('' if in_window else '  [окно закрыто]'),
+            size_hint_y=None, height=48,
+            background_color=loan_clr, background_normal='',
+            disabled=not in_window,
+        )
+        loan.bind(on_press=lambda _: (
+            p.dismiss(),
+            self._open_loan_out(pid, col, role, nick, wage)
+        ))
+        gl.add_widget(loan)
+
+        # Trade
+        trade_clr = (0.30, 0.18, 0.52, 1) if in_window else (0.30, 0.30, 0.30, 1)
+        trade = Button(
+            text='Обмен игрок↔игрок' + ('' if in_window else '  [окно закрыто]'),
+            size_hint_y=None, height=48,
+            background_color=trade_clr, background_normal='',
+            disabled=not in_window,
+        )
+        trade.bind(on_press=lambda _: (
+            p.dismiss(),
+            self._open_trade(pid, col, role, nick, micro, macro)
+        ))
+        gl.add_widget(trade)
+
+        cancel = Button(
+            text='Закрыть', size_hint_y=None, height=44,
+            background_color=(0.35, 0.35, 0.35, 1), background_normal='',
+        )
+        cancel.bind(on_press=p.dismiss)
+        gl.add_widget(cancel)
+
+        from kivy.uix.scrollview import ScrollView as _SV
+        sv = _SV()
+        sv.add_widget(gl)
+        p.content = sv
+        p.open()
+
+    def _on_search(self, inp, text):
+        self._search_results.clear_widgets()
+        q = text.strip().lower()
+        if len(q) < 2:
+            return
+        conn = sqlite3.connect(self.db_name)
+        rows = conn.execute("""
+            SELECT p.nickname, p.role, p.micro_skills+p.macro_skills,
+                   COALESCE(p.age,22), t.name, p.contract_end,
+                   COALESCE(p.wage,0), p.team_id
+            FROM players p
+            LEFT JOIN teams t ON t.id=p.team_id
+            WHERE LOWER(p.nickname) LIKE ? AND p.nickname != ''
+            ORDER BY (p.micro_skills+p.macro_skills) DESC LIMIT 6
+        """, (f'%{q}%',)).fetchall()
+        conn.close()
+
+        _ROLE_S = {'carry': 'C', 'mid': 'M', 'offlane': 'O',
+                   'partial_support': 'S4', 'full_support': 'S5'}
+        for nick, role, sk, age, team, cend, wage, tid in rows:
+            status = 'FA' if not tid else (team.strip()[:14] if team else '?')
+            clr = (0.30, 1.00, 0.50, 1) if not tid else (0.85, 0.85, 0.85, 1)
+            role_s = _ROLE_S.get(role, '?')
+            cend_s = cend[2:7] if cend else '—'
+            txt = f'{nick}  [{role_s}]  sk{sk}  {age}л  {status}  кнт:{cend_s}'
+            from kivy.uix.label import Label as _SL
+            lbl = _SL(text=txt, color=clr, size_hint_y=None, height=18,
+                      halign='left', valign='middle', font_size='11sp')
+            lbl.bind(size=lbl.setter('text_size'))
+            self._search_results.add_widget(lbl)
+
     def _toggle_watchlist(self, pid):
         conn = sqlite3.connect(self.db_name)
         existing = conn.execute(
@@ -901,56 +1053,25 @@ class TransferPopup(Popup):
                         f"  [{role_label}]  {nick}   скилл {avg}   ${wage:,}{exp_txt}",
                         height=46, color=info_color,
                     )
-                    rel_btn = Button(
-                        text='Отпустить', size_hint=(None, None),
-                        width=84, height=38,
-                        background_color=(0.8, 0.3, 0.1, 1),
-                    )
-                    rel_btn.bind(on_press=lambda _, pid=pid, col=col: self._release(pid, col))
 
                     fee = _transfer_fee(micro, macro, contract_end or str(today), str(today))
-                    sell_btn = Button(
-                        text=f'Продать\n${fee//1000}k', size_hint=(None, None),
-                        width=80, height=38,
-                        background_color=(0.55, 0.35, 0.05, 1) if in_window else (0.3, 0.3, 0.3, 1),
-                        background_normal='', font_size='12sp',
-                    )
-                    if in_window:
-                        sell_btn.bind(on_press=lambda _, pid=pid, col=col, f=fee:
-                                      self._sell_player(pid, col, f))
-                    else:
-                        sell_btn.bind(on_press=lambda _: _show_window_popup())
-                    loan_btn = Button(
-                        text='Аренда→', size_hint=(None, None),
-                        width=76, height=38,
-                        background_color=(0.18, 0.35, 0.60, 1) if in_window else (0.3, 0.3, 0.3, 1),
-                        background_normal='', font_size='12sp',
-                    )
-                    if in_window:
-                        loan_btn.bind(on_press=lambda _, pid=pid, col=col,
-                                      r=role, nick=nick, w=wage:
-                                      self._open_loan_out(pid, col, r, nick, w))
-                    else:
-                        loan_btn.bind(on_press=lambda _: _show_window_popup())
 
-                    trade_btn = Button(
-                        text='Обмен', size_hint=(None, None),
-                        width=66, height=38,
-                        background_color=(0.30, 0.18, 0.50, 1) if in_window else (0.3, 0.3, 0.3, 1),
-                        background_normal='', font_size='12sp',
+                    # Single "Действия" button replaces 4 cramped buttons
+                    act_btn = Button(
+                        text='Действия', size_hint=(None, None), width=90, height=38,
+                        background_color=(0.25, 0.35, 0.50, 1), background_normal='',
+                        font_size='13sp',
                     )
-                    if in_window:
-                        trade_btn.bind(on_press=lambda _, pid=pid, col=col,
-                                       r=role, nick=nick, mi=micro, ma=macro:
-                                       self._open_trade(pid, col, r, nick, mi, ma))
-                    else:
-                        trade_btn.bind(on_press=lambda _: _show_window_popup())
+                    def _open_actions(_, _pid=pid, _col=col, _nick=nick, _fee=fee,
+                                      _role=role, _mi=micro, _ma=macro, _w=wage):
+                        self._show_player_actions(
+                            _pid, _col, _nick, _fee, _role, _mi, _ma, _w,
+                            in_window, str(today)
+                        )
+                    act_btn.bind(on_press=_open_actions)
 
                     row.add_widget(info)
-                    row.add_widget(rel_btn)
-                    row.add_widget(sell_btn)
-                    row.add_widget(loan_btn)
-                    row.add_widget(trade_btn)
+                    row.add_widget(act_btn)
 
                     if expiring:
                         demanded = max(int(wage * 1.20), exp_wage)
@@ -1181,10 +1302,10 @@ class TransferPopup(Popup):
         grid.add_widget(_header(f"  Свободные агенты  [{lbl_role}]"))
 
         _PSYCHO_CHIP = {
-            'leader':      ('[👑]', (1.00, 0.85, 0.20, 1)),
-            'solo_carry':  ('[⚡]', (0.40, 0.80, 1.00, 1)),
-            'team_player': ('[🤝]', (0.30, 0.95, 0.45, 1)),
-            'wildcard':    ('[🎲]', (1.00, 0.55, 0.20, 1)),
+            'leader':      ('[Лид]', (1.00, 0.85, 0.20, 1)),
+            'solo_carry':  ('[СК]', (0.40, 0.80, 1.00, 1)),
+            'team_player': ('[Кмд]', (0.30, 0.95, 0.45, 1)),
+            'wildcard':    ('[WC]', (1.00, 0.55, 0.20, 1)),
         }
         if not free_agents:
             grid.add_widget(_lbl("  Нет свободных игроков.", color=(0.7, 0.7, 0.7, 1)))
@@ -1212,7 +1333,7 @@ class TransferPopup(Popup):
 
                 row = BoxLayout(size_hint_y=None, height=46, spacing=3)
                 if scouted or _scout_reveal:
-                    skill_txt = f"скилл {avg}" + (' 🔍' if _scout_reveal else '')
+                    skill_txt = f"скилл {avg}" + (' (ск)' if _scout_reveal else '')
                     pchip, pclr = _PSYCHO_CHIP.get(psychotype, ('', None))
                 else:
                     skill_txt = "скилл ??"
@@ -1231,7 +1352,7 @@ class TransferPopup(Popup):
                 ).fetchall()} if True else set()
                 in_wl = pid in _wl_ids
                 wl_btn = Button(
-                    text='👁✓' if in_wl else '👁',
+                    text='Вотч+' if in_wl else 'Вотч',
                     size_hint=(None, None), width=40, height=40,
                     background_color=(0.10, 0.35, 0.55, 1) if in_wl else (0.22, 0.22, 0.30, 1),
                     background_normal='', font_size='14sp',
@@ -1300,7 +1421,7 @@ class TransferPopup(Popup):
                 )
                 wrow.add_widget(winfo)
                 rm_btn = Button(
-                    text='✕', size_hint=(None, None), width=32, height=32,
+                    text='X', size_hint=(None, None), width=32, height=32,
                     background_color=(0.50, 0.15, 0.15, 1), background_normal='',
                     font_size='14sp',
                 )

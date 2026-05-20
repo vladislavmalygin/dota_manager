@@ -22,12 +22,13 @@ _PURPLE  = (0.80, 0.55, 1.00, 1)
 
 _CATEGORIES = {
     'Все':        None,
-    'Трансферы':  lambda a: 'Трансфер' in a or 'Цели' in a,
+    'Трансферы':  lambda a: 'Трансфер' in a or 'Цели' in a or 'Рынок' in a,
     'Контракты':  lambda a: 'Директор' in a or 'Контракт' in a,
     'Турниры':    lambda a: 'Турнир' in a or 'Система' in a or 'Результат' in a,
+    'Финансы':    lambda a: 'Финанс' in a or 'Организац' in a or 'Спонсор' in a or 'Партнёр' in a or 'Инвест' in a,
+    'События':    lambda a: 'Новости' in a or 'Отпуск' in a or 'СМИ' in a or 'Соперни' in a or 'Карьера' in a or 'Менедж' in a,
     'Академия':   lambda a: 'Скаутинг' in a or 'Академия' in a,
-    'Спонсоры':   lambda a: 'Спонсор' in a or 'Организац' in a or 'Партнёр' in a,
-    'Новости':    lambda a: 'Новости' in a or 'Отпуск' in a,
+    'Рейтинг':    lambda a: 'Рейтинг' in a,
 }
 
 _CAT_COLOR = {
@@ -35,9 +36,10 @@ _CAT_COLOR = {
     'Трансферы':  _GREEN,
     'Контракты':  _ORANGE,
     'Турниры':    _GOLD,
+    'Финансы':    _BLUE,
+    'События':    (0.70, 0.70, 0.70, 1),
     'Академия':   _PURPLE,
-    'Спонсоры':   _BLUE,
-    'Новости':    (0.70, 0.70, 0.70, 1),
+    'Рейтинг':    (0.55, 0.85, 1.00, 1),
 }
 
 _AUTHOR_COLOR = {
@@ -55,13 +57,14 @@ _AUTHOR_COLOR = {
 
 
 class MessagePopup(Popup):
-    def __init__(self, messages, **kwargs):
+    def __init__(self, messages, db_name=None, **kwargs):
         super().__init__(**kwargs)
         self.title = ''
         self.size_hint = (0.88, 0.90)
         self.background_color = (1, 1, 1, 0)
         self._messages   = messages
         self._active_cat = 'Все'
+        self._db_name    = db_name
         self._build()
 
     def _build(self):
@@ -91,13 +94,33 @@ class MessagePopup(Popup):
         self._scroll.add_widget(self._grid)
         root.add_widget(self._scroll)
 
+        btn_row = BoxLayout(size_hint_y=None, height=46, spacing=6)
+        mark_all = Button(
+            text='Прочитать все', size_hint_x=0.45,
+            background_color=(0.20, 0.35, 0.55, 0.9), background_normal='',
+        )
+        mark_all.bind(on_press=self._mark_all_read)
         close = Button(
-            text='Закрыть', size_hint_y=None, height=46,
+            text='Закрыть', size_hint_x=0.55,
             background_color=(0.7, 0.2, 0.2, 0.9), background_normal='',
         )
         close.bind(on_press=self.dismiss)
-        root.add_widget(close)
+        btn_row.add_widget(mark_all)
+        btn_row.add_widget(close)
+        root.add_widget(btn_row)
         self.content = root
+        self._fill_messages()
+
+    def _mark_all_read(self, _=None):
+        for msg in self._messages:
+            msg['read'] = 1
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(self._db_name)
+            conn.execute("UPDATE messages SET read=1")
+            conn.commit(); conn.close()
+        except Exception:
+            pass
         self._fill_messages()
 
     def _set_cat(self, cat):

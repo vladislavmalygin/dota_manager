@@ -995,7 +995,8 @@ class PlayerDetailPopup(Popup):
         career_stats = []
         try:
             career_stats = c.execute(
-                "SELECT season, games, wins, mvp_count FROM player_career_stats "
+                "SELECT season, games, wins, mvp_count, COALESCE(earnings,0) "
+                "FROM player_career_stats "
                 "WHERE player_id=? ORDER BY season DESC LIMIT 6", (pid,)
             ).fetchall()
         except Exception:
@@ -1137,10 +1138,10 @@ class PlayerDetailPopup(Popup):
         role_txt = ROLE_LABELS.get(role, role or '—')
         sec_txt  = ROLE_LABELS.get(sec_role, '—') if sec_role else '—'
         _PSYCHO_LABEL = {
-            'leader':      'Лидер 👑',
-            'solo_carry':  'Соло-керри ⚡',
-            'team_player': 'Командный игрок 🤝',
-            'wildcard':    'Wildcard 🎲',
+            'leader':      'Лидер [Лид]',
+            'solo_carry':  'Соло-керри [СК]',
+            'team_player': 'Командный [Кмд]',
+            'wildcard':    'Wildcard [WC]',
         }
         _PSYCHO_COLOR = {
             'leader':      (1.00, 0.85, 0.20, 1),
@@ -1292,17 +1293,20 @@ class PlayerDetailPopup(Popup):
             right_scroll_content.add_widget(_sec('КАРЬЕРА'))
 
         if career_stats:
+            total_earnings = sum(row[4] for row in career_stats)
             cs_hdr = Label(
-                text='  Сезон  Игры  Победы  MVP',
+                text=f'  Сезон  Игры  Победы  MVP   Призовые  '
+                     f'(Всего: ${total_earnings:,})',
                 color=T.TEXT_DIM, font_size='10sp',
                 size_hint_y=None, height=18, halign='left', valign='middle',
             )
             cs_hdr.bind(size=cs_hdr.setter('text_size'))
             right_scroll_content.add_widget(cs_hdr)
-            for cs_season, cs_g, cs_w, cs_mvp in career_stats:
+            for cs_season, cs_g, cs_w, cs_mvp, cs_earn in career_stats:
                 wr = f'{int(cs_w/cs_g*100)}%' if cs_g else '—'
+                earn_txt = f'  ${cs_earn:,}' if cs_earn else ''
                 cs_lbl = Label(
-                    text=f'  [b]{cs_season}[/b]    {cs_g:3d}     {cs_w:3d} ({wr})   {cs_mvp}🏆',
+                    text=f'  [b]{cs_season}[/b]  {cs_g:3d}  {cs_w:3d} ({wr})  {cs_mvp}[ТОП]{earn_txt}',
                     markup=True, color=T.TEXT_LABEL, font_size='11sp',
                     size_hint_y=None, height=20, halign='left', valign='middle',
                 )
@@ -1491,8 +1495,8 @@ class ChemistryPopup(Popup):
 
         # Psychotype breakdown
         _PSYCHO_RU = {
-            'leader': 'Лидер 👑', 'solo_carry': 'Соло-керри ⚡',
-            'team_player': 'Командный 🤝', 'wildcard': 'Wildcard 🎲',
+            'leader': 'Лидер [Лид]', 'solo_carry': 'Соло-керри [СК]',
+            'team_player': 'Командный [Кмд]', 'wildcard': 'Wildcard [WC]',
         }
         psychos = [p[4] for p in players]
         leaders = psychos.count('leader')
@@ -1502,7 +1506,7 @@ class ChemistryPopup(Popup):
         for p in players:
             gl.add_widget(_lbl2(f'  {p[0]}: {_PSYCHO_RU.get(p[4], p[4])}', _W, 24))
         if leaders >= 2:
-            gl.add_widget(_lbl2('  ⚠ 2+ лидера — конфликт: −1.5 химии', (1.0, 0.4, 0.3, 1), 24))
+            gl.add_widget(_lbl2('  [!] 2+ лидера — конфликт: −1.5 химии', (1.0, 0.4, 0.3, 1), 24))
         elif leaders == 1:
             gl.add_widget(_lbl2('  Один лидер: +0.3 химии', (0.3, 1.0, 0.4, 1), 24))
         if tp >= 3:

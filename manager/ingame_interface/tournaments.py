@@ -880,6 +880,29 @@ class MatchLogPopup(Popup):
 
         # log panel
         log_panel = BoxLayout(orientation='vertical', size_hint=(0.58, 1))
+
+        # Phase jump navigation bar
+        phase_nav = BoxLayout(size_hint_y=None, height=30, spacing=4, padding=(4, 2))
+        self._phase_positions = {}   # phase_name → character offset in log text
+        for phase_label, phase_key in [
+            ('Лайнинг', 'ЛАЙНИНГ'), ('Мидгейм', 'МИДГЕЙМ'), ('Лейтгейм', 'ЛЕЙТГЕЙМ')
+        ]:
+            pb = Button(
+                text=phase_label, background_normal='',
+                background_color=(0.18, 0.28, 0.45, 1),
+                font_size='11sp',
+            )
+            pb.bind(on_press=lambda _, pk=phase_key: self._jump_to_phase(pk))
+            phase_nav.add_widget(pb)
+        end_btn = Button(
+            text='>> Конец', background_normal='',
+            background_color=(0.38, 0.18, 0.40, 1),
+            font_size='11sp', size_hint_x=None, width=80,
+        )
+        end_btn.bind(on_press=lambda _: setattr(self._scroll, 'scroll_y', 0))
+        phase_nav.add_widget(end_btn)
+        log_panel.add_widget(phase_nav)
+
         self._log_lbl = Label(
             text='', size_hint_y=None,
             color=(0.88, 0.88, 0.88, 1),
@@ -1186,6 +1209,23 @@ class MatchLogPopup(Popup):
             map_winner, new_lines, new_snaps, new_stats = replay_match_with_heroes(
                 self._team1, self._team2, self._pre_match_db, hero_picks
             )
+            # Record draft history for player match
+            try:
+                from logic.dota.draft import record_draft
+                import sqlite3 as _sq2
+                gd = _sq2.connect(self._pre_match_db).execute("SELECT date FROM save WHERE id=1").fetchone()
+                _md = gd[0] if gd else ''
+                record_draft(
+                    self._pre_match_db, _md,
+                    getattr(self, '_tournament_name', ''),
+                    self._team1, self._team2, map_winner,
+                    {r: h[0] if isinstance(h, tuple) else h
+                     for r, h in hero_picks.get('team1', {}).items()},
+                    {r: h[0] if isinstance(h, tuple) else h
+                     for r, h in hero_picks.get('team2', {}).items()},
+                )
+            except Exception:
+                pass
             pre_w1 = self._map_wins.get(self._team1, 0)
             pre_w2 = self._map_wins.get(self._team2, 0)
             self._map_wins[map_winner] = self._map_wins.get(map_winner, 0) + 1
@@ -1237,6 +1277,18 @@ class MatchLogPopup(Popup):
         except Exception:
             pass
         self._run_simulation()
+
+    def _jump_to_phase(self, phase_keyword):
+        """Scroll log to the line containing phase_keyword."""
+        text = self._log_lbl.text
+        idx = text.find(phase_keyword)
+        if idx < 0:
+            return
+        total = max(1, len(text))
+        frac = idx / total
+        # scroll_y=1 is top, scroll_y=0 is bottom; text grows downward
+        target = max(0.0, min(1.0, 1.0 - frac))
+        self._scroll.scroll_y = target
 
     def _start(self):
         if not self._schedule:
@@ -1601,31 +1653,30 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
     strat_state = dict(cur_strats)
     strat_btns  = {}
 
-    # ── CM Draft sequence ────────────────────────────────────────────────────
-    # 20 steps: 5 player bans, 5 ai bans, 5 player picks (by role), 5 ai picks
+    # ── CM Draft sequence ─────────────────────────────────────────────────────
+    # role=None for player picks = FREE CHOICE (player assigns role themselves)
     DRAFT_SEQ = [
         ('ban',  'player', None),
         ('ban',  'ai',     None),
         ('ban',  'player', None),
         ('ban',  'ai',     None),
-        ('pick', 'player', 'carry'),
+        ('pick', 'player', None),   # ← free choice
         ('pick', 'ai',     None),
         ('pick', 'ai',     None),
-        ('pick', 'player', 'mid'),
+        ('pick', 'player', None),   # ← free choice
         ('ban',  'ai',     None),
         ('ban',  'player', None),
         ('ban',  'ai',     None),
         ('ban',  'player', None),
-        ('pick', 'player', 'offlane'),
+        ('pick', 'player', None),   # ← free choice
         ('pick', 'ai',     None),
-        ('pick', 'player', 'partial_support'),
+        ('pick', 'player', None),   # ← free choice
         ('pick', 'ai',     None),
         ('ban',  'player', None),
         ('ban',  'ai',     None),
         ('pick', 'ai',     None),
-        ('pick', 'player', 'full_support'),
+        ('pick', 'player', None),   # ← free choice
     ]
-    # AI needs these roles for picks (5 picks total, same as player)
     _AI_PICK_ROLES = [ROLE_ORDER[i] for i in range(5)]
     _ai_pick_idx   = [0]   # mutable counter
 
@@ -1865,11 +1916,14 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
         action, who, role = DRAFT_SEQ[step_idx]
         bans_done  = sum(1 for s in DRAFT_SEQ[:step_idx] if s[0]=='ban'  and s[1]=='player')
         picks_done = sum(1 for s in DRAFT_SEQ[:step_idx] if s[0]=='pick' and s[1]=='player')
+        unpicked_roles = [r for r in ROLE_ORDER if r not in draft['player_picks']]
+        roles_hint = ' / '.join(_ROLE_RU.get(r, r) for r in unpicked_roles[:3])
         if who == 'player':
             if action == 'ban':
                 return f'[b]ВАШ БАН  {bans_done+1}/5[/b]  — кликни героя для бана'
             else:
-                return f'[b]ВАШ ПИК  {picks_done+1}/5  →  {_ROLE_RU[role]}[/b]  — выбери героя'
+                return (f'[b]ВАШ ПИК  {picks_done+1}/5[/b]  — выбери героя,'
+                        f' потом роль  ({roles_hint})')
         else:
             return f'[color=aaaaaa]AI {"банит" if action=="ban" else "пикает"}...[/color]'
 
@@ -1959,17 +2013,62 @@ def _open_prematch_popup(db_name, team1, team2, my_team, best_of, on_confirm):
             if idx < 5:
                 p_ban_slots[idx].text = hname[:10]
                 p_ban_slots[idx].background_color = _PBANN
+            draft['step'] += 1
+            _rebuild_hero_grid()
+            _advance()
         else:
-            # role_needed comes from DRAFT_SEQ
-            actual_role = role_needed
-            # Also accept pick if hero is in that role's pool
-            draft['player_picks'][actual_role] = hero
-            p_pick_slots[actual_role].text = hname[:8]
-            p_pick_slots[actual_role].background_color = _PPICK
+            # FREE-ORDER PICK: player chooses which role to assign this hero to
+            available_roles = [r for r in ROLE_ORDER if r not in draft['player_picks']]
+            if not available_roles:
+                return
 
+            if len(available_roles) == 1:
+                # Only one role left — auto-assign
+                _assign_player_pick(hero, available_roles[0])
+            else:
+                # Show role selection popup
+                _show_role_picker(hero, available_roles)
+
+    def _assign_player_pick(hero, chosen_role):
+        draft['player_picks'][chosen_role] = hero
+        p_pick_slots[chosen_role].text = hero[0][:8]
+        p_pick_slots[chosen_role].background_color = _PPICK
         draft['step'] += 1
         _rebuild_hero_grid()
         _advance()
+
+    def _show_role_picker(hero, available_roles):
+        """Popup to choose which role to assign picked hero to."""
+        _ROLE_RU_SHORT = {
+            'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Offlane',
+            'partial_support': 'Support 4', 'full_support': 'Support 5',
+        }
+        rp = Popup(
+            title=f'Роль для {hero[0]}?',
+            size_hint=(0.35, 0.50),
+            auto_dismiss=False,
+        )
+        gl = GridLayout(cols=1, spacing=6, padding=10)
+        for r in available_roles:
+            b = Button(
+                text=_ROLE_RU_SHORT.get(r, r),
+                size_hint_y=None, height=52,
+                background_color=(0.10, 0.48, 0.22, 1),
+                background_normal='', font_size='15sp',
+            )
+            def _pick(_, _r=r):
+                rp.dismiss()
+                _assign_player_pick(hero, _r)
+            b.bind(on_press=_pick)
+            gl.add_widget(b)
+        cancel = Button(
+            text='Отмена', size_hint_y=None, height=44,
+            background_color=(0.55, 0.18, 0.18, 1), background_normal='',
+        )
+        cancel.bind(on_press=rp.dismiss)
+        gl.add_widget(cancel)
+        rp.content = gl
+        rp.open()
 
     body.add_widget(right)
     root.add_widget(body)
@@ -2926,7 +3025,7 @@ class TournamentPopup(Popup):
                 _mc = sqlite3.connect(self.db_name)
                 _mc.execute(
                     "INSERT INTO messages (text, date, author) VALUES (?,?,?)",
-                    (f'🏆 Достижение разблокировано: «{_aname}»! Бонус: {_abonus}',
+                    (f'[ТОП] Достижение разблокировано: «{_aname}»! Бонус: {_abonus}',
                      _game_date or '', 'Достижения')
                 )
                 _mc.commit(); _mc.close()
@@ -3125,6 +3224,61 @@ class TournamentsViewPopup(Popup):
         conn = sqlite3.connect(db_name)
         cur = conn.cursor()
 
+        # ── Upcoming tournament calendar ──────────────────────────
+        import sqlite3 as _sq3
+        gd_row = cur.execute("SELECT date FROM save WHERE id=1").fetchone()
+        game_date_str = gd_row[0] if gd_row else '2024-01-01'
+
+        grid.add_widget(_section_title('═══  КАЛЕНДАРЬ ТУРНИРОВ  ═══'))
+        upcoming = cur.execute("""
+            SELECT name, start_date, end_date, prizepool, ratingpool
+            FROM tournaments WHERE place1 IS NULL
+            ORDER BY start_date LIMIT 12
+        """).fetchall()
+
+        if upcoming:
+            hrow = _BgBox(bg=_BG_HEAD, orientation='horizontal',
+                          size_hint_y=None, height=26, padding=(8, 0))
+            for txt, sw in [('Дни', 0.08), ('Название', 0.46), ('Даты', 0.22),
+                            ('Приз', 0.12), ('Рейт.', 0.12)]:
+                lbl = Label(text=f'[b]{txt}[/b]', markup=True, size_hint_x=sw,
+                            color=_ACCENT, halign='center', valign='middle', font_size='11sp')
+                lbl.bind(size=lbl.setter('text_size'))
+                hrow.add_widget(lbl)
+            grid.add_widget(hrow)
+
+            from datetime import date as _dt
+            try:
+                today = _dt.fromisoformat(game_date_str)
+            except Exception:
+                today = _dt.today()
+
+            for t_name, t_start, t_end, t_prize, t_rate in upcoming:
+                try:
+                    days_left = (_dt.fromisoformat(t_start) - today).days
+                except Exception:
+                    days_left = 999
+                is_ti = 'International' in t_name
+                clr = _GOLD if is_ti else (_ACCENT if days_left <= 30 else _WHITE)
+                soon_txt = f'{days_left}д' if days_left >= 0 else 'идёт!'
+                rrow = _BgBox(bg=_BG_DARK if is_ti else _BG_MED,
+                              orientation='horizontal',
+                              size_hint_y=None, height=30, padding=(4, 0))
+                for txt, sw in [
+                    (soon_txt,                      0.08),
+                    (t_name[:36],                   0.46),
+                    (f'{t_start[5:]} – {(t_end or t_start)[5:]}', 0.22),
+                    (f'${t_prize//1000}k' if t_prize else '—', 0.12),
+                    (str(t_rate or '—'),            0.12),
+                ]:
+                    lbl = Label(text=txt, size_hint_x=sw, color=clr,
+                                halign='center', valign='middle', font_size='11sp')
+                    lbl.bind(size=lbl.setter('text_size'))
+                    rrow.add_widget(lbl)
+                grid.add_widget(rrow)
+        else:
+            grid.add_widget(_lbl('Все турниры завершены.', color=_DIM))
+
         # season rating
         grid.add_widget(_section_title('═══  РЕЙТИНГ СЕЗОНА  ═══'))
         cur.execute("SELECT name, logo, COALESCE(rating,0) FROM teams ORDER BY COALESCE(rating,0) DESC, name")
@@ -3222,7 +3376,7 @@ class TournamentsViewPopup(Popup):
                     place_bg = (0.10, 0.22, 0.10, 1) if player_place <= 4 else (0.12, 0.12, 0.18, 1)
                     pres = _BgBox(bg=place_bg, orientation='horizontal',
                                   size_hint_y=None, height=28, padding=(16, 0))
-                    medal = {1: '🥇', 2: '🥈', 3: '🥉'}.get(player_place, f'#{player_place}')
+                    medal = {1: '[1]', 2: '[2]', 3: '[3]'}.get(player_place, f'#{player_place}')
                     pres.add_widget(_lbl(
                         f'  Ваш результат: {medal}  место  •  Чемпион: {winner.strip() if winner else "?"}',
                         color=place_color, height=28,

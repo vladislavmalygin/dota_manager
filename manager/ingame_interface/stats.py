@@ -359,3 +359,140 @@ class LeaderboardPopup(Popup):
 
 def show_leaderboard_popup(db_name):
     LeaderboardPopup(db_name=db_name).open()
+
+
+class HeroStatsPopup(Popup):
+    """Hero draft statistics for current patch, filterable by role."""
+
+    def __init__(self, db_name, **kw):
+        super().__init__(**kw)
+        self.title = 'Статистика героев'
+        self.size_hint = (0.88, 0.90)
+        self._db = db_name
+        self._role_filter = None
+        self._build()
+
+    def _build(self):
+        from logic.dota.draft import get_hero_stats
+        from logic.meta import get_patch_hero_lists
+        from logic.heroes import ROLE_ORDER
+
+        buffed, nerfed, patch_name = get_patch_hero_lists(self._db)
+        stats = get_hero_stats(self._db, patch_name=patch_name, role=self._role_filter, limit=50)
+
+        _BG = (0.07, 0.09, 0.13, 1)
+        _BG_ROW = (0.10, 0.13, 0.18, 1)
+        _BG_ROW2 = (0.12, 0.16, 0.22, 1)
+        _ACC = (0.35, 0.85, 1.00, 1)
+        _BUFF = (0.25, 0.95, 0.45, 1)
+        _NERF = (0.95, 0.35, 0.25, 1)
+        _GOLD2 = (1.00, 0.85, 0.25, 1)
+        _W = (0.92, 0.92, 0.92, 1)
+        _D = (0.55, 0.55, 0.55, 1)
+
+        _ROLE_SHORT = {
+            'carry': 'Carry', 'mid': 'Mid', 'offlane': 'Off',
+            'partial_support': 'Sup4', 'full_support': 'Sup5',
+        }
+
+        root = BoxLayout(orientation='vertical', padding=6, spacing=4)
+
+        # Patch info
+        buf_txt  = ', '.join(buffed[:4]) if buffed else '—'
+        nerf_txt = ', '.join(nerfed[:3]) if nerfed else '—'
+        patch_lbl = Label(
+            text=f'[b]Патч {patch_name}[/b]   '
+                 f'[color=3dfa72]BUFF: {buf_txt}[/color]   '
+                 f'[color=fa4040]NERF: {nerf_txt}[/color]',
+            markup=True, color=_W, size_hint_y=None, height=32,
+            halign='center', valign='middle', font_size='12sp',
+        )
+        patch_lbl.bind(size=patch_lbl.setter('text_size'))
+        root.add_widget(patch_lbl)
+
+        # Role filter bar
+        filter_bar = BoxLayout(size_hint_y=None, height=34, spacing=4)
+        for rf, label in [(None, 'Все'), ('carry', 'Carry'), ('mid', 'Mid'),
+                          ('offlane', 'Off'), ('partial_support', 'Sup4'),
+                          ('full_support', 'Sup5')]:
+            active = (rf == self._role_filter)
+            b = Button(
+                text=label, background_normal='', font_size='12sp',
+                background_color=(0.18, 0.50, 0.30, 1) if active else (0.22, 0.22, 0.32, 1),
+            )
+            b.bind(on_press=lambda _, r=rf: self._set_role(r))
+            filter_bar.add_widget(b)
+        root.add_widget(filter_bar)
+
+        # Table header
+        hrow = BoxLayout(size_hint_y=None, height=26, padding=(4, 0))
+        for txt, sw in [('Герой', 0.30), ('Роль', 0.12), ('Пики', 0.12),
+                        ('Победы', 0.12), ('Winrate', 0.14), ('Патч', 0.20)]:
+            l = Label(text=f'[b]{txt}[/b]', markup=True, size_hint_x=sw,
+                      color=_ACC, halign='center', valign='middle', font_size='12sp')
+            l.bind(size=l.setter('text_size'))
+            hrow.add_widget(l)
+        root.add_widget(hrow)
+
+        sv = ScrollView(size_hint=(1, 1))
+        gl = GridLayout(cols=1, size_hint_y=None, spacing=2)
+        gl.bind(minimum_height=gl.setter('height'))
+
+        if not stats:
+            gl.add_widget(Label(
+                text='Нет данных по драфтам. Сыграйте турниры с драфтом.',
+                color=_D, size_hint_y=None, height=40,
+                halign='center', valign='middle',
+            ))
+        else:
+            for i, (hname, hrole, picks, wins, wr) in enumerate(stats):
+                patch_tag = ''
+                patch_clr = _W
+                if hname in buffed:
+                    patch_tag = '[BUFF]'
+                    patch_clr = _BUFF
+                elif hname in nerfed:
+                    patch_tag = '[NERF]'
+                    patch_clr = _NERF
+
+                wr_clr = _GOLD2 if wr >= 55 else (_BUFF if wr >= 50 else (_D if wr < 40 else _W))
+                bg = _BG_ROW if i % 2 == 0 else _BG_ROW2
+
+                row = BoxLayout(size_hint_y=None, height=28, padding=(4, 0))
+                with row.canvas.before:
+                    from kivy.graphics import Color as _GC, Rectangle as _GR
+                    _GC(*bg)
+                    _gr = _GR()
+                row.bind(pos=lambda w, _, r=None: None,
+                         size=lambda w, _, r=None: None)
+
+                for txt, sw, clr in [
+                    (hname, 0.30, _W),
+                    (_ROLE_SHORT.get(hrole, hrole), 0.12, _D),
+                    (str(picks), 0.12, _W),
+                    (str(wins), 0.12, _W),
+                    (f'{wr}%', 0.14, wr_clr),
+                    (patch_tag, 0.20, patch_clr),
+                ]:
+                    l = Label(text=txt, color=clr, size_hint_x=sw,
+                              halign='center', valign='middle', font_size='12sp')
+                    l.bind(size=l.setter('text_size'))
+                    row.add_widget(l)
+                gl.add_widget(row)
+
+        sv.add_widget(gl)
+        root.add_widget(sv)
+
+        close = Button(text='Закрыть', size_hint_y=None, height=44,
+                       background_color=(0.55, 0.18, 0.18, 1), background_normal='')
+        close.bind(on_press=self.dismiss)
+        root.add_widget(close)
+        self.content = root
+
+    def _set_role(self, role):
+        self._role_filter = role
+        self._build()
+
+
+def show_hero_stats_popup(db_name):
+    HeroStatsPopup(db_name=db_name).open()

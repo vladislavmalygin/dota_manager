@@ -237,9 +237,9 @@ class ProfilePopup(Popup):
             grid.add_widget(_hdr('КУБКИ И ТРОФЕИ'))
             trophy_row = BoxLayout(size_hint_y=None, height=52, spacing=6, padding=(8, 4))
             for trophy_list, symbol, color in [
-                (golds,   '🏆', _GOLD),
-                (silvers, '🥈', _SILVER),
-                (bronzes, '🥉', _BRONZE),
+                (golds,   '[ТОП]', _GOLD),
+                (silvers, '[2]', _SILVER),
+                (bronzes, '[3]', _BRONZE),
             ]:
                 if trophy_list:
                     lbl = Label(
@@ -252,7 +252,7 @@ class ProfilePopup(Popup):
             grid.add_widget(trophy_row)
             if golds:
                 for tname, tdate in golds[:3]:
-                    grid.add_widget(_row(f'🏆 {tname[:30]}', tdate[:7] if tdate else '—',
+                    grid.add_widget(_row(f'[ТОП] {tname[:30]}', tdate[:7] if tdate else '—',
                                          color_r=_GOLD))
 
         # Recent tournament results

@@ -190,8 +190,21 @@ class FinancesPopup(Popup):
             grid.add_widget(_row('Спонсор', f'+${sponsor_income:,}/мес', color_r=_GREEN))
         grid.add_widget(_row('Итого доход/мес', f'+${monthly_income:,}/мес', color_r=_GREEN))
 
+        _SALARY_CAP = 200_000
+        _LUXURY_TAX = 30_000
+        over_cap = total_wage > _SALARY_CAP
+
         grid.add_widget(_hdr('РАСХОДЫ', color=_RED))
-        grid.add_widget(_row('Зарплаты', f'-${total_wage:,}/мес', color_r=_RED))
+        wage_label = f'Зарплаты' + ('  [!] ПРЕВЫШЕНИЕ ЛИМ.' if over_cap else '')
+        grid.add_widget(_row(wage_label, f'-${total_wage:,}/мес',
+                             color_r=(1.00, 0.30, 0.20, 1) if over_cap else _RED))
+        if over_cap:
+            grid.add_widget(_row(
+                f'  Лимит ${_SALARY_CAP:,}/мес  →  налог',
+                f'-${_LUXURY_TAX:,}/мес',
+                bg=(0.25, 0.08, 0.08, 1), color_r=(1.00, 0.50, 0.20, 1),
+            ))
+            total_out += _LUXURY_TAX
         if loan_monthly:
             grid.add_widget(_row('Погашение кредита', f'-${loan_monthly:,}/мес', color_r=_RED))
         if inv_cut:
@@ -209,7 +222,7 @@ class FinancesPopup(Popup):
             months_left = budget // abs(balance)
             runway_color = _GREEN if months_left > 6 else (_GOLD if months_left > 3 else _RED)
             grid.add_widget(_row(
-                '⚠ Бюджет иссякнет через',
+                '[!] Бюджет иссякнет через',
                 f'~{months_left} мес.',
                 bg=(0.20, 0.12, 0.05, 1), color_r=runway_color,
             ))
